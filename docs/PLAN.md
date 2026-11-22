@@ -143,3 +143,11 @@ of its own.
   was moved, and hiding it keeps playback going. Found on the way: mpv needs
   WAYLAND_DISPLAY to draw a window (the closed environment had dropped it),
   and mpv 0.41 reads the clipboard at start unless told not to.
+- 2026-11-21 (evening): B4 decided (effects global and Legato's own: the
+  Android app uploads none, tested with Cody changing his phone's settings
+  and a watcher). Volume Boost (+10 dB into a limiter, after trim). B4b skip
+  intro/outro (Cody's PD Stories skips 15 s). D2 pause before sleep: a
+  logind delay guard while an episode is loaded; lifecycle checked live
+  (appears with playback, restarts after exiting, leaves nothing behind on
+  stop, steady across polls). Left: a real lid-close test by Cody, then D1
+  screenshots and release prep.

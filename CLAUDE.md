@@ -121,8 +121,10 @@ docs/PLAN.md         what's left to build
    nothing loaded, `poll` returns early; if mpv still lists an episode, the
    load failed: close the player and report it. Why: a failed load must not
    trigger an Up Next switch or a resume check.
-4. **Nothing runs on a timer while paused or idle.** The only repeating
-   timers run while playing: one poll every 32 s (just over the bridge's 30 s
+4. **Nothing runs on a timer while paused or idle.** (While an episode is
+   loaded, playing or paused, one process waits: the sleep guard, blocked on
+   D-Bus with no timer; with nothing loaded, nothing at all.) The only
+   repeating timers run while playing: one poll every 32 s (just over the bridge's 30 s
    `SYNC_INTERVAL`, so each one pushes) and the slider tick while a panel is
    open. Everything else arrives as an mpv event on the socket.
    `tests/model.test.cjs` enforces it. Why: each bridge call is a fresh
@@ -166,6 +168,18 @@ docs/PLAN.md         what's left to build
   Pocket Casts what to play.
 - **Load failures:** while the stream opens, the view reads as buffering; if
   mpv gives up, the panel and the OSD say so once.
+- **Before sleep:** while an episode is loaded, the service runs
+  `systemd-inhibit --what=sleep --mode=delay … setpriv --pdeathsig TERM
+  legato-bridge sleepguard`. The guard waits on `dbus-monitor` for logind's
+  PrepareForSleep, then pauses a playing episode, pushes its position (4 s
+  deadline), sets `checkServer`, and exits, releasing the delay; the
+  service starts a fresh guard 3 s later. A paused position that missed its
+  push before a sleep is never pushed blind afterwards (the next resume
+  asks first).
+- **Effects:** speed, Trim Silence (`@trim`, first in mpv's filter chain)
+  and Volume Boost (`@boost`, last) are global, in `prefs.json`; mpv's own
+  scaletempo2 follows them. Each show's skip intro/outro comes from the
+  subscriptions list (`start=` and `end=-N` on loadfile).
 
 ## Platform facts this depends on (re-check after updates)
 
@@ -214,8 +228,15 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   track too (`albumart: true`).
 - **mpv 0.41 reads the clipboard at start-up** (its Wayland clipboard
   backend); `--clipboard-backends-clr` stops it.
-- **Omarchy pauses no media on lock or suspend.** A machine that sleeps while
-  playing wakes up playing; rule 2's gap check catches it before any push.
+- **Omarchy pauses no media on lock or suspend**, so Legato does it itself
+  (the sleep guard). logind allows sleep delays up to 15 s here
+  (`InhibitDelayMaxUSec`); NetworkManager holds its own delay, so the network
+  is still up for the push. Omarchy's own sleep monitor
+  (`omarchy-system-sleep-monitor`) also listens with `dbus-monitor`. If the
+  guard misses a sleep, rule 2's gap check still catches it before any push.
+- **The Android app doesn't upload playback effects** (tested 2026-11-21,
+  PLAN B4); a show's skip intro and outro (`autoStartFrom`,
+  `autoSkipLast`) do reach the server.
 - **Widget settings** are changed with `omarchy bar set
   io.github.cwilliams5.legato <key> <value>`; Omarchy 4.5 has no settings
   form for plugin widgets. They reach the service through the panel
