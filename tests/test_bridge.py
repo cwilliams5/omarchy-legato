@@ -147,6 +147,14 @@ class Validation(unittest.TestCase):
             self.assertIn("timestamp=copy", spec)
             self.assertIn("stop_threshold=-42dB:detection=peak", spec)
 
+    def test_mpv_gets_the_display_for_its_video_window(self):
+        with mock.patch.dict(os.environ, {"WAYLAND_DISPLAY": "wayland-1", "HYPRLAND_INSTANCE_SIGNATURE": "abc_123",
+                                          "LD_PRELOAD": "/tmp/x.so"}):
+            env = bridge.child_env()
+        self.assertEqual(env.get("WAYLAND_DISPLAY"), "wayland-1")
+        self.assertEqual(env.get("HYPRLAND_INSTANCE_SIGNATURE"), "abc_123")
+        self.assertNotIn("LD_PRELOAD", env)
+
     def test_video_window_rule_and_geometry(self):
         default = bridge.video_rule_lua(None)
         self.assertIn('match = { class = "^legato-video$" }', default)

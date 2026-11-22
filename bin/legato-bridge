@@ -190,8 +190,10 @@ PATH_ENV_NAMES = ("HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME",
                   "XDG_DATA_HOME", "XDG_RUNTIME_DIR")
 # What mpv-mpris needs to publish the player on the session bus.
 BUS_ENV_NAMES = ("USER", "LOGNAME", "LANG", "DBUS_SESSION_BUS_ADDRESS")
-# What hyprctl needs to find Hyprland's socket (the video window's placement).
-HYPR_ENV_NAMES = ("HYPRLAND_INSTANCE_SIGNATURE",)
+# The video window: the Wayland display mpv draws it on (found in
+# XDG_RUNTIME_DIR), and what hyprctl needs to find Hyprland's socket for its
+# placement. Without WAYLAND_DISPLAY, mpv silently can't select a video track.
+HYPR_ENV_NAMES = ("WAYLAND_DISPLAY", "HYPRLAND_INSTANCE_SIGNATURE")
 ALLOWED_ENV_NAMES = PATH_ENV_NAMES + BUS_ENV_NAMES + HYPR_ENV_NAMES
 TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
 CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")

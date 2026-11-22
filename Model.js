@@ -284,7 +284,7 @@ var bridgeEnvironmentNames = [
   "HOME", "USER", "LOGNAME", "LANG",
   "XDG_RUNTIME_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
   "DBUS_SESSION_BUS_ADDRESS",
-  "HYPRLAND_INSTANCE_SIGNATURE"
+  "WAYLAND_DISPLAY", "HYPRLAND_INSTANCE_SIGNATURE"
 ]
 
 // Clean absolute paths only: every component starts with a letter or digit,
