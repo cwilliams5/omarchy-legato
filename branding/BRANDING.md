@@ -12,7 +12,7 @@ are in `alternatives/naming-comparisons/`.
   where you left off.
 - It's Italian for **"tied together"**: your devices, tied together through
   Pocket Casts' sync.
-- **Trim Silence** (planned) closes the gaps between words, so the speech
+- **Trim Silence** closes the gaps between words, so the speech
   itself gets more legato.
 
 Legato is a Pocket Casts player, not part of Pocket Casts: the name

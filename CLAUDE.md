@@ -10,26 +10,17 @@ If a `handoff.md` sits in the repo root, read it first: a local-only note
 This file becomes public with the repo: no personal details, nothing about
 Cody's work setup.
 
-## Status (2026-11-21, late)
+## Status (2026-11-22)
 
-In development, 0.2.0, private, installed on Cody's laptop and in daily use.
-Done and confirmed by Cody: the sync and performance fixes (also offered
-upstream as Nine Point Labs issues #4-6 and PRs #7-9; phone ↔ PC handoff
-tested for real), Qt 6.12 colours, Legato's mark in the bar, a still title
-by default, Trim Silence, Volume Boost, speed, the effects row, the
-picture-in-picture video window (placed and pinned on floating workspaces
-too, no title bar), the Settings page (gear, `g`), the Up Next right-click
-menu, pause-and-save before sleep. Speed, Trim Silence and Volume Boost are
-global and Legato's own (the Android app doesn't sync effects; PLAN B4).
-Each show's skip intro and outro (which do sync) are honored.
-
-Lid-close test passed. A fresh-eyes review (PLAN phase F) found and fixed
-sync bugs (an episode finished here was set back to in progress; a skip
-while paused could rewind the phone) and a dozen smaller ones, confirmed
-by Cody, as are the video window's right-click menu, transparency and
-solid-while-focused (E8, E11, E12). Open: Legato's keys in the video
-window (E13) to confirm; then screenshots (D1) and release prep. Drag to
-reorder (E6) is decided not for v1.
+Release candidate for 1.0.0: development is done (B5 "time saved" waits for
+later), everything in docs/PLAN.md phases A to F is built and confirmed by
+Cody, and the go-public skill is under way. D1 screenshots were shot on
+2026-11-22 (`media/`, `preview.png`) and the README rewritten for release;
+both wait for Cody's look before they're committed. Then: version 1.0.0,
+the privacy scan last, the repo public, the marketplace's security baseline
+(it refuses private repos), the install test from the public URL, and the
+marketplace submission. Upstream, Nine Point Labs issues #4-6 and PRs #7-9
+are still open with no reply.
 
 ## What Legato is
 
@@ -409,12 +400,16 @@ at release. The README's "Built on" section is made from this list.
   (https://github.com/Ninepointlabs-Omarchy-Extras/omarchy-pocketcasts)
 - mpv: playback (https://mpv.io)
 - mpv-mpris: media keys and playerctl (https://github.com/hoyon/mpv-mpris)
+- FFmpeg's silenceremove and alimiter filters, through mpv's lavfi: Trim
+  Silence and Volume Boost (https://ffmpeg.org)
 - Pocket Casts: the service, and ideas taken without code: the web
   player's resume refresh, and the Android app's Trim Silence values and
   Volume Boost gain
   (https://github.com/Automattic/pocket-casts-android)
 - Quickshell and Omarchy's shell: the plugin platform
   (https://quickshell.org, https://omarchy.org)
+- Hyprland: the video window's runtime rules, set_prop opacity and the
+  window.open hook (https://hyprland.org)
 
 ## Distribution
 
