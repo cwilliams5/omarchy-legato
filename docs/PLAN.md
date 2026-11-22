@@ -162,7 +162,8 @@ of its own.
 
 - [x] E12 (Cody, testing E11): the transparency made the right-click
   menu see-through too (mpv draws it inside the window). Now the window is
-  solid while it has focus, which a right-click gives it.
+  solid while it has focus, which a right-click gives it. Confirmed by
+  Cody, with E8, E11 and phase F.
 - [x] E13 (Cody): keys pressed in the video window did mpv's own things.
   Now Legato's keys work there (Space, f/b and the arrows, n, s, p, t, o,
   v, +/-, the wheel for volume), through the service like the panel's,

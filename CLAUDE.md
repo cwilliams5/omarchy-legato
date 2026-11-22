@@ -25,10 +25,11 @@ Each show's skip intro and outro (which do sync) are honored.
 
 Lid-close test passed. A fresh-eyes review (PLAN phase F) found and fixed
 sync bugs (an episode finished here was set back to in progress; a skip
-while paused could rewind the phone) and a dozen smaller ones. Open: Cody
-to confirm the video window's right-click menu (E8) and transparency
-(E11); then screenshots (D1) and release prep. Drag to reorder (E6) is
-decided not for v1.
+while paused could rewind the phone) and a dozen smaller ones, confirmed
+by Cody, as are the video window's right-click menu, transparency and
+solid-while-focused (E8, E11, E12). Open: Legato's keys in the video
+window (E13) to confirm; then screenshots (D1) and release prep. Drag to
+reorder (E6) is decided not for v1.
 
 ## What Legato is
 
