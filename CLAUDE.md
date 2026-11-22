@@ -72,7 +72,8 @@ what the API lists, or touch the user's Hyprland config.
     `skipForward`, `autoplay`, `unloadAfterMinutes`, `pauseOnSleep`; the
     schema in manifest.json drives the Settings page); the player's own
     choices in the bridge's `prefs.json` (`volume`, `speed`, `trim`,
-    `boost`, `videoGeometry`, `videoPinned`, `videoTransparency`)
+    `boost`, `videoGeometry`, `videoPinned`, `videoTransparency`,
+    `localFeeds`)
   - state `$XDG_STATE_HOME/omarchy-legato/` (auth.json, playback.json,
     prefs.json, podcasts-cache.json, lock, prefs.lock; all 0600, folder
     0700)
@@ -90,7 +91,7 @@ what the API lists, or touch the user's Hyprland config.
     globals in Hyprland `legato_video_alpha`, `legato_video_apply`,
     `legato_video_hook` (the opacity hook)
   - User-Agent `legato/1.0 (+https://github.com/cwilliams5/omarchy-legato)`
-- Version: 1.0.0, the first public release (2026-11-22); 1.0.1 next, with the sign-in field (PLAN G12).
+- Version: 1.0.1 (the sign-in field and the feed proxy, PLAN G12-G13); 1.0.0 was the first public release (2026-11-22).
 - Branding: `branding/` (`python3 branding/build.py` regenerates it). See
   BRANDING.md for words to avoid in later renames.
 
@@ -102,6 +103,7 @@ Service.qml          the data layer, one per shell: bridge calls, mpv events, ti
 BarWidget.qml        the bar chip (cover, scrolling title), clicks and scroll
 Panel.qml            the panel: player, effects row, tabs, show pages, right-click menu, sign-in
 SettingsView.qml     the panel's Settings page (gear), built from manifest.json's schema
+SignInField.qml      the sign-in fields: not native text inputs; pastes go through `bridge paste`
 AboutView.qml        the panel's About page
 LegatoMark.qml       the logo, drawn with QtQuick.Shapes (bar chip, panel)
 Model.js             pure helpers (formatting, rows, trusted executables, closed environments)
@@ -160,7 +162,13 @@ docs/PLAN.md         what's left to build
    ever gets http(s) URLs; covers reach Qt only as the bridge's checked,
    capped cache files (`file://`, never a web URL); every bridge call has an
    overall deadline (`BRIDGE_DEADLINE`, an exception no handler swallows);
-   every file is opened relative to a checked directory descriptor. The About page's privacy text must stay
+   mpv fetches only through the feed proxy (`bridge proxy`, below), which
+   never connects to this computer and to the local network only with
+   `localFeeds`; no QML file has a native text input (`TextField`,
+   `TextInput`, `TextEdit`, `TextArea`: Qt 6.12 reads the clipboard into
+   them by itself), the sign-in fields paste only through `bridge paste`
+   (4 KiB, 2 s, wl-paste's whole process group killed after); every file is
+   opened relative to a checked directory descriptor. The About page's privacy text must stay
    true (tests compare it with the hosts the bridge can reach).
 7. **Every text that comes from outside renders as plain text**
    (`Text.PlainText`): episode titles, error messages, mpv's error strings.
@@ -213,6 +221,20 @@ docs/PLAN.md         what's left to build
   the service gives up and says so, until the next episode is loaded. A
   paused position that missed its push before a sleep is never pushed
   blind afterwards (the next resume asks first).
+- **The feed proxy** (`bridge proxy`, `FeedProxy`): before each load,
+  `ensure_feed_proxy` checks mpv's `http-proxy` answers our ping, or starts
+  a proxy (a detached `legato-bridge proxy --watch-pid <mpv>`, its random
+  password on stdin) and sets the property. It listens on 127.0.0.1,
+  resolves each host itself, connects only to allowed addresses and checks
+  the peer again; https is a CONNECT tunnel (mpv still verifies the
+  certificate), http is forwarded with `Connection: close`; it exits when
+  mpv's pidfd says mpv has. `check_feed_host` explains a refusal before
+  loading ("turn on local network feeds"); the proxy is what enforces it.
+- **Sign-in fields** (`SignInField.qml`): a FocusScope holding the text in a
+  string, drawn as plain Text with the shell's field styling; Ctrl+V,
+  Shift+Insert and middle-click call `Service.readClipboard`, cancelled on
+  typing, focus loss or closing (the bridge kills wl-paste's group on
+  SIGTERM).
 - **Effects:** speed, Trim Silence (`@trim`, first in mpv's filter chain)
   and Volume Boost (`@boost`, last) are global, in `prefs.json`; mpv's own
   scaletempo2 follows them. Every change to `prefs.json` goes through
@@ -336,6 +358,15 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   catch up.
 - **mpv 0.41 reads the clipboard at start-up** (its Wayland clipboard
   backend); `--clipboard-backends-clr` stops it.
+- **mpv's `--http-proxy`** (FFmpeg's `http_proxy`) works for both schemes:
+  http as absolute-URI requests, https as a CONNECT tunnel; it answers a
+  407 Basic challenge with the user and password in the proxy URL; every
+  redirect hop comes back through the proxy. The property set at run time
+  applies to the next loadfile. Tested 2026-11-22 on NPR's and Podtrac's
+  redirect chains and on a Tailscale home server.
+- **Qt 6.12's editable TextInput** connects to the clipboard's dataChanged
+  and fetches offered text itself, unbounded (the marketplace reviewer
+  blocks plugins on it): Legato has none.
 - **mpv at the end of a file** (`--keep-open=yes`): `eof-reached` turns
   on but `pause` stays off (tested, mpv 0.41). Seeking back makes it play
   on from there.

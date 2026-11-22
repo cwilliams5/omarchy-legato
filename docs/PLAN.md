@@ -278,13 +278,18 @@ history on other submissions). Fixed, each with a failing-first test:
 - [x] G10 Sign-out claimed success even if the tokens weren't deleted.
 - [x] G11 README: mpv and mpv-mpris come with Omarchy; uninstall stops the
   player first; what auth.json keeps; the stock tools it uses.
-- [ ] G12 (Cody's call) The sign-in fields are Qt TextFields, which this
-  reviewer blocks on (clipboard reads; #14630 was the same on a podcast
-  plugin's sign-in). Options: a non-native field with a bounded paste, or
-  sign-in from a terminal. Needs a real sign-in to test.
-- [ ] G13 (Cody's call) Feed URLs can point at local network addresses
-  (the reviewer's SSRF concern, #13789). Refusing them would break feeds
-  served from a local or Tailscale server; arguing it is the alternative.
+- [x] G12 The sign-in fields were Qt TextFields, which this reviewer blocks
+  on (clipboard reads; #14630). Cody chose the fix: `SignInField.qml`, a
+  FocusScope with a string and plain Text (the pattern accepted in #14705),
+  pasting only through `bridge paste` (4 KiB, 2 s, wl-paste's group killed
+  after, on overflow, timeout or cancel). Tested with fake wl-pastes;
+  Cody's real sign-in still to do.
+- [x] G13 Feed URLs could point mpv at the local network (#13789: the
+  reviewer cleared that podcast plugin only with checks at connect time).
+  Now mpv fetches through `bridge proxy`: public addresses only, the local
+  network with the new `localFeeds` setting (off by default; on for Cody's
+  Tailscale server), never this computer. Tested on public redirect chains
+  (https) and Cody's home server (refused off, plays on).
 - [ ] G14 (later, low) Episode and podcast UUIDs in bridge command lines
   are visible to other local accounts in /proc.
 

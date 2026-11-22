@@ -37,16 +37,20 @@ Only Python's standard library is used.
 """
 
 import argparse
+import base64
 import contextlib
 import errno
 import fcntl
 import hashlib
+import hmac
 import http.client as http_client
+import ipaddress
 import json
 import pwd
 import re
 import os
 import secrets
+import select
 import signal
 import socket
 import ssl
@@ -1972,8 +1976,10 @@ def load_into_mpv(item, prefs, position, skip_last=0):
     url = safe_media_url(item.get("url"))
     if not url:
         raise ApiError("not_found", "That episode has no playable audio link")
+    check_feed_host(url, prefs)
     player = ensure_mpv(prefs)
     with player:
+        ensure_feed_proxy(player)
         if player.get("options/vid") == "auto":
             # The video window is on and this episode may open it again.
             place_video_window(prefs)
@@ -2063,6 +2069,7 @@ def player_view(snap, state, prefs, load_failed=False):
         "boost": prefs.get("boost") is True,
         "videoTransparency": video_transparency(prefs),
         "videoPinned": video_pinned(prefs),
+        "localFeeds": local_feeds_allowed(prefs),
         "hasVideo": active and has_video(snap),
         "video": active and video_shown(snap),
         "item": episode or None,
@@ -2561,6 +2568,357 @@ def cmd_login(args):
     out({"email": auth.get("email", email)})
 
 
+# ------------------------------------------------------------ feed proxy
+#
+# Episode addresses come from podcast feeds, which anyone can publish: a feed
+# (or a redirect it leads to) could point mpv at this computer or at other
+# machines on the local network. So mpv fetches through a small proxy that
+# checks every connection when it's made: it resolves the host itself and
+# connects only to an address the rules allow, then checks the peer it got
+# (a DNS answer that changes between lookups can't slip through, and every
+# redirect is a new request through here). Public addresses always pass; the
+# local network (private ranges, Tailscale's 100.64.0.0/10, unique-local
+# IPv6) only with the localFeeds setting on, for a home media server; this
+# computer itself and link-local addresses (cloud metadata) never.
+#
+# HTTPS stays end to end: mpv asks for a tunnel (CONNECT host:port), so the
+# proxy sees where, not what, and mpv still checks the certificate. The
+# proxy listens on 127.0.0.1 only, answers only mpv (a random password per
+# session, handed over on stdin), and exits when mpv does (it waits on mpv's
+# pidfd, no timer).
+
+PROXY_USER = "legato"
+PROXY_HEAD_MAX = 16 * 1024
+PROXY_CONNECT_TIMEOUT = 15
+
+
+class FeedRefused(Exception):
+    pass
+
+
+def local_feeds_allowed(prefs=None):
+    return (prefs if prefs is not None else load_prefs()).get("localFeeds") is True
+
+
+def feed_address_allowed(address, allow_local):
+    """May mpv fetch from this IP address?"""
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    if ip.version == 6 and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved:
+        return False  # this computer, link-local (cloud metadata), broadcast: never
+    if ip.is_global:
+        return True
+    return bool(allow_local)  # private ranges, CGNAT (Tailscale), unique-local IPv6
+
+
+def resolve_feed_host(host, port):
+    try:
+        return socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError, OSError, ValueError):
+        return []
+
+
+def connect_feed_host(host, port, allow_local):
+    """A socket to `host` on an allowed address, checked again once
+    connected. Raises FeedRefused when no address may be used."""
+    for family, kind, proto, _, sockaddr in resolve_feed_host(host, port):
+        if not feed_address_allowed(sockaddr[0], allow_local):
+            continue
+        sock = socket.socket(family, kind, proto)
+        sock.settimeout(PROXY_CONNECT_TIMEOUT)
+        try:
+            sock.connect(sockaddr)
+            if feed_address_allowed(sock.getpeername()[0], allow_local):
+                return sock
+        except OSError:
+            pass
+        sock.close()
+    raise FeedRefused(host)
+
+
+def check_feed_host(url, prefs):
+    """Before a load: a clear message for an episode on the local network
+    (or this computer), rather than mpv's "403". The proxy is what enforces
+    it; this only explains it."""
+    parts = urllib.parse.urlsplit(url)
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    addresses = [info[4][0] for info in resolve_feed_host(parts.hostname or "", port)]
+    if not addresses or any(feed_address_allowed(a, local_feeds_allowed(prefs)) for a in addresses):
+        return  # public (or unresolvable: mpv reports that)
+    if any(feed_address_allowed(a, True) for a in addresses):
+        raise ApiError("local_feed", "This episode is on your local network. To play it, turn on "
+                                     "local network feeds in Legato's Settings.")
+    raise ApiError("local_feed", "This episode's address is on this computer, which Legato never plays from.")
+
+
+def proxy_send(conn, status, extra=""):
+    try:
+        conn.sendall(("HTTP/1.1 %s\r\n%sContent-Length: 0\r\nConnection: close\r\n\r\n" % (status, extra)).encode())
+    except OSError:
+        pass
+
+
+def relay(a, b):
+    """Copy both ways until both sides are done. No idle timeout: a paused
+    episode keeps its connection, as it would without the proxy."""
+    a.settimeout(None)
+    b.settimeout(None)
+    live = {a: True, b: True}
+    while live[a] or live[b]:
+        ready, _, _ = select.select([s for s in (a, b) if live[s]], [], [])
+        for sock in ready:
+            other = b if sock is a else a
+            try:
+                data = sock.recv(65536)
+            except OSError:
+                data = b""
+            if not data:
+                live[sock] = False
+                try:
+                    other.shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
+                continue
+            try:
+                other.sendall(data)
+            except OSError:
+                return
+
+
+class FeedProxy:
+    HOP_HEADERS = ("proxy-authorization", "proxy-connection", "connection", "keep-alive")
+
+    def __init__(self, token, allow_local=local_feeds_allowed):
+        self.token = token
+        self.allow_local = allow_local  # read per connection: a change applies at once
+        self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen(32)
+        self.port = self.listener.getsockname()[1]
+
+    def url(self):
+        return "http://%s:%s@127.0.0.1:%d" % (PROXY_USER, self.token, self.port)
+
+    def serve(self, stop_fd=None):
+        while True:
+            watched = [self.listener] + ([stop_fd] if stop_fd is not None else [])
+            ready, _, _ = select.select(watched, [], [])
+            if stop_fd is not None and stop_fd in ready:
+                return
+            try:
+                conn, _ = self.listener.accept()
+            except OSError:
+                continue
+            threading.Thread(target=self.handle, args=(conn,), daemon=True).start()
+
+    def authorized(self, headers):
+        expected = "Basic " + base64.b64encode(("%s:%s" % (PROXY_USER, self.token)).encode()).decode()
+        return hmac.compare_digest(headers.get("proxy-authorization", "").encode(), expected.encode())
+
+    def handle(self, conn):
+        upstream = None
+        try:
+            conn.settimeout(30)
+            head, rest = b"", b""
+            while b"\r\n\r\n" not in head:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    return
+                head += chunk
+                if len(head) > PROXY_HEAD_MAX:
+                    return proxy_send(conn, "431 Request Header Fields Too Large")
+            head, rest = head.split(b"\r\n\r\n", 1)
+            lines = head.decode("latin-1").split("\r\n")
+            parts = lines[0].split(" ")
+            if len(parts) != 3:
+                return proxy_send(conn, "400 Bad Request")
+            method, target, version = parts
+            headers = {}
+            for line in lines[1:]:
+                name, _, value = line.partition(":")
+                headers[name.strip().lower()] = value.strip()
+            if not self.authorized(headers):
+                return proxy_send(conn, "407 Proxy Authentication Required", 'Proxy-Authenticate: Basic realm="legato"\r\n')
+            if method == "LEGATO-PING":
+                return proxy_send(conn, "204 No Content", "X-Legato: proxy\r\n")
+            allow_local = self.allow_local()
+            if method == "CONNECT":
+                host, _, port = target.rpartition(":")
+                if not host or not port.isdigit():
+                    return proxy_send(conn, "400 Bad Request")
+                upstream = connect_feed_host(host.strip("[]"), int(port), allow_local)
+                conn.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                if rest:
+                    upstream.sendall(rest)
+            else:
+                url = urllib.parse.urlsplit(target)
+                if url.scheme != "http" or not url.hostname:
+                    return proxy_send(conn, "400 Bad Request")
+                upstream = connect_feed_host(url.hostname, url.port or 80, allow_local)
+                path = (url.path or "/") + ("?" + url.query if url.query else "")
+                out_lines = ["%s %s %s" % (method, path, version)]
+                for line in lines[1:]:
+                    name = line.partition(":")[0].strip().lower()
+                    if name and name not in self.HOP_HEADERS:
+                        out_lines.append(line)
+                out_lines.append("Connection: close")
+                upstream.sendall(("\r\n".join(out_lines) + "\r\n\r\n").encode("latin-1") + rest)
+            relay(conn, upstream)
+        except FeedRefused:
+            proxy_send(conn, "403 Forbidden", "X-Legato: refused (local address)\r\n")
+        except (OSError, UnicodeError, ValueError):
+            pass
+        finally:
+            for sock in (conn, upstream):
+                if sock is not None:
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
+
+
+def proxy_alive(url):
+    """True when the proxy at `url` answers our ping with our password."""
+    parts = urllib.parse.urlsplit(url or "")
+    if parts.hostname != "127.0.0.1" or not parts.port or not parts.password:
+        return False
+    auth = base64.b64encode(("%s:%s" % (parts.username, parts.password)).encode()).decode()
+    try:
+        with socket.create_connection(("127.0.0.1", parts.port), timeout=1) as sock:
+            sock.sendall(("LEGATO-PING / HTTP/1.1\r\nProxy-Authorization: Basic %s\r\n\r\n" % auth).encode())
+            return sock.recv(256).startswith(b"HTTP/1.1 204")
+    except OSError:
+        return False
+
+
+def start_feed_proxy(watch_pid):
+    """A proxy for the mpv with this pid (it exits when mpv does); its URL."""
+    token = secrets.token_hex(16)
+    proc = subprocess.Popen([sys.executable, "-I", "-B", os.path.realpath(__file__), "proxy", "--watch-pid", str(int(watch_pid))],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            env=child_env(), start_new_session=True)
+    try:
+        proc.stdin.write((token + "\n").encode())  # not in argv: /proc shows that to everyone
+        proc.stdin.close()
+        ready, _, _ = select.select([proc.stdout], [], [], 5)
+        line = proc.stdout.readline() if ready else b""
+        port = int(json.loads(line.decode() or "{}").get("port") or 0)
+    except (OSError, ValueError):
+        port = 0
+    finally:
+        proc.stdout.close()
+    if not port:
+        proc.kill()
+        raise ApiError("proxy", "Couldn't start Legato's feed check")
+    return "http://%s:%s@127.0.0.1:%d" % (PROXY_USER, token, port)
+
+
+def ensure_feed_proxy(player):
+    """mpv fetches through a live feed proxy (players started by an older
+    Legato have none: one is started for them too)."""
+    try:
+        current = player.get("http-proxy") or ""
+    except ApiError:
+        current = ""
+    if current and proxy_alive(current):
+        return
+    pid, uid = player.peer_pid()
+    if pid <= 1 or uid != os.geteuid():
+        raise ApiError("proxy", "Couldn't tell which player to check feeds for")
+    player.set("http-proxy", start_feed_proxy(pid))
+
+
+def cmd_proxy(args):
+    token = sys.stdin.readline().strip()
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise ApiError("proxy", "No password for the proxy")
+    watched = os.pidfd_open(args.watch_pid)  # readable once mpv exits
+    proxy = FeedProxy(token)
+    print(json.dumps({"port": proxy.port}), flush=True)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, 1)
+    proxy.serve(stop_fd=watched)
+
+
+def cmd_localfeeds(args):
+    with prefs_update() as prefs:
+        on = not local_feeds_allowed(prefs) if args.value == "toggle" else args.value == "on"
+        prefs["localFeeds"] = on
+    out({"localFeeds": on})
+
+
+# ------------------------------------------------------------ paste
+#
+# The sign-in fields aren't native Qt text inputs (those read the clipboard
+# by themselves, unbounded: Qt 6.12's TextInput fetches offered text whenever
+# it changes). A paste in them (Ctrl+V, Shift+Insert, middle-click) comes
+# through here instead: wl-paste in its own process group, at most
+# PASTE_MAX_BYTES and PASTE_TIMEOUT, the whole group killed on overflow, on
+# timeout, and when the panel cancels the paste (SIGTERM).
+
+PASTE_MAX_BYTES = 4096
+PASTE_TIMEOUT = 2.0
+
+
+def kill_group(proc):
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)  # wl-paste and the cat it forks
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def read_bounded_paste(proc, limit=PASTE_MAX_BYTES, timeout=PASTE_TIMEOUT):
+    """Up to `limit` bytes from proc.stdout before `timeout`, else an error."""
+    deadline = time.monotonic() + timeout
+    fd = proc.stdout.fileno()
+    chunks, size = [], 0
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise ApiError("paste_timeout", "The clipboard didn't answer in time")
+        ready, _, _ = select.select([fd], [], [], left)
+        if not ready:
+            continue
+        chunk = os.read(fd, 1024)
+        if not chunk:
+            return b"".join(chunks)
+        size += len(chunk)
+        if size > limit:
+            raise ApiError("paste_too_long", "What's on the clipboard is too long to paste here")
+        chunks.append(chunk)
+
+
+def cmd_paste(args):
+    tool = trusted_tool("wl-paste")
+    if not tool:
+        raise ApiError("no_wl_paste", "wl-paste is needed to paste")
+    argv = [tool, "--no-newline", "--type", "text"] + (["--primary"] if args.primary else [])
+    proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            env=child_env(), start_new_session=True)
+
+    def cancelled(*_):
+        kill_group(proc)
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, cancelled)  # the panel gave up on this paste
+    try:
+        blob = read_bounded_paste(proc)
+    finally:
+        kill_group(proc)
+    text = blob.decode("utf-8", "replace")
+    # One line, no control characters: these fields take an email or a password.
+    text = "".join(ch for ch in text if ch >= " " and ch != "\x7f")  # spaces kept: a password may have them
+    out({"text": text})
+
+
 def cmd_logout(args):
     player = Mpv.connect()
     if player:
@@ -3005,6 +3363,9 @@ def build_parser():
 
     sub.add_parser("status").set_defaults(fn=cmd_status)
     sub.add_parser("login").set_defaults(fn=cmd_login)
+    p = sub.add_parser("paste"); p.add_argument("--primary", action="store_true"); p.set_defaults(fn=cmd_paste)
+    p = sub.add_parser("proxy"); p.add_argument("--watch-pid", type=int, required=True); p.set_defaults(fn=cmd_proxy)
+    p = sub.add_parser("localfeeds"); p.add_argument("value", choices=("on", "off", "toggle")); p.set_defaults(fn=cmd_localfeeds)
     sub.add_parser("logout").set_defaults(fn=cmd_logout)
 
     p = sub.add_parser("player"); p.add_argument("--no-autoplay", action="store_true"); p.set_defaults(fn=cmd_player)
@@ -3057,7 +3418,7 @@ def _deadline_passed(signum, frame):
 def main(argv):
     scrub_environment()
     args = build_parser().parse_args(argv)
-    timed = args.command != "sleepguard" and threading.current_thread() is threading.main_thread()
+    timed = args.command not in ("sleepguard", "proxy") and threading.current_thread() is threading.main_thread()
     if timed:
         signal.signal(signal.SIGALRM, _deadline_passed)
         signal.alarm(BRIDGE_DEADLINE)

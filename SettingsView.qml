@@ -21,11 +21,13 @@ Column {
   property var values: ({})    // the widget's settings entry
   property int videoTransparency: 0  // percent, 0 to 80 in tens
   property bool videoPinned: true
+  property bool localFeeds: false
 
   signal backRequested()
   signal changeRequested(string key, var value)
   signal videoTransparencyRequested(int level)
   signal videoPinnedRequested(bool pinned)
+  signal localFeedsRequested(bool on)
 
   readonly property color dim: Qt.darker(foreground, 1.55)
 
@@ -284,6 +286,58 @@ Column {
     wrapMode: Text.WordWrap
     textFormat: Text.PlainText
     text: "Also in the video window's right-click menu."
+    color: root.dim
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+  }
+
+  Text {
+    width: parent.width
+    topPadding: Style.space(6)
+    text: "NETWORK"
+    color: root.dim
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+    font.bold: true
+  }
+
+  Item {
+    width: root.width
+    height: Math.max(localLabel.implicitHeight, localButton.implicitHeight)
+
+    Text {
+      id: localLabel
+      anchors.left: parent.left
+      anchors.right: localButton.left
+      anchors.rightMargin: Style.space(12)
+      anchors.verticalCenter: parent.verticalCenter
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: "Play episodes served from your local network (a home media server)"
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
+    Button {
+      id: localButton
+      objectName: "localFeeds"
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      text: root.localFeeds ? "On" : "Off"
+      selected: root.localFeeds
+      foreground: root.foreground
+      accent: root.accent
+      fontFamily: root.fontFamily
+      fontSize: Style.font.caption
+      onClicked: root.localFeedsRequested(!root.localFeeds)
+    }
+  }
+
+  Text {
+    width: parent.width
+    wrapMode: Text.WordWrap
+    textFormat: Text.PlainText
+    text: "Off by default: a podcast feed can't point Legato at other machines on your network. This computer itself is never played from."
     color: root.dim
     font.family: root.fontFamily
     font.pixelSize: Style.font.caption

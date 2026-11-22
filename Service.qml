@@ -92,6 +92,8 @@ Item {
   // The video window's own choices (its right-click menu, the Settings page).
   readonly property int videoTransparency: player && typeof player.videoTransparency === "number" ? player.videoTransparency : 0
   readonly property bool videoPinned: !player || player.videoPinned !== false
+  // Episodes served from the local network (a home media server): off unless chosen.
+  readonly property bool localFeeds: !!player && player.localFeeds === true
   readonly property bool hasVideo: playerActive && player.hasVideo === true
   readonly property bool videoOn: playerActive && player.video === true
 
@@ -391,6 +393,17 @@ Item {
       root.refresh()
     }, payload)
     return true
+  }
+
+  // A bounded clipboard read for the sign-in fields (legato-bridge paste:
+  // 4 KiB, 2 s). Returns the Process, so the field can cancel it.
+  function readClipboard(primary, done) {
+    var args = ["paste"]
+    if (primary) args.push("--primary")
+    return call(args, function(result) {
+      if (!result.ok) { if (result.error) root.flash(result.error, true); done(""); return }
+      done(result.data && typeof result.data.text === "string" ? result.data.text : "")
+    })
   }
 
   function signOut() {
@@ -851,6 +864,13 @@ Item {
     call(["videopin", value], function(result) {
       if (!result.ok) { root.reportError(result.error); return }
       root.optimistic({ videoPinned: result.data.videoPinned })
+    })
+  }
+
+  function setLocalFeeds(on) {
+    call(["localfeeds", on ? "on" : "off"], function(result) {
+      if (!result.ok) { root.reportError(result.error); return }
+      root.optimistic({ localFeeds: result.data.localFeeds })
     })
   }
 

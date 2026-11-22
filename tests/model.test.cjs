@@ -178,6 +178,23 @@ test("the effects row's buttons are all one height", () => {
   assert.match(row, /height: speedButton\.height\s*iconText: Model\.glyph\.video/)
 })
 
+test("no native text input anywhere: the sign-in fields read the clipboard only through the bridge", () => {
+  for (const name of fs.readdirSync(ROOT).filter((f) => f.endsWith(".qml"))) {
+    const code = fs.readFileSync(path.join(ROOT, name), "utf8").split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n")
+    assert.ok(!/\b(TextField|TextInput|TextEdit|TextArea)\s*\{/.test(code), name + " has a native text input")
+  }
+  const field = fs.readFileSync(path.join(ROOT, "SignInField.qml"), "utf8")
+  assert.match(field, /^FocusScope \{/m)
+  assert.match(field, /textFormat: Text\.PlainText/)
+  const panel = fs.readFileSync(path.join(ROOT, "Panel.qml"), "utf8")
+  assert.equal((panel.match(/SignInField \{/g) || []).length, 2)
+  assert.equal((panel.match(/pasteHandler: root\.readClipboard/g) || []).length, 2)
+  const service = fs.readFileSync(path.join(ROOT, "Service.qml"), "utf8")
+  assert.match(service, /function readClipboard\(primary, done\) \{\s*var args = \["paste"\]/)
+  const install = fs.readFileSync(path.join(ROOT, "install.sh"), "utf8")
+  assert.match(install, /SignInField\.qml/)
+})
+
 test("no Python-style comments slipped into QML", () => {
   for (const name of fs.readdirSync(ROOT).filter((f) => f.endsWith(".qml"))) {
     const text = fs.readFileSync(path.join(ROOT, name), "utf8")

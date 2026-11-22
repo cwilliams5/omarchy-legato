@@ -160,6 +160,10 @@ devices.
   paused, start it from the bar or the panel, or set it to `0`.
 - **Trim Silence with video:** the picture falls behind at each trimmed
   pause, as in the Pocket Casts Android app.
+- **Episodes on your local network** (a home media server, a Tailscale
+  machine) need the **local network feeds** setting turned on; it's off so
+  that a feed can't point Legato at other machines on your network.
+  Episodes served from this computer itself never play.
 - **A cover isn't a video:** some feeds pack the episode's cover into the
   file as a video stream. Legato treats those episodes as audio.
 
@@ -283,7 +287,8 @@ so `omarchy bar set io.github.cwilliams5.legato <key> <value>` works too.
 | `pauseOnSleep` | `true` | Pause and save your place before the computer sleeps |
 
 The player keeps its own choices (volume, speed, Trim Silence, Volume
-Boost, and the video window's place, Always on top and Transparency) in
+Boost, the video window's place, Always on top and Transparency, and
+whether episodes from your local network may play) in
 `~/.local/state/omarchy-legato/prefs.json`. Change them from the panel, the
 video window's menu or the Settings page.
 
@@ -319,6 +324,13 @@ video window's menu or the Settings page.
 - Legato runs its helper and mpv with a cleared environment and absolute
   paths. mpv only ever gets web addresses (`http` or `https`) and checks
   every `https` certificate.
+- mpv fetches through a small local check that runs while it does: every
+  connection, redirects included, goes only to public addresses (or, if you
+  allow it, your local network), never to this computer, and the address is
+  checked again once connected.
+- The sign-in fields aren't native text inputs, so nothing reads your
+  clipboard unless you paste (Ctrl+V, Shift+Insert or a middle-click), and
+  then at most 4 KB.
 - Covers are fetched by the helper, checked to be images, size-capped and
   cached; the panel only shows the cached copies.
 

@@ -277,6 +277,11 @@ Panel {
     if (detailOpen && detail.item) service.openDetail(detail.item)
   }
 
+  // A paste into a sign-in field: bounded, through the bridge (SignInField.qml).
+  function readClipboard(primary, done) {
+    return service ? service.readClipboard(primary, done) : null
+  }
+
   function signIn() {
     if (!service) return
     if (service.login(emailField.text, passwordField.text)) passwordField.text = ""
@@ -549,6 +554,8 @@ Panel {
         videoPinned: !root.service || root.service.videoPinned
         onVideoTransparencyRequested: function(level) { if (root.service) root.service.setVideoTransparency(level) }
         onVideoPinnedRequested: function(pinned) { if (root.service) root.service.setVideoPinned(pinned ? "on" : "off") }
+        localFeeds: !!root.service && root.service.localFeeds
+        onLocalFeedsRequested: function(on) { if (root.service) root.service.setLocalFeeds(on) }
         onBackRequested: root.setSettings(false)
         onChangeRequested: function(key, value) {
           var change = {}
@@ -679,34 +686,42 @@ Panel {
               wrapMode: Text.Wrap
             }
 
-            TextField {
+            // Not native text inputs (they'd read the clipboard by
+            // themselves): see SignInField.qml.
+            SignInField {
               id: emailField
               width: parent.width
               placeholderText: "Email"
               text: root.service ? root.service.email : ""
               foreground: root.foreground
               accent: root.accent
-              font.family: root.fontFamily
+              fontFamily: root.fontFamily
               enabled: !(root.service && root.service.loginRunning)
-              Keys.onReturnPressed: passwordField.forceActiveFocus()
-              Keys.onEscapePressed: keyCatcher.forceActiveFocus()
+              pasteHandler: root.readClipboard
+              KeyNavigation.tab: passwordField
+              onAccepted: passwordField.forceActiveFocus()
+              onEscaped: keyCatcher.forceActiveFocus()
             }
 
             Row {
               width: parent.width
               spacing: Style.space(8)
 
-              TextField {
+              SignInField {
                 id: passwordField
                 width: parent.width - signInButton.width - parent.spacing
+                anchors.verticalCenter: parent.verticalCenter
                 placeholderText: "Password"
                 password: true
                 foreground: root.foreground
                 accent: root.accent
-                font.family: root.fontFamily
+                fontFamily: root.fontFamily
                 enabled: !(root.service && root.service.loginRunning)
-                Keys.onReturnPressed: root.signIn()
-                Keys.onEscapePressed: { text = ""; keyCatcher.forceActiveFocus() }
+                pasteHandler: root.readClipboard
+                KeyNavigation.backtab: emailField
+                KeyNavigation.tab: emailField
+                onAccepted: root.signIn()
+                onEscaped: { text = ""; keyCatcher.forceActiveFocus() }
               }
 
               Button {

@@ -8,6 +8,7 @@ Run with tests/run, or directly:
     /usr/bin/python3 -I -B -m unittest discover -s tests -v
 """
 
+import base64
 import gzip
 import http.server
 import importlib.machinery
@@ -598,12 +599,32 @@ class PlayerTestCase(TempHome):
                             ("_OPENER", bridge.build_opener(allow_plain_http=True)),
                             ("url_host_is", lambda url, hosts: urllib.parse.urlsplit(url).hostname in local),
                             ("podcast_art", lambda uuid: ""),
-                            ("MPV_EXTRA_ARGS", ("--ao=null",))):
+                            ("MPV_EXTRA_ARGS", ("--ao=null",)),
+                            # The fake server is on 127.0.0.1, which the feed
+                            # proxy never fetches from: allow it here only.
+                            # Playback still goes through a real FeedProxy.
+                            ("feed_address_allowed", lambda address, allow_local: True),
+                            ("start_feed_proxy", self.thread_proxy)):
             patcher = mock.patch.object(bridge, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
         self.addCleanup(self.quit_mpv)
         bridge.save_prefs({"volume": 0})
+
+    def thread_proxy(self, watch_pid):
+        proxy = bridge.FeedProxy("ab" * 16, allow_local=lambda: True)
+        self.proxied = getattr(self, "proxied", [])
+        handle = proxy.handle
+
+        def counting(conn):
+            peeked = conn.recv(512, socket.MSG_PEEK)
+            self.proxied.append(peeked.split(b"\r\n", 1)[0].decode("latin-1"))
+            handle(conn)
+        proxy.handle = counting
+        stop_r, stop_w = os.pipe()
+        threading.Thread(target=proxy.serve, kwargs={"stop_fd": stop_r}, daemon=True).start()
+        self.addCleanup(os.write, stop_w, b"x")
+        return proxy.url()
 
     def quit_mpv(self):
         player = bridge.Mpv.connect()
@@ -935,6 +956,15 @@ class EndToEnd(PlayerTestCase):
             result = run_bridge("logout")
         self.assertFalse(result["ok"])
         self.assertEqual(result["code"], "logout")
+
+    def test_mpv_fetches_through_the_feed_proxy(self):
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.wait_for(lambda: run_bridge("player")["data"]["position"] > 0.3)  # it plays, through it
+        with bridge.Mpv.connect() as player:
+            self.assertTrue(bridge.proxy_alive(player.get("http-proxy")))
+        self.assertTrue(any(line.startswith("GET http://127.0.0.1:") and "/audio/" + EP_1 in line
+                            for line in self.proxied), self.proxied)
 
     def test_mpv_checks_tls_certificates(self):
         # Review finding: mpv's --tls-verify is off by default.
@@ -1518,6 +1548,136 @@ class PrefsLock(TempHome):
         worker.join(5)
         self.assertEqual(done[0]["data"]["trim"], "mild")
         self.assertEqual(bridge.load_prefs()["trim"], "mild")
+
+
+REAL_FEED_ADDRESS_ALLOWED = bridge.feed_address_allowed
+
+
+class FeedProxyRules(TempHome):
+    """Feeds can't point mpv at this computer, or (unless allowed) at the
+    local network: checked by the proxy at every connection."""
+
+    def test_which_addresses_may_be_fetched(self):
+        allowed = REAL_FEED_ADDRESS_ALLOWED
+        for address in ("8.8.8.8", "2606:4700::1111", "151.101.1.1"):
+            self.assertTrue(allowed(address, False), address)
+        for address in ("192.168.1.5", "10.0.0.2", "172.16.0.1", "100.101.102.103", "fd7a:115c:a1e0::1",
+                        "::ffff:192.168.1.1"):
+            self.assertFalse(allowed(address, False), address)
+            self.assertTrue(allowed(address, True), address)  # a home server, when allowed
+        for address in ("127.0.0.1", "::1", "169.254.169.254", "fe80::1", "0.0.0.0", "224.0.0.1",
+                        "255.255.255.255", "not an address"):
+            self.assertFalse(allowed(address, True), address)  # never, even when allowed
+
+    def ask(self, proxy, request):
+        with socket.create_connection(("127.0.0.1", proxy.port), timeout=3) as sock:
+            sock.sendall(request.encode())
+            return sock.recv(512).decode("latin-1")
+
+    def test_the_proxy_wants_its_password_and_refuses_this_computer(self):
+        proxy = bridge.FeedProxy("cd" * 16, allow_local=lambda: True)  # the real address rules
+        stop_r, stop_w = os.pipe()
+        threading.Thread(target=proxy.serve, kwargs={"stop_fd": stop_r}, daemon=True).start()
+        self.addCleanup(os.write, stop_w, b"x")
+        auth = "Proxy-Authorization: Basic %s\r\n" % base64.b64encode(("legato:" + "cd" * 16).encode()).decode()
+        target = socket.socket()
+        target.bind(("127.0.0.1", 0))
+        target.listen(1)
+        self.addCleanup(target.close)
+        port = target.getsockname()[1]
+        self.assertTrue(self.ask(proxy, "CONNECT 127.0.0.1:%d HTTP/1.1\r\n\r\n" % port).startswith("HTTP/1.1 407"))
+        self.assertTrue(self.ask(proxy, "CONNECT 127.0.0.1:%d HTTP/1.1\r\n%s\r\n" % (port, auth)).startswith("HTTP/1.1 403"))
+        self.assertTrue(self.ask(proxy, "GET http://localhost:%d/x HTTP/1.1\r\n%s\r\n" % (port, auth)).startswith("HTTP/1.1 403"))
+        self.assertTrue(self.ask(proxy, "LEGATO-PING / HTTP/1.1\r\n%s\r\n" % auth).startswith("HTTP/1.1 204"))
+        self.assertTrue(bridge.proxy_alive(proxy.url()))
+        self.assertFalse(bridge.proxy_alive(proxy.url().replace("cd" * 16, "ef" * 16)))
+
+    def test_the_proxy_process_ends_with_its_player(self):
+        player = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(player.kill)
+        url = bridge.start_feed_proxy(player.pid)
+        self.assertTrue(bridge.proxy_alive(url))
+        self.assertNotIn(url.split("@")[0].split(":")[-1], " ".join(open("/proc/%d/cmdline" % player.pid).read()))
+        player.kill()
+        player.wait()
+        deadline = time.monotonic() + 3
+        while bridge.proxy_alive(url) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        self.assertFalse(bridge.proxy_alive(url))
+
+    def test_a_local_episode_says_why_it_wont_play(self):
+        def resolving(address):
+            return lambda host, port: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port))]
+        with mock.patch.object(bridge, "resolve_feed_host", resolving("100.101.102.103")):
+            with self.assertRaises(bridge.ApiError) as raised:
+                bridge.check_feed_host("http://server.tailnet.example:8585/a.mp3", {})
+            self.assertIn("local network", raised.exception.message)
+            bridge.check_feed_host("http://server.tailnet.example:8585/a.mp3", {"localFeeds": True})  # allowed
+        with mock.patch.object(bridge, "resolve_feed_host", resolving("127.0.0.1")):
+            with self.assertRaises(bridge.ApiError) as raised:
+                bridge.check_feed_host("http://localhost/a.mp3", {"localFeeds": True})
+            self.assertIn("this computer", raised.exception.message)
+        with mock.patch.object(bridge, "resolve_feed_host", resolving("151.101.1.1")):
+            bridge.check_feed_host("https://cdn.example/a.mp3", {})
+
+    def test_the_setting_is_kept_with_the_players_choices(self):
+        self.assertFalse(bridge.local_feeds_allowed(bridge.load_prefs()))
+        self.assertTrue(run_bridge("localfeeds", "on")["data"]["localFeeds"])
+        self.assertIs(bridge.load_prefs()["localFeeds"], True)
+        self.assertFalse(run_bridge("localfeeds", "toggle")["data"]["localFeeds"])
+
+
+class Paste(TempHome):
+    """The sign-in fields' paste (legato-bridge paste): bounded in size and
+    time, and nothing of wl-paste's left running afterwards."""
+
+    def fake_wl_paste(self, body):
+        path = os.path.join(self.home, "wl-paste")
+        with open(path, "w") as fh:
+            fh.write("#!/bin/sh\n" + body + "\n")
+        os.chmod(path, 0o755)
+        return path
+
+    def paste(self, body, *args):
+        tool = self.fake_wl_paste(body)
+        before = signal.getsignal(signal.SIGTERM)
+        try:
+            with mock.patch.object(bridge, "trusted_tool", lambda name: tool if name == "wl-paste" else ""):
+                return run_bridge("paste", *args)
+        finally:
+            signal.signal(signal.SIGTERM, before)
+
+    def survivors(self, *commands):
+        # Exact command lines: a looser pattern also matches whatever shell
+        # happens to have that text in its own command line.
+        found = []
+        for command in commands:
+            found += subprocess.run(["pgrep", "-x", "-f", command], capture_output=True, text=True).stdout.split()
+        return found
+
+    def test_text_comes_back_on_one_line(self):
+        result = self.paste("printf 'me@example.com\\n'")
+        self.assertEqual(result["data"]["text"], "me@example.com")
+        self.assertEqual(self.paste("printf ' pass word '")["data"]["text"], " pass word ")  # spaces are kept
+
+    def test_too_much_is_refused(self):
+        result = self.paste("head -c 5000 /dev/zero | tr '\\0' a")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "paste_too_long")
+
+    def test_a_clipboard_that_never_answers_times_out_and_leaves_nothing_behind(self):
+        child, waiter = "sleep %d.%03d" % (40 + os.getpid() % 50, os.getpid() % 997), "sleep 99.%03d" % (os.getpid() % 997)
+        started = time.monotonic()
+        # Like wl-paste forking cat: a child holding the pipe open, then a wait.
+        result = self.paste("%s & %s" % (child, waiter))
+        self.assertLess(time.monotonic() - started, bridge.PASTE_TIMEOUT + 2)
+        self.assertEqual(result["code"], "paste_timeout")
+        time.sleep(0.2)
+        self.assertEqual(self.survivors(child, waiter), [])
+
+    def test_primary_selection_is_asked_for_on_middle_click(self):
+        result = self.paste('for a in "$@"; do [ "$a" = --primary ] && printf primary && exit; done; printf clipboard', "--primary")
+        self.assertEqual(result["data"]["text"], "primary")
 
 
 class CoverArt(TempHome):
