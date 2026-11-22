@@ -76,7 +76,9 @@ Click the bar chip to open the panel. The first time, it asks you to sign in.
 | Scroll       | Volume ±5               |
 
 The panel has tabs for Up Next, In Progress, New releases and Podcasts. It
-also has a seek bar, skip back and forward, stop, and playback speed (0.8× to 3×).
+also has a seek bar, skip back and forward, stop, playback speed (0.8× to 3×),
+and Trim Silence (Off, Mild, Medium, Mad Max: the same levels as the Pocket
+Casts apps), which cuts the pauses before the speed-up applies.
 Stopping unloads the episode and shrinks the bar chip back to its icon.
 
 **Sync:** while an episode plays, the plugin sends your position to Pocket
