@@ -107,6 +107,20 @@ FINISH_SLACK = 3
 MPV_EXTRA_ARGS = ()
 SPEEDS = (0.8, 1.0, 1.1, 1.2, 1.3, 1.5, 1.7, 2.0, 2.5, 3.0)
 
+# Trim Silence, with Pocket Casts' own values (its Android app,
+# ShiftyAudioProcessorChain.kt): a pause longer than the first number is cut
+# down to the second; silence is anything below amplitude 250 of 32768
+# (-42 dBFS), judged by peak. Speed applies after trimming: mpv runs user
+# filters before its scaletempo2.
+TRIM_LEVELS = {
+    "off": None,
+    "mild": (0.416, 0.291),
+    "medium": (0.300, 0.225),
+    "madmax": (0.083, 0.0),
+}
+TRIM_ORDER = ("off", "mild", "medium", "madmax")
+TRIM_LABEL = "@trim"
+
 
 def safe_uuid(value):
     """Pocket Casts IDs are UUIDs. Anything else must not reach a URL path."""
@@ -1322,6 +1336,35 @@ class Mpv:
         return {name: self.get(name) for name in MPV_PROPERTIES}
 
 
+def trim_level(value):
+    value = str(value or "off").lower()
+    return value if value in TRIM_LEVELS else "off"
+
+
+def trim_filter(level):
+    """The mpv audio filter for a Trim Silence level, or "" for off.
+    timestamp=copy keeps each frame's own time, so mpv's position stays in
+    the episode's time across a cut (with the default, it would fall behind,
+    and the position pushed to Pocket Casts would be wrong)."""
+    values = TRIM_LEVELS[trim_level(level)]
+    if not values:
+        return ""
+    longer, keep = values
+    return ("lavfi=[silenceremove=stop_periods=-1:stop_duration=%g:stop_silence=%g:"
+            "stop_threshold=-42dB:detection=peak:timestamp=copy]" % (longer, keep))
+
+
+def apply_trim(player, level):
+    """Swap the trim filter on a running player."""
+    try:
+        player.command("af", "remove", TRIM_LABEL)
+    except ApiError:
+        pass  # none to remove
+    spec = trim_filter(level)
+    if spec:
+        player.command("af", "add", "%s:%s" % (TRIM_LABEL, spec))
+
+
 def mpv_quote(value):
     """mpv's length-prefixed quoting for a key=value list entry, so a title
     holding commas or equals signs stays one value."""
@@ -1349,6 +1392,9 @@ def start_mpv(prefs):
             "--user-agent=" + USER_AGENT,
             "--volume=%d" % max(0, min(100, as_int(prefs.get("volume", 100)) if "volume" in prefs else 100)),
             "--speed=%s" % clamp_speed(prefs.get("speed", 1.0))]
+    trim = trim_filter(prefs.get("trim"))
+    if trim:
+        argv.append("--af=%s:%s" % (TRIM_LABEL, trim))
     argv.extend(MPV_EXTRA_ARGS)
     script = mpris_script()
     if script:
@@ -1494,6 +1540,7 @@ def player_view(snap, state, prefs, load_failed=False):
         "duration": float(duration) if isinstance(duration, (int, float)) and duration > 0 else float(episode.get("duration") or 0),
         "volume": int(round(snap.get("volume"))) if active and isinstance(snap.get("volume"), (int, float)) else as_int(prefs.get("volume", 100)) if "volume" in prefs else 100,
         "speed": float(snap.get("speed")) if active and isinstance(snap.get("speed"), (int, float)) else clamp_speed(prefs.get("speed", 1.0)),
+        "trim": trim_level(prefs.get("trim")),
         "item": episode or None,
         "running": bool(snap),
     }
@@ -1953,6 +2000,24 @@ def cmd_speed(args):
     out({"speed": speed})
 
 
+def cmd_trim(args):
+    prefs = load_prefs()
+    if args.value == "cycle":
+        current = TRIM_ORDER.index(trim_level(prefs.get("trim")))
+        level = TRIM_ORDER[(current + 1) % len(TRIM_ORDER)]
+    elif args.value in TRIM_LEVELS:
+        level = args.value
+    else:
+        raise ApiError("bad_args", "Trim Silence is off, mild, medium or madmax")
+    prefs["trim"] = level
+    save_prefs(prefs)
+    player = Mpv.connect()
+    if player:
+        with player:
+            apply_trim(player, level)
+    out({"trim": level})
+
+
 def cmd_next(args):
     """Skip to the next Up Next episode. The skipped one keeps its position
     and leaves Up Next, the way the Pocket Casts apps do it."""
@@ -2101,6 +2166,7 @@ def build_parser():
     p = sub.add_parser("seek"); p.add_argument("seconds", type=float); p.add_argument("--relative", action="store_true"); p.set_defaults(fn=cmd_seek)
     p = sub.add_parser("volume"); p.add_argument("percent", type=int); p.set_defaults(fn=cmd_volume)
     p = sub.add_parser("speed"); p.add_argument("value"); p.set_defaults(fn=cmd_speed)
+    p = sub.add_parser("trim"); p.add_argument("value"); p.set_defaults(fn=cmd_trim)
     sub.add_parser("next").set_defaults(fn=cmd_next)
     p = sub.add_parser("stop"); p.add_argument("--if-paused", action="store_true"); p.set_defaults(fn=cmd_stop)
 

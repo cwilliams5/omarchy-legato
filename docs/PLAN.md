@@ -37,28 +37,42 @@ of its own.
   that). Draft the text, Cody reviews it, then post. Keep the old fork while
   they're open. Posted 2026-11-21: issues #4 #5 #6, PRs #7 #8 #9
   (Ninepointlabs-Omarchy-Extras/omarchy-pocketcasts).
-- [ ] A2 Qt 6.12 colours: the 7 bare `Color.` references (Panel.qml,
+- [x] A2 Qt 6.12 colours: the 7 bare `Color.` references (Panel.qml,
   BarWidget.qml, AboutView.qml) become `Commons.Color` with `import
   qs.Commons as Commons`. Check the accent and the About page render in
   Cody's theme.
-- [ ] A3 Bar chip icon: the Legato mark (an SVG in `currentColor`) instead
+- [x] A3 Bar chip icon: the Legato mark (an SVG in `currentColor`) instead
   of the font glyph `󰦔`, when nothing is loaded.
-- [ ] A4 Title display: a setting for the chip's label: off, a static
+- [x] A4 Title display: a setting for the chip's label: off, a static
   title cut off with "…", or the scrolling marquee (today's behavior).
 
 ### B. Trim Silence
 
-- [ ] B1 Bridge: `trim off|mild|medium|madmax`, saved in `prefs.json`,
+- [x] B1 Bridge: `trim off|mild|medium|madmax`, saved in `prefs.json`,
   applied when mpv starts and live: mpv's `af` with
   `lavfi=[silenceremove=stop_periods=-1:stop_duration=..:stop_silence=..:stop_threshold=-42dB:detection=peak:timestamp=copy]`.
-- [ ] B2 Check that `time-pos` stays in the episode's own time with
+- [x] B2 Check that `time-pos` stays in the episode's own time with
   `timestamp=copy` (positions pushed to Pocket Casts must not drift). Test
   with generated audio that has known silences (tone, gap, tone).
-- [ ] B3 Panel control and an IPC command (`cycleTrim`); show the level
+- [x] B3 Panel control and an IPC command (`cycleTrim`); show the level
   beside the speed.
-- [ ] B4 Look into Pocket Casts' per-show effects (speed and trim sync to
-  the server on Android): if the web API exposes them, follow the phone's
-  settings per show.
+- [ ] B4 Follow the phone's effects. **Researched 2026-11-21, needs Cody's
+  call on the behavior** (does a change made in Legato stay local, or does
+  the next episode go back to the phone's settings?). What the web API has:
+  - global, from `POST /user/named_settings/update {"m":"web"}` (the web
+    player's own fetch; read-only with no other fields): `playbackSpeed`
+    (1.5 on Cody's account, synced from the phone), `trimSilence` (0,
+    "changed": false, so the Android app may keep Trim Silence on the
+    device), `volumeBoost`, `skipBack`, `skipForward`;
+  - per show, in `/user/podcast/list` `settings`: `playbackEffects` (the
+    show overrides the global effects; off on all 264 of Cody's shows),
+    `playbackSpeed`, `trimSilence` (0 to 3 = off, mild, medium, mad max),
+    `volumeBoost`, `autoStartFrom` and `autoSkipLast` (skip intro and outro,
+    seconds).
+- [ ] B4b Honor each show's `autoStartFrom` (start a new episode N seconds
+  in) and `autoSkipLast` (treat N seconds before the end as the end), as the
+  apps do. Legato ignores both today (one of Cody's shows skips a 15 s
+  intro).
 - [ ] B5 Optional: "time saved", as the Pocket Casts apps show it.
 
 ### C. Video window (picture in picture)

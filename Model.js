@@ -112,6 +112,11 @@ function fmtSpeed(speed) {
   return s + "×"
 }
 
+// Trim Silence levels, as Pocket Casts names them.
+function trimLabel(level) {
+  return { mild: "Mild", medium: "Medium", madmax: "Mad Max" }[level] || "Off"
+}
+
 function fileUrl(path) {
   if (!path) return ""
   return "file://" + String(path).split("/").map(encodeURIComponent).join("/")

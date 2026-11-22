@@ -133,6 +133,20 @@ class Validation(unittest.TestCase):
         self.assertEqual(bridge.start_position({"playedUpTo": 99, "duration": 100, "status": 2}), 0)
         self.assertEqual(bridge.start_position({"playedUpTo": 50, "duration": 100}, from_start=True), 0)
 
+    def test_trim_levels_use_pocket_casts_values(self):
+        self.assertEqual(bridge.trim_filter("off"), "")
+        self.assertEqual(bridge.trim_filter("bogus"), "")
+        self.assertEqual(bridge.trim_level("MadMax"), "madmax")
+        mild = bridge.trim_filter("mild")
+        self.assertIn("stop_duration=0.416:stop_silence=0.291", mild)
+        self.assertIn("stop_duration=0.3:stop_silence=0.225", bridge.trim_filter("medium"))
+        self.assertIn("stop_duration=0.083:stop_silence=0", bridge.trim_filter("madmax"))
+        for level in ("mild", "medium", "madmax"):
+            spec = bridge.trim_filter(level)
+            # Keep each frame's own time, so positions stay in the episode's time.
+            self.assertIn("timestamp=copy", spec)
+            self.assertIn("stop_threshold=-42dB:detection=peak", spec)
+
     def test_speed_is_clamped(self):
         self.assertEqual(bridge.clamp_speed("9"), 3.0)
         self.assertEqual(bridge.clamp_speed("0.1"), 0.5)
@@ -357,6 +371,19 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
                                            "playingStatus": s["status"].get(u, 1)} for u in s["shows"][body["uuid"]]["episodes"]]})
         else:
             self.reply(404, {})
+
+
+def make_gapped_audio():
+    """7 s: a tone, 2 s of silence, a tone, 2 s of silence, a tone."""
+    out = tempfile.mktemp(suffix=".mp3")
+    tone = "sine=frequency=440:duration=1"
+    subprocess.run(["/usr/bin/ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", tone + ",apad=pad_dur=2",
+                    "-f", "lavfi", "-i", tone + ",apad=pad_dur=2", "-f", "lavfi", "-i", tone,
+                    "-filter_complex", "[0][1][2]concat=n=3:v=0:a=1", "-q:a", "2", out], check=True)
+    with open(out, "rb") as fh:
+        blob = fh.read()
+    os.unlink(out)
+    return blob
 
 
 def make_audio(seconds):
@@ -758,6 +785,57 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         self.wait_for(lambda: self.position() >= 19)
         self.assertNotIn(EP_1, self.fake["upnext"])
         self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
+
+
+@NEEDS_PLAYER
+class TrimSilence(PlayerTestCase):
+    """Trim Silence cuts the pauses but keeps positions in the episode's own
+    time, so what's pushed to Pocket Casts is still right."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.audio = make_gapped_audio()
+
+    def setUp(self):
+        super().setUp()
+        for episode in self.fake["episodes"].values():
+            episode["duration"] = 7
+
+    def af(self):
+        with bridge.Mpv.connect() as player:
+            return [f.get("label") for f in (player.get("af") or [])]
+
+    def test_mad_max_skips_the_gaps_and_keeps_episode_time(self):
+        self.login()
+        self.assertEqual(run_bridge("trim", "madmax")["data"]["trim"], "madmax")
+        self.fake["upnext"] = [EP_1]
+        started = time.monotonic()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.assertIn("trim", self.af())
+        # Past the first gap in well under its real length: time jumped it.
+        position = self.wait_for(lambda: (lambda v: v if v >= 3 else None)(run_bridge("player")["data"]["position"]))
+        self.assertLess(time.monotonic() - started, 3.5)
+        self.assertLessEqual(position, 7.2)
+        # Played to its end (marked played) in far less than 7 s.
+        # (The panel polls on mpv's end-of-file event; here the test polls.)
+        self.wait_for(lambda: run_bridge("player") and self.fake["status"].get(EP_1) == bridge.STATUS_PLAYED)
+        self.assertLess(time.monotonic() - started, 5.5)
+        self.assertEqual(run_bridge("player")["data"]["trim"], "madmax")
+
+    def test_trim_changes_live_and_cycles(self):
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.assertNotIn("trim", self.af())
+        self.assertEqual(run_bridge("trim", "cycle")["data"]["trim"], "mild")
+        self.assertIn("trim", self.af())
+        self.assertEqual(run_bridge("trim", "cycle")["data"]["trim"], "medium")
+        self.assertEqual(self.af().count("trim"), 1)  # swapped, not stacked
+        run_bridge("trim", "cycle")
+        self.assertEqual(run_bridge("trim", "cycle")["data"]["trim"], "off")
+        self.assertNotIn("trim", self.af())
+        self.assertFalse(run_bridge("trim", "loud")["ok"])
+        self.assertEqual(bridge.load_prefs()["trim"], "off")
 
 
 class AboutTests(TempHome):

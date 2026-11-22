@@ -39,6 +39,18 @@ test("time formatting", () => {
   assert.equal(Model.fmtSpeed(1.25), "1.3×")
 })
 
+test("Trim Silence levels read as Pocket Casts names them", () => {
+  assert.equal(Model.trimLabel("off"), "Off")
+  assert.equal(Model.trimLabel("mild"), "Mild")
+  assert.equal(Model.trimLabel("medium"), "Medium")
+  assert.equal(Model.trimLabel("madmax"), "Mad Max")
+  assert.equal(Model.trimLabel(undefined), "Off")
+  const panel = fs.readFileSync(path.join(ROOT, "Panel.qml"), "utf8")
+  const service = fs.readFileSync(path.join(ROOT, "Service.qml"), "utf8")
+  assert.match(panel, /t === "t"\) root\.service\.cycleTrim\(\)/)
+  assert.match(service, /function cycleTrim\(\): string/)
+})
+
 test("dates read relative to today", () => {
   const now = new Date(2026, 9, 1, 12, 0, 0)
   assert.equal(Model.fmtDate("2026-10-01T09:00:00Z", now), "Today")

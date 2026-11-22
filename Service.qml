@@ -84,6 +84,7 @@ Item {
   readonly property real duration: player && player.duration ? Number(player.duration) : 0
   readonly property int volume: player && player.volume !== undefined ? Number(player.volume) : 100
   readonly property real speed: player && player.speed ? Number(player.speed) : 1
+  readonly property string trim: player && player.trim ? String(player.trim) : "off"
 
   // ---- Lists
   property var upNext: []
@@ -674,6 +675,14 @@ Item {
     })
   }
 
+  function cycleTrim() {
+    call(["trim", "cycle"], function(result) {
+      if (!result.ok) { root.reportError(result.error); return }
+      root.optimistic({ trim: result.data.trim })
+      root.flash("Trim Silence: " + Model.trimLabel(result.data.trim), false)
+    })
+  }
+
   function playItem(item, fromStart) {
     if (!item || !item.uuid) return
     var args = ["play", item.uuid]
@@ -817,6 +826,7 @@ Item {
     function volumeUp(): string { root.nudgeVolume(5); return "ok" }
     function volumeDown(): string { root.nudgeVolume(-5); return "ok" }
     function cycleSpeed(): string { root.cycleSpeed(); return "ok" }
+    function cycleTrim(): string { root.cycleTrim(); return "ok" }
     function refresh(): string { root.refresh(); return "ok" }
     function status(): string {
       return JSON.stringify({

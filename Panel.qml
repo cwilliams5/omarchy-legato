@@ -380,6 +380,7 @@ Panel {
         else if (t === "b" || t === ",") root.service.skipBack()
         else if (t === "f" || t === ".") root.service.skipForward()
         else if (t === "x") root.service.cycleSpeed()
+        else if (t === "t") root.service.cycleTrim()
         else if (t === "q") root.queueCursor()
         else if (t === "m") root.markCursor()
         else if (t === "r") root.refresh()
@@ -762,6 +763,14 @@ Panel {
                   selected: root.service && root.service.speed !== 1
                   fontSize: Style.font.caption
                   onClicked: if (root.service) root.service.cycleSpeed()
+                }
+
+                TransportButton {
+                  text: "Trim " + Model.trimLabel(root.service ? root.service.trim : "off")
+                  tooltipText: "Trim Silence: cut the pauses, as Pocket Casts does; Off, Mild, Medium, Mad Max (t)"
+                  selected: root.service && root.service.trim !== "off"
+                  fontSize: Style.font.caption
+                  onClicked: if (root.service) root.service.cycleTrim()
                 }
               }
 
