@@ -90,8 +90,8 @@ what the API lists, or touch the user's Hyprland config.
     Service.qml `videoKey`, the same actions as the panel's keys); Lua
     globals in Hyprland `legato_video_alpha`, `legato_video_apply`,
     `legato_video_hook` (the opacity hook)
-  - User-Agent `legato/0.2 (+https://github.com/cwilliams5/omarchy-legato)`
-- Version: 0.2.0 now; 1.0.0 at the public release.
+  - User-Agent `legato/1.0 (+https://github.com/cwilliams5/omarchy-legato)`
+- Version: 1.0.0, the first public release (2026-11-22); 1.0.1 next, with the sign-in field (PLAN G12).
 - Branding: `branding/` (`python3 branding/build.py` regenerates it). See
   BRANDING.md for words to avoid in later renames.
 

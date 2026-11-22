@@ -65,7 +65,7 @@ from concurrent.futures import ThreadPoolExecutor
 API = "https://api.pocketcasts.com"
 PODCAST_API = "https://podcast-api.pocketcasts.com"
 ART_BASE = "https://static.pocketcasts.com/discover/images"
-USER_AGENT = "legato/0.2 (+https://github.com/cwilliams5/omarchy-legato)"
+USER_AGENT = "legato/1.0 (+https://github.com/cwilliams5/omarchy-legato)"
 
 HTTP_TIMEOUT = 15
 ART_TIMEOUT = 8
