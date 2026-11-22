@@ -79,6 +79,12 @@ The panel has tabs for Up Next, In Progress, New releases and Podcasts. It
 also has a seek bar, skip back and forward, stop, playback speed (0.8× to 3×),
 and Trim Silence (Off, Mild, Medium, Mad Max: the same levels as the Pocket
 Casts apps), which cuts the pauses before the speed-up applies.
+
+**Video:** for an episode with video, a video button (or `v` in the panel)
+opens it in a small floating window, pinned on every workspace in the
+bottom-right corner, without taking focus; move or resize it and it opens
+there next time. Closing it (its ×, or `q` inside it) hides the video and
+the episode plays on. Trim Silence pauses while the video shows.
 Stopping unloads the episode and shrinks the bar chip back to its icon.
 
 **Sync:** while an episode plays, the plugin sends your position to Pocket
@@ -125,7 +131,8 @@ bindd = SUPER ALT, P, Legato play/pause, exec, omarchy-shell legato playPause
 ```
 
 The commands are `playPause`, `next`, `skipBack`, `skipForward`, `stop`,
-`volumeUp`, `volumeDown`, `cycleSpeed`, `refresh` and `status`.
+`volumeUp`, `volumeDown`, `cycleSpeed`, `cycleTrim`, `toggleVideo`, `refresh`
+and `status`.
 
 ## Settings
 

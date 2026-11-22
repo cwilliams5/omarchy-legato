@@ -77,17 +77,18 @@ of its own.
 
 ### C. Video window (picture in picture)
 
-- [ ] C1 Bridge: `video on|off` sets mpv's `vid` and `force-window`,
+- [x] C1 Bridge: `video on|off` sets mpv's `vid` and `force-window`,
   with `--wayland-app-id=legato-video`; mpv's close button
   (`keybind CLOSE_WIN`) hides the video instead of quitting playback.
-- [ ] C2 Placement: when the window appears, float it, pin it (all
+- [x] C2 Placement: when the window appears, float it, pin it (all
   workspaces), size it and put it in a corner through Hyprland dispatches;
   remember where the user moved it. Never open it on a hidden workspace.
-- [ ] C3 The panel's video button shows only when the episode has a video
+- [x] C3 The panel's video button shows only when the episode has a video
   track.
-- [ ] C4 Decide how Trim Silence and video mix (pause trimming while the
-  video shows, or accept small skips).
-- [ ] C5 Hardware decoding only while visible; nothing decoded while hidden.
+- [x] C4 Decide how Trim Silence and video mix: trimming pauses while the
+  video shows (cutting audio under a picture makes it jump) and comes back
+  when it closes.
+- [x] C5 Hardware decoding only while visible; nothing decoded while hidden.
 
 ### D. Polish
 
@@ -122,3 +123,12 @@ of its own.
   original, fixed in the patch; launches 37 → 6 per 3 minutes playing, 5 → 0
   idle). Cody's phone ↔ laptop test passed. Hard-forked and named Legato
   (logo Slur); renamed, 0.2.0, private. Next: A1.
+- 2026-11-21 (later): A1 posted (issues #4-6, PRs #7-9 upstream). A2-A4
+  done (Qt 6.12 colours, the mark in the bar, a still title by default).
+  B1-B3 done: Trim Silence with Pocket Casts' values; `timestamp=copy`
+  measured to keep positions in episode time. B4 researched (needs Cody's
+  call). C1-C5 done and checked live with a real video episode: the window
+  floats, pins, sits bottom-right without taking focus, remembers where it
+  was moved, and hiding it keeps playback going. Found on the way: mpv needs
+  WAYLAND_DISPLAY to draw a window (the closed environment had dropped it),
+  and mpv 0.41 reads the clipboard at start unless told not to.

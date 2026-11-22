@@ -201,6 +201,18 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
 - **Qt 6.12** adds a QtQuick `Color` type: a bare `Color.x` in plugin QML no
   longer reaches `qs.Commons`' Color and renders black. The original has 7
   such references (PLAN A2).
+- **The video window** is mpv's own (`--wayland-app-id=legato-video`),
+  placed by a Hyprland window rule added at run time: `hyprctl repl
+  'hl.window_rule({ match = { class = "^legato-video$" }, float = true,
+  pin = true, no_initial_focus = true, size = {...}, move = {...} })'`
+  (the keys Omarchy's own webcam overlay uses). Runtime rules last until
+  Hyprland reloads its config, so the bridge adds it each time the video
+  opens. mpv needs `WAYLAND_DISPLAY` to draw at all: without it, selecting a
+  video track silently does nothing. The first video of a session takes
+  about 2.5 s (GPU set-up). mpv lists an episode's cover art as a video
+  track too (`albumart: true`).
+- **mpv 0.41 reads the clipboard at start-up** (its Wayland clipboard
+  backend); `--clipboard-backends-clr` stops it.
 - **Omarchy pauses no media on lock or suspend.** A machine that sleeps while
   playing wakes up playing; rule 2's gap check catches it before any push.
 - **Widget settings** are changed with `omarchy bar set
