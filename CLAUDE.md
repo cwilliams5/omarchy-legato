@@ -226,6 +226,13 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   video track silently does nothing. The first video of a session takes
   about 2.5 s (GPU set-up). mpv lists an episode's cover art as a video
   track too (`albumart: true`).
+- **mpv's memory:** about 67 MB audio-only plus its buffer (capped at
+  64 MB here, mpv's default is 150 MB); once a video has been shown, the
+  NVIDIA driver stays mapped (~570 MB in all) until mpv exits. Paused, it
+  uses no CPU. An unloaded player can't receive media keys (no MPRIS player
+  exists), which is what `unloadAfterMinutes` trades.
+- **mpv's on-screen controller** (osc.lua) loads even with `--no-config`;
+  `--osc=no` keeps the video window to just the picture.
 - **mpv 0.41 reads the clipboard at start-up** (its Wayland clipboard
   backend); `--clipboard-backends-clr` stops it.
 - **Omarchy pauses no media on lock or suspend**, so Legato does it itself

@@ -108,6 +108,26 @@ of its own.
   no media on suspend; Legato's gap check already prevents bad pushes, but
   the audio plays on behind the lock screen after waking.
 
+### E. From Cody's first day of use (2026-11-21)
+
+- [x] E1 Effects on their own row (they ran into the volume slider).
+- [x] E2 Trim kept working with the video window (it used to switch off,
+  and closing the window with its own × never put it back); polls repair
+  the filter chain.
+- [x] E3 Video window without mpv's on-screen controls; `videoPinned`.
+- [x] E4 Settings page behind the gear (`g`), built from the schema.
+- [x] E5 Right-click menu (play, move to top/bottom, remove, mark played);
+  right- and middle-click no longer remove from Up Next.
+- [ ] E6 Drag to reorder Up Next. The web player does it with
+  `POST /up_next/sync {"version":2,"upNext":{"changes":[{"action":5,
+  "modified":<ms>,"episodes":[{uuid,title,url,podcast,published}, ...]}]}}`,
+  the whole list in its new order (action 5 = replace). Risk: a replace
+  sent while the phone changes Up Next can drop the phone's change, so
+  re-read the list just before sending. UI: a drag handle on queued rows.
+- [ ] E7 Optional: after the video window closes, restart mpv at the same
+  spot to give back the ~450 MB the GPU driver keeps mapped (an audio-only
+  player is ~90 MB); today the idle unload does it eventually.
+
 ### Release prep (go-public)
 
 - [ ] CLAUDE.md current: status, rules, platform facts, Credits
@@ -151,3 +171,10 @@ of its own.
   (appears with playback, restarts after exiting, leaves nothing behind on
   stop, steady across polls). Left: a real lid-close test by Cody, then D1
   screenshots and release prep.
+
+- 2026-11-21 (night): Cody's first day of use: E1-E5 done and deployed;
+  the live player's trim was restored by the new filter repair; the two
+  episodes right-click had dropped from Up Next were put back. Measured a
+  paused player: 0% CPU, ~90 MB audio-only, ~570 MB once a video has been
+  shown in it (GPU driver), which is what unloadAfterMinutes trades against
+  media keys working.
