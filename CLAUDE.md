@@ -15,8 +15,9 @@ Done: the sync and performance fixes (also offered upstream as Nine Point
 Labs issues #4-6 and PRs #7-9), Qt 6.12 colours, Legato's mark in the bar,
 a still title by default, Trim Silence, and the picture-in-picture video
 window. Speed, Trim Silence and Volume Boost are global and Legato's own
-(the Android app doesn't sync effects; PLAN B4). Next (docs/PLAN.md): B4b
-(skip intro and outro per show), then D (screenshots) and release prep.
+(the Android app doesn't sync effects; PLAN B4). Each show's skip intro
+and outro (which do sync) are honored. Next (docs/PLAN.md): D
+(screenshots) and release prep.
 
 ## What Legato is
 

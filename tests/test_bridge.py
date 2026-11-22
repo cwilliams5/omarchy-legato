@@ -366,8 +366,14 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
             return
         eps = s["episodes"]
         if path == "/user/podcast/list":
-            self.reply(200, {"podcasts": [{"uuid": u, "title": v["title"], "author": "Author",
-                                           "lastEpisodePublished": "2026-09-30T00:00:00Z"} for u, v in s["shows"].items()]})
+            def show(u, v):
+                entry = {"uuid": u, "title": v["title"], "author": "Author", "lastEpisodePublished": "2026-09-30T00:00:00Z"}
+                skips = s.get("showSettings", {}).get(u, {})
+                if skips:  # as the real API sends them: top level and in settings
+                    entry.update(skips)
+                    entry["settings"] = {k: {"value": n, "changed": True} for k, n in skips.items()}
+                return entry
+            self.reply(200, {"podcasts": [show(u, v) for u, v in s["shows"].items()]})
         elif path == "/up_next/list":
             self.reply(200, {"serverModified": 1, "episodes": [
                 {"uuid": u, "title": eps[u]["title"], "url": eps[u]["url"], "podcast": eps[u]["podcast"],
@@ -966,6 +972,56 @@ class VideoWindow(PlayerTestCase):
         result = run_bridge("video", "on")
         self.assertFalse(result["ok"])
         self.assertEqual(result["code"], "no_video")
+
+
+@NEEDS_PLAYER
+class ShowSkips(PlayerTestCase):
+    """A show's skip-intro and skip-outro, set in any Pocket Casts app."""
+
+    AUDIO_SECONDS = 30
+
+    def setUp(self):
+        super().setUp()
+        for episode in self.fake["episodes"].values():
+            episode["duration"] = 30
+
+    def position(self):
+        return run_bridge("player")["data"]["position"]
+
+    def test_a_fresh_episode_starts_past_the_intro(self):
+        self.fake["showSettings"] = {PODCAST_A: {"autoStartFrom": 12, "autoSkipLast": 0}}
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.assertGreaterEqual(self.wait_for(lambda: (lambda p: p if p >= 12 else None)(self.position())), 12)
+        self.assertEqual(self.writes("/sync/update_episode")[-1]["position"], 12)
+
+    def test_an_episode_in_progress_resumes_where_it_was(self):
+        self.fake["showSettings"] = {PODCAST_A: {"autoStartFrom": 12, "autoSkipLast": 0}}
+        self.fake["progress"][EP_1] = 5
+        self.fake["status"][EP_1] = bridge.STATUS_IN_PROGRESS
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.wait_for(lambda: self.position() > 5.2)
+        self.assertLess(self.position(), 11)
+
+    def test_play_from_start_means_the_start(self):
+        self.fake["showSettings"] = {PODCAST_A: {"autoStartFrom": 12, "autoSkipLast": 0}}
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A, "--from-start")
+        self.wait_for(lambda: self.position() > 0.3)
+        self.assertLess(self.position(), 5)
+
+    def test_the_outro_is_skipped_and_the_episode_ends_there(self):
+        self.fake["showSettings"] = {PODCAST_A: {"autoStartFrom": 0, "autoSkipLast": 26}}
+        self.login()
+        started = time.monotonic()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        # 30 s of audio, the last 26 skipped: over after about 4 s, marked
+        # played, and Up Next moves on.
+        view = self.wait_for(lambda: (lambda v: v if v["item"] and v["item"]["uuid"] == EP_2 else None)(run_bridge("player")["data"]))
+        self.assertLess(time.monotonic() - started, 9)
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
+        self.assertEqual(view["item"]["uuid"], EP_2)
 
 
 class AboutTests(TempHome):

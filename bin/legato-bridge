@@ -1040,6 +1040,17 @@ def norm_episode(e, podcast_uuid="", podcast_title="", sync=None):
     }
 
 
+def show_seconds(p, key):
+    """A show's skip-intro (autoStartFrom) or skip-outro (autoSkipLast) in
+    seconds, set in any Pocket Casts app; it comes both at the top level
+    and inside `settings`."""
+    value = p.get(key)
+    if value is None:
+        setting = (p.get("settings") or {}).get(key) if isinstance(p.get("settings"), dict) else None
+        value = setting.get("value") if isinstance(setting, dict) else None
+    return min(as_int(value), 3600)
+
+
 def norm_podcast(p):
     if not isinstance(p, dict):
         return None
@@ -1054,6 +1065,8 @@ def norm_podcast(p):
         "lastPublished": str(p.get("lastEpisodePublished") or "")[:32],
         "unplayed": p.get("unplayed") is True,
         "art": podcast_art(uuid),
+        "startFrom": show_seconds(p, "autoStartFrom"),
+        "skipLast": show_seconds(p, "autoSkipLast"),
     }
 
 
@@ -1618,7 +1631,20 @@ def start_position(item, from_start=False):
     return position
 
 
-def load_into_mpv(item, prefs, position):
+def show_skips(podcast_uuid):
+    """(skip intro, skip outro) in seconds for a show you follow, from the
+    subscriptions list (cached ten minutes); (0, 0) for anything else."""
+    try:
+        shows = subscriptions()
+    except ApiError:
+        return 0, 0
+    for show in shows:
+        if show.get("uuid") == podcast_uuid:
+            return as_int(show.get("startFrom")), as_int(show.get("skipLast"))
+    return 0, 0
+
+
+def load_into_mpv(item, prefs, position, skip_last=0):
     url = safe_media_url(item.get("url"))
     if not url:
         raise ApiError("not_found", "That episode has no playable audio link")
@@ -1628,6 +1654,11 @@ def load_into_mpv(item, prefs, position):
         if item.get("show"):
             title = "%s — %s" % (title, item["show"])
         options = "start=%d,force-media-title=%s,pause=no" % (int(position), mpv_quote(title))
+        duration = as_int(item.get("duration"))
+        if skip_last and (not duration or position + skip_last < duration):
+            # The show's skip-outro: mpv ends the episode that much early, and
+            # the end is handled as any other (marked played, autoplay).
+            options += ",end=-%d" % skip_last
         player.command("loadfile", url, "replace", -1, options)
         player.wait_for_load()
 
@@ -1641,6 +1672,13 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
     (another device moved on): the outgoing episode's local position is out
     of date then, and pushing it would rewind that device."""
     position = start_position(item, from_start)
+    start_from, skip_last = show_skips(item.get("podcast", ""))
+    duration = as_int(item.get("duration"))
+    if (position == 0 and not from_start and start_from
+            and (not duration or start_from < duration - FINISH_SLACK)):
+        # The show's skip-intro, for an episode starting from the top (as the
+        # Pocket Casts apps do it; "play from the start" means the start).
+        position = start_from
     previous = load_playback()
     current = previous.get("episode") or {}
     # Switching away mid-episode: save where you were in the old one (unless
@@ -1648,7 +1686,7 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
     if (save_previous and current.get("uuid") and current.get("uuid") != item.get("uuid")
             and previous.get("handledEnd") != current.get("uuid")):
         save_outgoing(previous)
-    load_into_mpv(item, prefs, position)
+    load_into_mpv(item, prefs, position, skip_last)
     cache_art([item])
     # atTop: whether this episode is the top of Up Next, i.e. what Pocket
     # Casts considers playing. If the top later changes, another device has

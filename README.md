@@ -87,6 +87,11 @@ opens it in a small floating window, pinned on every workspace in the
 bottom-right corner, without taking focus; move or resize it and it opens
 there next time. Closing it (its ×, or `q` inside it) hides the video and
 the episode plays on. Trim Silence pauses while the video shows.
+
+**Skip intro and outro:** a show's "skip first" and "skip last" times, set
+in any Pocket Casts app, apply here too: a new episode starts past the
+intro, and an episode ends (marked played, on to the next) where its outro
+would begin.
 Stopping unloads the episode and shrinks the bar chip back to its icon.
 
 **Sync:** while an episode plays, the plugin sends your position to Pocket

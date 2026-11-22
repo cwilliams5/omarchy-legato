@@ -76,7 +76,7 @@ of its own.
   for v1.
 - [x] B4v Volume Boost, global like the others (Pocket Casts' +10 dB, into
   a limiter, after Trim Silence).
-- [ ] B4b Honor each show's `autoStartFrom` (start a new episode N seconds
+- [x] B4b Honor each show's `autoStartFrom` (start a new episode N seconds
   in) and `autoSkipLast` (treat N seconds before the end as the end), as the
   apps do. Legato ignores both today (one of Cody's shows skips a 15 s
   intro). Unlike the effects, these do reach the server ("changed" on all of
