@@ -75,6 +75,22 @@ test("the sleep guard holds a logind delay, dies with its parent, and runs only 
   assert.match(service, /wantSleepGuard: active && pauseOnSleep && playerActive/)
 })
 
+test("right-click opens a menu and removes nothing; the gear's page comes from the schema", () => {
+  const panel = fs.readFileSync(path.join(ROOT, "Panel.qml"), "utf8")
+  assert.ok(!/Qt\.MiddleButton/.test(panel), "middle-click does nothing")
+  assert.match(panel, /mouse\.button === Qt\.RightButton\) \{[\s\S]{0,260}root\.openMenu\(rowItem\.item/)
+  assert.ok(!/RightButton[\s\S]{0,200}toggleQueued/.test(panel), "right-click never removes from Up Next")
+  for (const id of ["play", "top", "bottom", "remove", "played", "unplayed"]) assert.match(panel, new RegExp('id === "' + id + '"'))
+  assert.match(panel, /schema: root\.manifestData && root\.manifestData\.barWidget/)
+  assert.match(panel, /onChangeRequested: function\(key, value\)[\s\S]{0,120}root\.persistSettings\(change\)/)
+  assert.match(panel, /t === "g"\) \{ root\.setSettings\(!root\.showSettings\)/)
+  const view = fs.readFileSync(path.join(ROOT, "SettingsView.qml"), "utf8")
+  for (const type of ["boolean", "integer", "enum"]) assert.match(view, new RegExp('entry\\.type === "' + type + '"'))
+  // Every setting in the schema has a type the page can show.
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"))
+  for (const entry of manifest.barWidget.schema) assert.ok(["boolean", "integer", "enum"].includes(entry.type), entry.key)
+})
+
 test("dates read relative to today", () => {
   const now = new Date(2026, 9, 1, 12, 0, 0)
   assert.equal(Model.fmtDate("2026-10-01T09:00:00Z", now), "Today")

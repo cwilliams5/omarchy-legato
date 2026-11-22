@@ -37,6 +37,7 @@ Only Python's standard library is used.
 """
 
 import argparse
+import contextlib
 import errno
 import fcntl
 import hashlib
@@ -1211,7 +1212,7 @@ def up_next_remove(uuids):
 
 # ---------------------------------------------------------------------- mpv
 
-MPV_PROPERTIES = ("path", "pause", "time-pos", "duration", "volume", "speed", "eof-reached", "vid", "track-list",
+MPV_PROPERTIES = ("path", "pause", "time-pos", "duration", "volume", "speed", "eof-reached", "vid", "track-list", "af",
                   "idle-active", "paused-for-cache", "playlist-count")
 
 
@@ -1383,11 +1384,10 @@ def trim_filter(level):
 
 
 def apply_trim(player, level):
-    """Swap the trim filter on a running player. While the video window
-    shows, trimming stays off (set_video puts it back). It always goes first
-    in the chain ("pre"), ahead of Volume Boost."""
-    if level not in (None, "off") and video_shown({"vid": player.get("vid")}):
-        level = "off"
+    """Swap the trim filter on a running player. It always goes first in the
+    chain ("pre"), ahead of Volume Boost. It keeps working with the video
+    window open: mpv drops frames to keep the picture with the sound, so the
+    picture jumps where a pause was cut."""
     try:
         player.command("af", "remove", TRIM_LABEL)
     except ApiError:
@@ -1444,10 +1444,15 @@ def start_mpv(prefs):
             # The video window, when shown: its own app id (for its placement
             # rule), decoded on the GPU where that's known to be safe.
             "--wayland-app-id=" + VIDEO_APP_ID, "--hwdec=auto-safe",
+            # Just the picture: no on-screen controls, which would act on
+            # the player behind Legato's back.
+            "--osc=no",
             # mpv 0.41 reads the clipboard at start-up; a podcast player has
             # no use for it.
             "--clipboard-backends-clr",
             "--audio-client-name=legato", "--cache=yes", "--network-timeout=30",
+            # Enough buffer for a podcast, without mpv's 150 MB default.
+            "--demuxer-max-bytes=64MiB", "--demuxer-max-back-bytes=16MiB",
             "--user-agent=" + USER_AGENT,
             "--volume=%d" % max(0, min(100, as_int(prefs.get("volume", 100)) if "volume" in prefs else 100)),
             "--speed=%s" % clamp_speed(prefs.get("speed", 1.0))]
@@ -1526,9 +1531,11 @@ def hyprctl(*args):
     return done.stdout if done.returncode == 0 else ""
 
 
-def video_rule_lua(geometry):
-    """The window rule, as Lua for `hyprctl repl`. Numbers only: nothing
-    from outside reaches the Lua text."""
+def video_rule_lua(geometry, pinned=True):
+    """The window rule, as Lua for `hyprctl repl`. Numbers and fixed words
+    only: nothing from outside reaches the Lua text. Pinned: on every
+    workspace, above the rest; otherwise a floating window on the workspace
+    it opened on."""
     if geometry:
         x, y, w, h = (int(geometry[k]) for k in ("x", "y", "w", "h"))
         size = '{ "%d", "%d" }' % (w, h)
@@ -1536,8 +1543,9 @@ def video_rule_lua(geometry):
     else:
         size = '{ "(monitor_w*7/25)", "(monitor_w*63/400)" }'
         move = '{ "(monitor_w-monitor_w*7/25-24)", "(monitor_h-monitor_w*63/400-60)" }'
-    return ('hl.window_rule({ match = { class = "^%s$" }, float = true, pin = true, '
-            'no_initial_focus = true, size = %s, move = %s }) return "ok"' % (VIDEO_APP_ID, size, move))
+    return ('hl.window_rule({ match = { class = "^%s$" }, float = true, pin = %s, '
+            'no_initial_focus = true, size = %s, move = %s }) return "ok"'
+            % (VIDEO_APP_ID, "true" if pinned else "false", size, move))
 
 
 def saved_geometry(prefs):
@@ -1564,20 +1572,27 @@ def remember_video_geometry(prefs):
             return
 
 
-def set_video(player, prefs, show):
-    """Show or hide the video window. Trim Silence pauses while it shows:
-    cutting audio under a picture makes the picture jump."""
+def set_video(player, prefs, show, pinned=True):
+    """Show or hide the video window."""
     if show:
         if not has_video(player.snapshot()):
             raise ApiError("no_video", "This episode has no video")
-        hyprctl("repl", video_rule_lua(saved_geometry(prefs)))
-        apply_trim(player, "off")
+        hyprctl("repl", video_rule_lua(saved_geometry(prefs), pinned))
         # The first video of a session sets up the GPU: allow it a while.
         player.command("set_property", "vid", "auto", timeout=15)
     else:
         remember_video_geometry(prefs)
         player.command("set_property", "vid", "no", timeout=5)
+
+
+def heal_filters(player, snap, prefs):
+    """Put the audio filters back in line with the settings if anything
+    (an mpv key, a lost command) left them out of step."""
+    have = [f.get("label") for f in (snap.get("af") or []) if isinstance(f, dict)]
+    want = (["trim"] if trim_filter(prefs.get("trim")) else []) + (["boost"] if prefs.get("boost") is True else [])
+    if have != want:
         apply_trim(player, prefs.get("trim"))
+        apply_boost(player, prefs.get("boost") is True)
 
 
 def ensure_mpv(prefs):
@@ -1926,6 +1941,9 @@ def poll(autoplay=True):
         due = True
     if video_shown(snap):
         remember_video_geometry(prefs)  # so a window closed with its own X reopens where it was
+    with Mpv.connect() or contextlib.nullcontext() as fixer:
+        if fixer:
+            heal_filters(fixer, snap, prefs)
     if due and isinstance(position, (int, float)):
         try:
             push_position(episode, position)
@@ -2260,7 +2278,7 @@ def cmd_video(args):
         prefs = load_prefs()
         with require_player() as player:
             show = not video_shown(player.snapshot()) if args.value == "toggle" else args.value == "on"
-            set_video(player, prefs, show)
+            set_video(player, prefs, show, pinned=not args.unpinned)
         view = poll_after_change(load_playback(), prefs)
     out(view)
 
@@ -2444,7 +2462,8 @@ def build_parser():
     p = sub.add_parser("volume"); p.add_argument("percent", type=int); p.set_defaults(fn=cmd_volume)
     p = sub.add_parser("speed"); p.add_argument("value"); p.set_defaults(fn=cmd_speed)
     p = sub.add_parser("trim"); p.add_argument("value"); p.set_defaults(fn=cmd_trim)
-    p = sub.add_parser("video"); p.add_argument("value", choices=("on", "off", "toggle")); p.set_defaults(fn=cmd_video)
+    p = sub.add_parser("video"); p.add_argument("value", choices=("on", "off", "toggle"))
+    p.add_argument("--unpinned", action="store_true"); p.set_defaults(fn=cmd_video)
     p = sub.add_parser("boost"); p.add_argument("value", choices=("on", "off", "toggle")); p.set_defaults(fn=cmd_boost)
     sub.add_parser("sleepguard").set_defaults(fn=cmd_sleepguard)
     sub.add_parser("next").set_defaults(fn=cmd_next)

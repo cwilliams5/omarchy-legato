@@ -88,6 +88,11 @@ bottom-right corner, without taking focus; move or resize it and it opens
 there next time. Closing it (its ×, or `q` inside it) hides the video and
 the episode plays on. Trim Silence pauses while the video shows.
 
+**Settings:** the gear in the panel's header (or `g`) lists every setting
+below and saves changes as you make them. **Right-click** an episode for a
+menu: play, move to the top or bottom of Up Next (play next or last for
+one not queued), remove from Up Next, mark played or unplayed.
+
 **Before sleep:** while an episode is loaded, Legato holds a short logind
 sleep delay. When the computer is about to sleep (a closed lid, say) it
 pauses the episode and sends your position to Pocket Casts first, so your
@@ -159,7 +164,8 @@ The commands are `playPause`, `next`, `skipBack`, `skipForward`, `stop`,
 | `skipForward`   | `30`     | Seconds to skip forward                                   |
 | `autoplay`      | `true`   | Play the next Up Next episode when one finishes           |
 | `pauseOnSleep`  | `true`   | Pause and save your place before the computer sleeps      |
-| `unloadAfterMinutes` | `15` | Close the player after this many minutes paused; `0` keeps it loaded until you stop it |
+| `videoPinned`   | `true`   | Keep the video window on top, on every workspace          |
+| `unloadAfterMinutes` | `15` | Unload the player after this many minutes paused; `0` keeps it loaded. An unloaded player isn't reachable by media keys; a loaded, paused one uses no CPU and about 90 MB (more once a video has been shown in it) |
 
 ## Privacy and security
 

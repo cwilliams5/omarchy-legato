@@ -38,7 +38,8 @@
       "skipForward": 30,
       "autoplay": true,
       "unloadAfterMinutes": 15,
-      "pauseOnSleep": true
+      "pauseOnSleep": true,
+      "videoPinned": true
     },
     "schema": [
       {
@@ -101,7 +102,7 @@
       {
         "key": "unloadAfterMinutes",
         "type": "integer",
-        "label": "Close the player after this many minutes paused (0 = never)",
+        "label": "Unload the player after this many minutes paused (0 = never). Media keys can't reach an unloaded player",
         "min": 0,
         "max": 240,
         "step": 5,
@@ -111,6 +112,12 @@
         "key": "pauseOnSleep",
         "type": "boolean",
         "label": "Pause and save your place before the computer sleeps",
+        "defaultValue": true
+      },
+      {
+        "key": "videoPinned",
+        "type": "boolean",
+        "label": "Keep the video window on top, on every workspace",
         "defaultValue": true
       }
     ]

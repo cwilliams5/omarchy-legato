@@ -51,6 +51,11 @@ Panel {
   property bool countedOpen: false
   property bool _returnFired: false
   property bool showAbout: false
+  property bool showSettings: false
+  // The episode the right-click menu is open for, or null.
+  property var menuItem: null
+  property real menuX: 0
+  property real menuY: 0
 
   // About page facts, read from this plugin's own files once it is shown.
   readonly property string pluginDir: {
@@ -58,7 +63,11 @@ Panel {
     if (text.indexOf("file://") === 0) text = decodeURIComponent(text.substring(7))
     return text.length > 1 && text.charAt(text.length - 1) === "/" ? text.substring(0, text.length - 1) : text
   }
-  FileView { id: manifestFile; path: root.showAbout ? root.pluginDir + "/manifest.json" : "" }
+  FileView { id: manifestFile; path: (root.showAbout || root.showSettings) ? root.pluginDir + "/manifest.json" : "" }
+  readonly property var manifestData: {
+    if (!manifestFile.loaded) return null
+    try { return JSON.parse(manifestFile.text()) } catch (e) { return null }
+  }
   FileView { id: licenseFile; path: root.showAbout ? root.pluginDir + "/LICENSE" : "" }
   readonly property var aboutVersions: ({
     quickshell: About.probedVersion(function(a, b) { return Quickshell.hasVersion(a, b) }, 0),
@@ -68,7 +77,52 @@ Panel {
 
   function setAbout(on) {
     showAbout = !!on
+    if (showAbout) showSettings = false
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
+
+  function setSettings(on) {
+    showSettings = !!on
+    if (showSettings) showAbout = false
+    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
+
+  readonly property bool pageOpen: showAbout || showSettings
+
+  // ---- The right-click menu on an episode.
+  function openMenu(item, x, y) {
+    if (!item || item.type !== "episode") return
+    menuItem = item
+    menuX = x
+    menuY = y
+  }
+  function closeMenu() { menuItem = null }
+  function menuEntries(item) {
+    if (!item) return []
+    var queued = service && Model.containsUuid(service.upNext, item.uuid)
+    var played = item.status === Model.statusPlayed
+    var out = [{ id: "play", label: "Play" }]
+    if (queued) {
+      out.push({ id: "top", label: "Move to top of Up Next" })
+      out.push({ id: "bottom", label: "Move to bottom of Up Next" })
+      out.push({ id: "remove", label: "Remove from Up Next" })
+    } else {
+      out.push({ id: "top", label: "Play next" })
+      out.push({ id: "bottom", label: "Play last" })
+    }
+    out.push({ id: played ? "unplayed" : "played", label: played ? "Mark as unplayed" : "Mark as played" })
+    return out
+  }
+  function menuAction(id) {
+    var item = menuItem
+    closeMenu()
+    if (!item || !service) return
+    if (id === "play") service.playItem(item, false)
+    else if (id === "top") service.queue(item, "next")
+    else if (id === "bottom") service.queue(item, "last")
+    else if (id === "remove") service.queue(item, "remove")
+    else if (id === "played") service.markPlayed(item, true)
+    else if (id === "unplayed") service.markPlayed(item, false)
   }
 
   readonly property bool authenticated: service ? service.authenticated === true : false
@@ -239,6 +293,8 @@ Panel {
     noteOpen(opened)
     if (!opened) {
       showAbout = false
+      showSettings = false
+      menuItem = null
       if (service) service.closeDetail()
       passwordField.text = ""
       return
@@ -343,6 +399,7 @@ Panel {
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(470))
     contentHeight: panel.fittedContentHeight(root.showAbout ? aboutView.implicitHeight :
+      root.showSettings ? settingsView.implicitHeight :
       fixedContent.implicitHeight + content.spacing + (root.needsSetup ? 0 : Math.max(Style.space(180), listColumn.implicitHeight + Style.space(6))),
       Style.space(760))
 
@@ -351,26 +408,29 @@ Panel {
       anchors.fill: parent
       blocked: emailField.activeFocus || passwordField.activeFocus
       onMoveRequested: function(dx, dy) {
-        if (root.showAbout) return
+        if (root.pageOpen || root.menuItem) return
         if (dy !== 0) root.moveCursor(dy)
         else if (dx < 0 && root.detailOpen) root.goBack()
         else if (dx !== 0 && !root.detailOpen) root.stepTab(dx)
       }
-      onReturnRequested: { if (root.showAbout) return; root._returnFired = true; root.activateRow(root.cursorIndex) }
+      onReturnRequested: { if (root.pageOpen || root.menuItem) return; root._returnFired = true; root.activateRow(root.cursorIndex) }
       onActivateRequested: {
-        if (root.showAbout) return
+        if (root.pageOpen || root.menuItem) return
         if (root._returnFired) { root._returnFired = false; return }
         if (root.service) root.service.playPause()
       }
       onCloseRequested: {
+        if (root.menuItem) { root.closeMenu(); return }
         if (root.showAbout) { root.setAbout(false); return }
+        if (root.showSettings) { root.setSettings(false); return }
         if (root.goBack()) return
         root.close()
       }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
         if (t === "i") { root.setAbout(!root.showAbout); return }
-        if (!root.service || !root.authenticated || root.showAbout) return
+        if (t === "g") { root.setSettings(!root.showSettings); return }
+        if (!root.service || !root.authenticated || root.pageOpen) return
         if (t === "1") root.setTab("upnext")
         else if (t === "2") root.setTab("progress")
         else if (t === "3") root.setTab("new")
@@ -409,9 +469,82 @@ Panel {
         onBackRequested: root.setAbout(false)
       }
 
+      // Over everything in the panel: the right-click menu, and a catcher
+      // that closes it on any click outside.
+      Item {
+        id: menuLayer
+        anchors.fill: parent
+        z: 100
+        visible: root.menuItem !== null
+
+        MouseArea {
+          anchors.fill: parent
+          acceptedButtons: Qt.LeftButton | Qt.RightButton
+          onClicked: root.closeMenu()
+        }
+
+        Rectangle {
+          id: menuCard
+          readonly property real pad: Style.space(4)
+          x: Math.max(0, Math.min(root.menuX, menuLayer.width - width))
+          y: Math.max(0, Math.min(root.menuY, menuLayer.height - height))
+          width: Math.max(Style.space(200), menuColumn.implicitWidth + pad * 2)
+          height: menuColumn.implicitHeight + pad * 2
+          radius: Style.space(6)
+          color: Commons.Color.popups.background
+          border.color: Commons.Color.popups.border
+          border.width: 1
+
+          Column {
+            id: menuColumn
+            x: menuCard.pad
+            y: menuCard.pad
+            width: menuCard.width - menuCard.pad * 2
+
+            Repeater {
+              model: root.menuEntries(root.menuItem)
+
+              Button {
+                required property var modelData
+                width: menuColumn.width
+                leftAlign: true
+                text: modelData.label
+                foreground: root.foreground
+                accent: root.accent
+                fontFamily: root.fontFamily
+                fontSize: Style.font.bodySmall
+                onClicked: root.menuAction(modelData.id)
+              }
+            }
+          }
+        }
+      }
+
+      // The gear's page: every setting, from the manifest's schema.
+      SettingsView {
+        id: settingsView
+        objectName: "settingsView"
+        visible: root.showSettings
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        foreground: root.foreground
+        accent: root.accent
+        fontFamily: root.fontFamily
+        schema: root.manifestData && root.manifestData.barWidget ? (root.manifestData.barWidget.schema || []) : []
+        defaults: root.manifestData && root.manifestData.barWidget ? (root.manifestData.barWidget.defaults || {}) : ({})
+        values: root.settings || ({})
+        onBackRequested: root.setSettings(false)
+        onChangeRequested: function(key, value) {
+          var change = {}
+          change[key] = value
+          root.persistSettings(change)
+        }
+      }
+
       ColumnLayout {
         id: content
-        visible: !root.showAbout
+        visible: !root.pageOpen
         anchors.fill: parent
         spacing: Style.space(10)
 
@@ -470,6 +603,15 @@ Panel {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(4)
+
+              PanelActionButton {
+                objectName: "settingsButton"
+                iconText: "󰒓"
+                tooltipText: "Settings (g)"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.setSettings(true)
+              }
 
               PanelActionButton {
                 objectName: "aboutButton"
@@ -707,7 +849,7 @@ Panel {
               }
             }
 
-            // Transport on the left, speed and volume on the right.
+            // Transport on the left, volume on the right; effects on the row below.
             Item {
               width: parent.width
               height: transport.implicitHeight
@@ -759,37 +901,6 @@ Panel {
                   onClicked: if (root.service) root.service.next()
                 }
 
-                TransportButton {
-                  text: Model.fmtSpeed(root.service ? root.service.speed : 1)
-                  tooltipText: "Playback speed (x)"
-                  selected: root.service && root.service.speed !== 1
-                  fontSize: Style.font.caption
-                  onClicked: if (root.service) root.service.cycleSpeed()
-                }
-
-                TransportButton {
-                  visible: root.service && root.service.hasVideo
-                  iconText: Model.glyph.video
-                  tooltipText: root.service && root.service.videoOn ? "Hide the video (v)" : "Show the video in a small window (v)"
-                  selected: root.service && root.service.videoOn
-                  onClicked: if (root.service) root.service.toggleVideo()
-                }
-
-                TransportButton {
-                  text: "Boost"
-                  tooltipText: "Volume Boost: voices louder, as in Pocket Casts (o)"
-                  selected: root.service && root.service.boost
-                  fontSize: Style.font.caption
-                  onClicked: if (root.service) root.service.toggleBoost()
-                }
-
-                TransportButton {
-                  text: "Trim " + Model.trimLabel(root.service ? root.service.trim : "off")
-                  tooltipText: "Trim Silence: cut the pauses, as Pocket Casts does; Off, Mild, Medium, Mad Max (t)"
-                  selected: root.service && root.service.trim !== "off"
-                  fontSize: Style.font.caption
-                  onClicked: if (root.service) root.service.cycleTrim()
-                }
               }
 
               Row {
@@ -829,6 +940,45 @@ Panel {
                   onMoved: function(v) { if (root.service) root.service.setVolume(v) }
                   onReleased: function(v) { if (root.service) root.service.setVolume(v) }
                 }
+              }
+            }
+
+            // Playback effects on their own row, so they never crowd the
+            // transport and volume above.
+            Row {
+              id: effectsRow
+              spacing: Style.space(4)
+
+              TransportButton {
+                text: Model.fmtSpeed(root.service ? root.service.speed : 1)
+                tooltipText: "Playback speed (x)"
+                selected: root.service && root.service.speed !== 1
+                fontSize: Style.font.caption
+                onClicked: if (root.service) root.service.cycleSpeed()
+              }
+
+              TransportButton {
+                visible: root.service && root.service.hasVideo
+                iconText: Model.glyph.video
+                tooltipText: root.service && root.service.videoOn ? "Hide the video (v)" : "Show the video in a small window (v)"
+                selected: root.service && root.service.videoOn
+                onClicked: if (root.service) root.service.toggleVideo()
+              }
+
+              TransportButton {
+                text: "Boost"
+                tooltipText: "Volume Boost: voices louder, as in Pocket Casts (o)"
+                selected: root.service && root.service.boost
+                fontSize: Style.font.caption
+                onClicked: if (root.service) root.service.toggleBoost()
+              }
+
+              TransportButton {
+                text: "Trim " + Model.trimLabel(root.service ? root.service.trim : "off")
+                tooltipText: "Trim Silence: cut the pauses, as Pocket Casts does; Off, Mild, Medium, Mad Max (t)"
+                selected: root.service && root.service.trim !== "off"
+                fontSize: Style.font.caption
+                onClicked: if (root.service) root.service.cycleTrim()
               }
             }
           }
@@ -1113,11 +1263,14 @@ Panel {
                     anchors.rightMargin: rowActions.visible ? rowActions.width + Style.space(6) : 0
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
                     onEntered: root.cursorIndex = rowItem.index
                     onClicked: function(mouse) {
-                      if ((mouse.button === Qt.RightButton || mouse.button === Qt.MiddleButton) && rowItem.isEpisode) {
-                        if (root.service) root.service.toggleQueued(rowItem.item)
+                      if (mouse.button === Qt.RightButton) {
+                        // A menu of what can be done with it; nothing
+                        // happens on the right-click itself.
+                        var at = mapToItem(menuLayer, mouse.x, mouse.y)
+                        if (rowItem.isEpisode) root.openMenu(rowItem.item, at.x, at.y)
                         return
                       }
                       root.activateRow(rowItem.index)

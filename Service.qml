@@ -51,6 +51,7 @@ Item {
   readonly property int skipForwardSeconds: Math.max(1, Number(setting("skipForward", 30)) || 30)
   readonly property bool autoplay: setting("autoplay", true) !== false
   readonly property bool pauseOnSleep: setting("pauseOnSleep", true) !== false
+  readonly property bool videoPinned: setting("videoPinned", true) !== false
 
   // ---- Connection state (from `legato-bridge status`)
   property bool probed: false
@@ -710,7 +711,7 @@ Item {
   // The picture-in-picture video window (only for episodes with video).
   function toggleVideo() {
     if (!hasVideo) return false
-    action(["video", "toggle"])
+    action(videoPinned ? ["video", "toggle"] : ["video", "toggle", "--unpinned"])
     return true
   }
 

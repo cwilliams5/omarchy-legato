@@ -160,6 +160,7 @@ class Validation(unittest.TestCase):
         self.assertIn('match = { class = "^legato-video$" }', default)
         self.assertIn("float = true, pin = true, no_initial_focus = true", default)
         self.assertIn("monitor_w*7/25", default)
+        self.assertIn("pin = false", bridge.video_rule_lua(None, pinned=False))
         placed = bridge.video_rule_lua({"x": 800, "y": 500, "w": 400, "h": 225})
         self.assertIn('size = { "400", "225" }, move = { "800", "500" }', placed)
         # Only whole numbers, and a sane size, are ever kept.
@@ -922,6 +923,18 @@ class TrimSilence(PlayerTestCase):
         self.assertEqual(self.af(), ["trim"])
         self.assertIs(bridge.load_prefs()["boost"], False)
 
+    def test_a_poll_puts_lost_filters_back(self):
+        self.login()
+        run_bridge("trim", "madmax")
+        run_bridge("boost", "on")
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.assertEqual(self.af(), ["trim", "boost"])
+        with bridge.Mpv.connect() as player:  # as an mpv key or a lost command might
+            player.command("af", "remove", "@trim")
+        self.assertEqual(self.af(), ["boost"])
+        run_bridge("player")
+        self.assertEqual(self.af(), ["trim", "boost"])
+
     def test_trim_changes_live_and_cycles(self):
         self.login()
         run_bridge("play", EP_1, "--podcast", PODCAST_A)
@@ -981,17 +994,21 @@ class VideoWindow(PlayerTestCase):
         self.assertTrue(shown["ok"], shown)
         self.assertTrue(shown["data"]["video"])
         self.assertTrue(shown["data"]["playing"])
-        self.assertNotIn("trim", self.af())  # paused while the picture shows
+        self.assertIn("trim", self.af())  # trimming carries on with the picture
         rule = [a for a in self.hypr if a[0] == "repl"]
-        self.assertTrue(rule and 'class = "^legato-video$"' in rule[-1][1])
-        self.assertFalse(run_bridge("trim", "medium")["data"]["trim"] == "off")
-        self.assertNotIn("trim", self.af())  # a trim change waits for the video to close
+        self.assertTrue(rule and 'class = "^legato-video$"' in rule[-1][1] and "pin = true" in rule[-1][1])
+        self.assertEqual(run_bridge("trim", "medium")["data"]["trim"], "medium")
+        self.assertIn("trim", self.af())
+        with bridge.Mpv.connect() as player:
+            self.assertFalse(player.get("osc"))  # just the picture, no controls
 
         hidden = run_bridge("video", "toggle")["data"]
         self.assertFalse(hidden["video"])
         self.assertTrue(hidden["playing"])
-        self.assertIn("trim", self.af())  # back
+        self.assertIn("trim", self.af())
         self.assertIn(("clients", "-j"), self.hypr)  # where it was, for next time
+        run_bridge("video", "on", "--unpinned")
+        self.assertIn("pin = false", [a for a in self.hypr if a[0] == "repl"][-1][1])
 
     def test_closing_the_video_window_never_quits_the_player(self):
         self.play(EP_3, PODCAST_B)
