@@ -1,72 +1,192 @@
-# Legato
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="branding/legato/lockup-dark.svg">
+    <img alt="Legato" src="branding/legato/lockup-light.svg" width="320">
+  </picture>
+</h1>
 
-A Pocket Casts player in the Omarchy bar that keeps your place across your
-phone and your computers. Sign in with your Pocket Casts account, then play
-your Up Next, in-progress and new episodes and browse your shows. Pause here,
-carry on on your phone, come back: Legato asks Pocket Casts where you are
-before it plays again.
+**A Pocket Casts player for the [Omarchy](https://omarchy.org) bar that keeps
+your place across your phone and your computers:** Up Next, In Progress, new
+episodes and your shows, with speed, Trim Silence, Volume Boost and a small
+video window.
 
-In development. Legato is a hard fork of Nine Point Labs'
-[Pocket Casts plugin](https://github.com/Ninepointlabs-Omarchy-Extras/omarchy-pocketcasts)
-(MIT), with a resume that never rewinds your other devices, no background
-polling, and more to come.
+![An Omarchy desktop: Legato's chip in the top bar shows the episode playing, its panel is open below it on Up Next, and the episode's video plays in a small floating window over a code editor](media/hero.png)
 
-Audio plays through `mpv` in the background. There's no browser and no app
-window.
+Pause an episode here, carry on listening on your phone, come back: before
+Legato plays again it asks Pocket Casts where you got to, and picks up from
+there. It never sends an old position over a newer one, so your phone is
+never rewound. Audio plays through `mpv` in the background, with no browser
+and no app window. *Legato* is the musical instruction to play notes
+smoothly, with no break between them.
 
-![The panel open on the Podcasts tab](preview.png)
+Based on [omarchy-pocketcasts](https://github.com/Ninepointlabs-Omarchy-Extras/omarchy-pocketcasts)
+by Nine Point Labs (MIT). What's new compared to the original:
 
-| Up Next | In Progress | New releases |
-|---|---|---|
-| ![Up Next](preview1.png) | ![In Progress](preview2.png) | ![New releases](preview3.png) |
+- **Resuming never rewinds another device.** The original sent its own,
+  older position when you pressed play, rewinding the phone.
+- **Nothing runs while paused or idle.** The original started a Python
+  process every 5 seconds while playing and every minute while idle.
+- **A failed load says so,** instead of showing an episode playing in
+  silence.
+- **New:** Trim Silence, Volume Boost, a picture-in-picture video window,
+  each show's skip intro and outro, pausing before the computer sleeps, a
+  Settings page, right-click menus, and its own icon in the bar.
 
-> **Unofficial API.** Pocket Casts has no public API. This plugin uses the
-> same endpoints as the Pocket Casts web player, so it can break whenever
-> Pocket Casts changes them. It isn't affiliated with or endorsed by Pocket
+> **Unofficial.** Pocket Casts has no public API for your account. Legato
+> uses the same endpoints as the Pocket Casts web player, so a change on
+> their side can break it. It isn't affiliated with or endorsed by Pocket
 > Casts or Automattic.
 
-## Requirements
+<p align="center">
+  <img src="media/themes.gif" width="380" alt="Legato's chip and panel in six Omarchy themes: Ristretto, Matte Black, Hackerman, Lumon, Ethereal and Catppuccin Latte">
+</p>
 
-- `mpv` (required): `omarchy pkg add mpv`
-- `mpv-mpris` (optional, for media keys and `playerctl`): `omarchy pkg add mpv-mpris`
-- A Pocket Casts **email and password**. If you sign in with Apple or Google,
-  set a password on your Pocket Casts account first.
+## What you get
+
+- **One place across all your devices.** Every resume asks Pocket Casts
+  first: later in the same episode, a different episode another device
+  moved on to, or nothing left if it finished everything. Your position goes
+  to Pocket Casts every 30 seconds while playing and when you pause, so your
+  phone carries on from the right spot.
+- **Your queue, in the bar.** The chip shows the cover and title of what's
+  playing. Click it for the panel: the player, then tabs for Up Next, In
+  Progress, New releases and your shows.
+
+  <img src="media/bar.png" width="384" alt="The bar chip playing (cover and title), paused (dimmed), and with nothing loaded (Legato's mark)">
+
+- **Listen the way the Pocket Casts apps do.** Speed from 0.8× to 3× that
+  keeps voices at their pitch; Trim Silence at the apps' own levels (Mild,
+  Medium, Mad Max), which shortens the pauses between words before the
+  speed-up applies; Volume Boost (+10 dB into a limiter, so it never clips);
+  and each show's "skip first" and "skip last" times from your Pocket Casts
+  settings.
+- **Video in a small window.** For an episode with video, show it in a
+  floating window that sits on every workspace without taking focus. Move
+  or resize it and it opens there next time. Right-click it for Always on
+  top and Transparency, which lets your desktop show through while you work
+  in other windows (it turns solid while you use it). Legato's keys work in
+  the window; mpv's own are off there.
+
+  <img src="media/video-menu.png" width="400" alt="The video window's right-click menu: Always on top, Transparency with its levels from Off to 80%, Pause / play, Hide video">
+
+  ![The video window over a code editor: solid on the left, and at 40% transparency on the right with the code showing through](media/transparency.png)
+
+- **Right-click an episode** to play it, move it to the top or bottom of Up
+  Next (or play it next or last), remove it, or mark it played.
+
+  <img src="media/menu.png" width="470" alt="The right-click menu on an Up Next episode: Play, Move to top of Up Next, Move to bottom of Up Next, Remove from Up Next, Mark as played">
+
+- **Pauses before your computer sleeps.** Close the lid and Legato pauses
+  the episode and saves your place in Pocket Casts first, so nothing plays
+  on behind the lock screen and your phone knows where you are.
+- **Keyboard-friendly,** in the panel and in the video window (see
+  [Keys](#keys)), and scriptable through `omarchy-shell` for your own
+  keybindings.
+- **Follows your Omarchy theme,** light or dark.
+
+![The panel's In Progress, New releases and Podcasts tabs, and its Settings page](media/pages.png)
 
 ## Install
 
-```sh
-omarchy plugin add https://github.com/cwilliams5/omarchy-legato.git --enable
+```bash
+omarchy plugin add https://github.com/cwilliams5/omarchy-legato --enable
 ```
 
-The chip appears in the right section of the bar.
+The chip appears in the right section of the bar. Click it and sign in with
+your Pocket Casts email and password.
 
-To work from a checkout instead:
+**Dependencies:** none beyond Omarchy. It plays through `mpv` (with
+`mpv-mpris` for media keys), runs its helper on Python 3, and uses the
+stock `systemd-inhibit`, `setpriv` and `dbus-monitor` (to pause before
+sleep) and `hyprctl` (for the video window): all part of Omarchy. You need
+a Pocket Casts **email and password;** if you sign in to Pocket Casts with
+Apple or Google, set a password on your account first. Only for
+development: Node.js and, optionally, `qmllint` (Qt 6) for the tests.
 
-```sh
-git clone https://github.com/cwilliams5/omarchy-legato ~/Projects/omarchy-legato
-~/Projects/omarchy-legato/install.sh          # adds the widget to the right of the bar
-~/Projects/omarchy-legato/install.sh center   # or pick a section
-```
+**What it changes:** only its own files:
 
-Run `install.sh` again after you pull changes. If the panel doesn't pick
-them up, run `omarchy restart shell`.
+- `~/.local/state/omarchy-legato/`: your sign-in tokens, the episode loaded
+  and the player's settings (each file readable only by you)
+- `~/.cache/omarchy-legato/`: cover art
+- its own entry in `~/.config/omarchy/shell.json` (where the chip sits, and
+  its settings)
+
+While the video window is shown, Legato adds its window rules to the
+running Hyprland through `hyprctl` (where the window goes, no title bar, its
+transparency). They live in memory only and are gone at the next config
+reload; your Hyprland and Omarchy config files are never edited. While an
+episode is loaded, Legato holds a short logind sleep delay, released as soon
+as it has saved your place.
 
 ## Uninstall
 
-Stop playback first (the stop button, or **Sign out**, which also closes the
-player), since mpv keeps running on its own. Then:
-
-```sh
+```bash
+omarchy-shell legato stop          # mpv runs on its own: stop it first
 omarchy plugin remove io.github.cwilliams5.legato
-rm -rf ~/.local/state/omarchy-legato ~/.cache/omarchy-legato   # login tokens, playback state, cover cache
+rm -rf ~/.local/state/omarchy-legato ~/.cache/omarchy-legato   # sign-in tokens, playback state, cover art
 ```
 
-`mpv` and `mpv-mpris` are ordinary packages; remove them with
-`omarchy pkg remove` if nothing else uses them.
+If you showed a video, the window rules Legato added to the running
+Hyprland stay until it reloads its config: `hyprctl reload`, or log out.
+
+## Resources
+
+- **Paused or idle, Legato runs nothing on a timer.** Pause, resume, seeks
+  and the end of an episode all arrive as events from mpv.
+- **While playing,** one short Python process every 30 seconds sends your
+  position to Pocket Casts (about 80 ms of CPU each).
+- **mpv** uses about 90 MB with an episode loaded and no CPU while paused,
+  plus about 100 MB once its video window has been shown, until the player
+  closes. After 15 minutes paused (`unloadAfterMinutes`), the player closes
+  altogether; play picks up from wherever Pocket Casts says you are.
+
+**Tested with** Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland 0.56.2,
+mpv 0.41.0 with mpv-mpris 1.3 and Python 3.14, on a laptop with Intel Iris
+Xe graphics (with a second, NVIDIA GPU that Legato keeps the video window
+off), with the Pocket Casts Android app and web player as the other
+devices.
+
+## Known limits
+
+- **It can break** when Pocket Casts changes the web player's endpoints (see
+  *Unofficial* above).
+- **Speed, Trim Silence and Volume Boost are Legato's own,** the same for
+  every show, and not synced with your phone's: the Pocket Casts Android app
+  doesn't upload its playback effects. A show's skip intro and outro do
+  sync.
+- **Streaming only:** no downloads for offline listening.
+- **No drag to reorder Up Next:** use the right-click menu's top and bottom.
+- **An unloaded player can't hear media keys.** After `unloadAfterMinutes`
+  paused, start it from the bar or the panel, or set it to `0`.
+- **Trim Silence with video:** the picture falls behind at each trimmed
+  pause, as in the Pocket Casts Android app.
+- **A cover isn't a video:** some feeds pack the episode's cover into the
+  file as a video stream. Legato treats those episodes as audio.
+
+## Built on
+
+- [omarchy-pocketcasts](https://github.com/Ninepointlabs-Omarchy-Extras/omarchy-pocketcasts)
+  by Nine Point Labs: the plugin Legato was forked from (player, panel,
+  bridge, tests; MIT)
+- [mpv](https://mpv.io): playback, the video window and its menu
+- [mpv-mpris](https://github.com/hoyon/mpv-mpris): media keys and `playerctl`
+- [FFmpeg](https://ffmpeg.org)'s `silenceremove` and `alimiter` filters,
+  through mpv: Trim Silence and Volume Boost
+- [Pocket Casts](https://pocketcasts.com): the service, and ideas taken
+  without code: the web player's check of where you are when you come back,
+  and the [Android app](https://github.com/Automattic/pocket-casts-android)'s
+  Trim Silence levels and Volume Boost gain
+- [Quickshell](https://quickshell.org) and Omarchy's shell: the plugin
+  platform
+- [Hyprland](https://hyprland.org): the video window's placement and
+  transparency
+
+---
+
+The rest of this page is the reference: using it, settings, how it works,
+and notes for changing it.
 
 ## Using it
-
-Click the bar chip to open the panel. The first time, it asks you to sign in.
 
 | Bar action   | Does                    |
 | ------------ | ----------------------- |
@@ -75,131 +195,145 @@ Click the bar chip to open the panel. The first time, it asks you to sign in.
 | Right click  | Skip forward            |
 | Scroll       | Volume ±5               |
 
-The panel has tabs for Up Next, In Progress, New releases and Podcasts. It
-also has a seek bar, skip back and forward, stop, playback speed (0.8× to 3×, `p`),
-and Trim Silence (Off, Mild, Medium, Mad Max: the same levels as the Pocket
-Casts apps), which cuts the pauses before the speed-up applies, and Volume Boost (`o`),
-which makes voices louder the way the Pocket Casts apps do (+10 dB, with a
-limiter so it never clips).
-
-**Video:** for an episode with video, a video button (or `v` in the panel)
-opens it in a small floating window, pinned on every workspace in the
-bottom-right corner, without taking focus; move or resize it and it opens
-there next time. Closing it (its ×, or `q` inside it) hides the video and
-the episode plays on. Right-click it for a menu: Always on top (on every
-workspace, above other windows; remembered), Transparency (off to 80%, to
-see your desktop through it while you work elsewhere; solid while you're
-using it; remembered), pause or play, hide. Both are on the Settings page
-too. Legato's keys work in the window (Space, `f`/`b` or the arrows, `n`,
-`s`, `p`, `t`, `o`, `v`, `+`/`-` or the wheel for volume); mpv's own keys
-are off there.
-
-**Settings:** the gear in the panel's header (or `g`) lists every setting
-below and saves changes as you make them. **Right-click** an episode for a
-menu: play, move to the top or bottom of Up Next (play next or last for
-one not queued), remove from Up Next, mark played or unplayed. The episode
-in the player only offers play or pause: Next (`n`) moves on from it. `x`
-or Delete takes the highlighted episode off Up Next.
+**Video:** the video button (or `v`) shows the episode's video in its
+window, bottom right by default. Closing the window (its ×, or `q` inside
+it) hides the video and the episode plays on.
 
 **At the end of an episode** with nothing to follow (autoplay off, or Up
 Next empty), Legato stops there and Pocket Casts has it as played. Play
 then starts what you've queued since (with autoplay on), or the episode
 again.
 
-**Before sleep:** while an episode is loaded, Legato holds a short logind
-sleep delay. When the computer is about to sleep (a closed lid, say) it
-pauses the episode and sends your position to Pocket Casts first, so your
-phone carries on from the right spot and nothing plays on behind the lock
-screen after waking. Turn it off with the `pauseOnSleep` setting.
+**The episode in the player** only offers play or pause in its right-click
+menu, and can't be removed from Up Next or marked from a list: Next (`n`)
+moves on from it.
 
-**Skip intro and outro:** a show's "skip first" and "skip last" times, set
-in any Pocket Casts app, apply here too: a new episode starts past the
-intro, and an episode ends (marked played, on to the next) where its outro
-would begin.
-Stopping unloads the episode and shrinks the bar chip back to its icon.
+**About:** the info button in the panel's header (or `i`) shows the
+version, the license, what Legato does with your data, and a *Report*
+button that opens a GitHub issue with your version details filled in.
 
-**Sync:** while an episode plays, the plugin sends your position to Pocket
-Casts every 30 seconds, and again when you pause, stop or switch episodes.
-A finished episode is marked as played. If autoplay is on, the next Up Next
-episode starts after that.
+### Keys
 
-**Resources:** the plugin starts no process while paused or idle. While an
-episode plays, it runs the bridge once every 30 seconds to send your
-position; everything else (pause, resume, seeks, the end of an episode)
-arrives as an event from mpv. After `unloadAfterMinutes` paused (15 by
-default) the player is closed altogether and the bar chip goes back to its
-icon; play picks up from wherever Pocket Casts says you are.
+In the panel:
 
-Before a paused episode plays again (from the panel, a media key or
-`playerctl`, or when the machine wakes up mid-episode), the plugin asks
-Pocket Casts where you are. If you listened on in another device meanwhile,
-it picks up from there: later in the same episode, or whatever is now at the
-top of Up Next if that device finished this one or started another. A paused
-position that hasn't moved is never sent again, so pausing, stopping or
-switching episodes here can't rewind your phone.
+| Key | Does |
+| --- | --- |
+| Space | Play / pause |
+| Enter | Play the highlighted episode, or open the highlighted show |
+| ↑ ↓ | Move through the list |
+| ← → | Switch tabs (on a show's page, ← goes back) |
+| `1` `2` `3` `4` | Up Next, In Progress, New releases, Podcasts |
+| `f` or `.` / `b` or `,` | Skip forward / back |
+| `n` | Next in Up Next |
+| `s` | Stop |
+| `p` | Speed |
+| `t` | Trim Silence |
+| `o` | Volume Boost |
+| `v` | Video window |
+| `+` / `-` | Volume |
+| `q` | Add the highlighted episode to Up Next, or remove it |
+| `x` or Delete | Remove the highlighted episode from Up Next |
+| `m` | Mark the highlighted episode played or unplayed |
+| `r` | Refresh |
+| `g` | Settings |
+| `i` | About |
+| Esc | Back, or close the panel |
 
-**About:** the 󰋽 button at the top of the panel (or `i` in the panel, or
-`omarchy-shell io.github.cwilliams5.legato about`) shows the version, the
-license (readable in place), who made it and what it's based on, what it
-does with your data, and a *Report* button that opens a new GitHub issue
-with your version details filled in. Back or `Esc` returns to the player.
+In the video window: Space, `f` `b` and ← → (skip), `n`, `s`, `p`, `t`,
+`o`, `v`, and `+` `-`, ↑ ↓ or the wheel (volume). `q` hides the video.
 
-### Keybindings
+### Your own keybindings
 
-The service listens for IPC commands under the `legato` target:
+The service answers `omarchy-shell` under the `legato` target, and the panel
+under the plugin's id:
 
-```sh
-omarchy-shell io.github.cwilliams5.legato toggle   # open/close the panel
-omarchy-shell io.github.cwilliams5.legato about    # open the panel on its About page
+```bash
 omarchy-shell legato playPause
-omarchy-shell legato status                 # JSON: playing, title, show, position, speed
+omarchy-shell legato status                        # JSON: playing, title, show, position, speed
+omarchy-shell io.github.cwilliams5.legato toggle   # open or close the panel
+omarchy-shell io.github.cwilliams5.legato about    # the panel's About page
 ```
 
-For example, in `~/.config/hypr/bindings.conf`:
+The `legato` commands are `playPause`, `next`, `skipBack`, `skipForward`,
+`stop`, `volumeUp`, `volumeDown`, `cycleSpeed`, `cycleTrim`, `toggleBoost`,
+`toggleVideo`, `refresh` and `status`. For example, in
+`~/.config/hypr/bindings.lua`:
 
+```lua
+o.bind("SUPER + ALT + P", "Legato play/pause", { ipc = "legato.playPause" })
+o.bind("SUPER + ALT + L", "Legato panel", "omarchy-shell io.github.cwilliams5.legato toggle")
 ```
-bindd = SUPER ALT, P, Legato play/pause, exec, omarchy-shell legato playPause
-```
-
-The commands are `playPause`, `next`, `skipBack`, `skipForward`, `stop`,
-`volumeUp`, `volumeDown`, `cycleSpeed`, `cycleTrim`, `toggleBoost`, `toggleVideo`,
-`refresh` and `status`.
 
 ## Settings
 
-| Key             | Default  | Meaning                                                   |
-| --------------- | -------- | --------------------------------------------------------- |
-| `showTitle`     | `true`   | Show an "Episode · Show" label next to the cover          |
-| `scrollTitle`   | `false`  | Scroll a label that doesn't fit; otherwise it's cut off with "…" (scrolling redraws the bar every frame while playing) |
-| `maxLabelWidth` | `180`    | Maximum label width in px (60–600)                        |
-| `defaultTab`    | `upnext` | Tab the panel opens on: `upnext`, `progress`, `new` or `podcasts` |
-| `skipBack`      | `10`     | Seconds to skip back                                      |
-| `skipForward`   | `30`     | Seconds to skip forward                                   |
-| `autoplay`      | `true`   | Play the next Up Next episode when one finishes           |
-| `pauseOnSleep`  | `true`   | Pause and save your place before the computer sleeps      |
-| `unloadAfterMinutes` | `15` | Unload the player after this many minutes paused; `0` keeps it loaded. An unloaded player isn't reachable by media keys; a loaded, paused one uses no CPU and about 90 MB (more once a video has been shown in it) |
+The gear in the panel's header (or `g`) lists them all and saves changes as
+you make them. They live in the bar's entry in `~/.config/omarchy/shell.json`,
+so `omarchy bar set io.github.cwilliams5.legato <key> <value>` works too.
+
+| Key | Default | What |
+| --- | --- | --- |
+| `showTitle` | `true` | Show the episode title next to the cover |
+| `scrollTitle` | `false` | Scroll a title that doesn't fit; otherwise it's cut off with "…" (scrolling redraws the bar while playing) |
+| `maxLabelWidth` | `180` | Maximum title width in px (60 to 600) |
+| `defaultTab` | `upnext` | The tab the panel opens on: `upnext`, `progress`, `new` or `podcasts` |
+| `skipBack` | `10` | Seconds to skip back |
+| `skipForward` | `30` | Seconds to skip forward |
+| `autoplay` | `true` | Play the next Up Next episode when one finishes |
+| `unloadAfterMinutes` | `15` | Close the player after this many minutes paused; `0` keeps it loaded |
+| `pauseOnSleep` | `true` | Pause and save your place before the computer sleeps |
+
+The player keeps its own choices (volume, speed, Trim Silence, Volume
+Boost, and the video window's place, Always on top and Transparency) in
+`~/.local/state/omarchy-legato/prefs.json`. Change them from the panel, the
+video window's menu or the Settings page.
+
+## How it works
+
+- **The service** (`Service.qml`, one per shell) holds the state every bar
+  and panel reads. For anything involving Pocket Casts or mpv it runs
+  `bin/legato-bridge`, a short-lived Python helper that prints one JSON
+  object.
+- **mpv** runs detached, so playback survives a shell restart. The service
+  listens on mpv's control socket for events (pause, seek, end of file),
+  and polls only while playing, once every 30 seconds, to send your
+  position.
+- **Every resume asks Pocket Casts first** where you are, and its answer
+  wins. A paused position is sent only if it moved since the last send and
+  that send was under 90 seconds ago; anything older waits for the next
+  resume to ask. So a pause, stop or skip here never rewinds your phone.
+- **Before sleep,** a small guard holds a logind sleep delay while an
+  episode is loaded. When the computer is about to sleep it pauses the
+  episode, sends your position (within 4 seconds) and lets go.
 
 ## Privacy and security
 
-- The password goes to Pocket Casts once, at sign-in, over stdin. It's never
-  passed as a command-line argument and never stored.
-- Only the access and refresh tokens are kept, in
-  `$XDG_STATE_HOME/omarchy-legato/auth.json` (mode 0600). Signing out
-  deletes them.
-- The bridge only connects to Pocket Casts hosts: `api.pocketcasts.com` (the
-  only one that gets your token), the episode-list CDN, and
-  `static.pocketcasts.com` for artwork. Audio streams from each show's own
-  host through mpv.
+- No telemetry, and no servers of Legato's own.
+- Your password goes to Pocket Casts once, at sign-in, over a pipe. It's
+  never a command-line argument and never stored.
+- Your sign-in tokens, email and account ID are kept in
+  `~/.local/state/omarchy-legato/auth.json` (readable only by you); the
+  password never is. Signing out deletes them.
+- Only `api.pocketcasts.com` gets your token. Episode lists and artwork come
+  from Pocket Casts' public hosts without it, and audio streams through mpv
+  from each show's own server.
+- Legato runs its helper and mpv with a cleared environment and absolute
+  paths. mpv only ever gets web addresses (`http` or `https`) and checks
+  every `https` certificate.
+- Covers are fetched by the helper, checked to be images, size-capped and
+  cached; the panel only shows the cached copies.
 
-## Development
+## Developing
 
-```sh
-python3 -I -B -m unittest discover -s tests -p 'test_*.py'   # bridge, including a real mpv against a fake server
-node --test tests/model.test.cjs                             # Model.js and static QML checks
+```bash
+tests/run          # the bridge against a fake Pocket Casts with a real, muted mpv; Model.js and the QML; a QML syntax check
+./install.sh       # copy this checkout over the installed plugin
+omarchy restart shell
 ```
+
+`CLAUDE.md` has the design rules (and why), and `docs/PLAN.md` the history.
 
 ## License
 
-MIT. Copyright (c) 2026 Nine Point Labs and (c) 2026 Cody Williams; see
+MIT. Copyright (c) 2026 Nine Point Labs and (c) 2026 Cody Williams. See
 [LICENSE](LICENSE). Not affiliated with or endorsed by Pocket Casts or
 Automattic.
