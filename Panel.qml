@@ -973,6 +973,7 @@ Panel {
               spacing: Style.space(4)
 
               TransportButton {
+                id: speedButton
                 text: Model.fmtSpeed(root.service ? root.service.speed : 1)
                 tooltipText: "Playback speed (p)"
                 selected: root.service && root.service.speed !== 1
@@ -984,6 +985,10 @@ Panel {
                 // Shown for a video, and while the window is open (a cover
                 // still showing from the last episode can be hidden too).
                 visible: root.service && (root.service.hasVideo || root.service.videoOn)
+                // Icon-only, it would size itself to the icon glyph and stand
+                // taller than its text neighbours once it has a background
+                // (on, or hovered): the row's height instead.
+                height: speedButton.height
                 iconText: Model.glyph.video
                 tooltipText: root.service && root.service.videoOn ? "Hide the video (v)" : "Show the video in a small window (v)"
                 selected: root.service && root.service.videoOn

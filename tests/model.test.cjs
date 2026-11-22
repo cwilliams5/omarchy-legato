@@ -171,6 +171,13 @@ test("a sign-out that fails says so", () => {
   assert.match(service, /call\(\["logout"\], function\(result\) \{\s*if \(!result\.ok\) \{ root\.reportError\(result\.error\)/)
 })
 
+test("the effects row's buttons are all one height", () => {
+  const panel = fs.readFileSync(path.join(ROOT, "Panel.qml"), "utf8")
+  const row = panel.slice(panel.indexOf("id: effectsRow"), panel.indexOf("PanelSeparator", panel.indexOf("id: effectsRow")))
+  assert.match(row, /id: speedButton/)
+  assert.match(row, /height: speedButton\.height\s*iconText: Model\.glyph\.video/)
+})
+
 test("no Python-style comments slipped into QML", () => {
   for (const name of fs.readdirSync(ROOT).filter((f) => f.endsWith(".qml"))) {
     const text = fs.readFileSync(path.join(ROOT, name), "utf8")
