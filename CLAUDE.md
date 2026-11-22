@@ -4,20 +4,28 @@ For an agent (or the maintainer, months later) picking this up with no memory
 of how it was built. Read this first. Then read `docs/PLAN.md` (what's left
 to build), `README.md` (what users see) and `branding/BRANDING.md` (the
 name, logo and palette). The reasons below matter as much as the rules.
+If a `handoff.md` sits in the repo root, read it first: a local-only note
+(listed in `.git/info/exclude`, never committed) from the last session.
 
 This file becomes public with the repo: no personal details, nothing about
 Cody's work setup.
 
-## Status (2026-11-21)
+## Status (2026-11-21, late)
 
 In development, 0.2.0, private, installed on Cody's laptop and in daily use.
-Done: the sync and performance fixes (also offered upstream as Nine Point
-Labs issues #4-6 and PRs #7-9), Qt 6.12 colours, Legato's mark in the bar,
-a still title by default, Trim Silence, and the picture-in-picture video
-window. Speed, Trim Silence and Volume Boost are global and Legato's own
-(the Android app doesn't sync effects; PLAN B4). Each show's skip intro
-and outro (which do sync) are honored. Next (docs/PLAN.md): D
-(screenshots) and release prep.
+Done and confirmed by Cody: the sync and performance fixes (also offered
+upstream as Nine Point Labs issues #4-6 and PRs #7-9; phone ↔ PC handoff
+tested for real), Qt 6.12 colours, Legato's mark in the bar, a still title
+by default, Trim Silence, Volume Boost, speed, the effects row, the
+picture-in-picture video window (placed and pinned on floating workspaces
+too, no title bar), the Settings page (gear, `g`), the Up Next right-click
+menu, pause-and-save before sleep. Speed, Trim Silence and Volume Boost are
+global and Legato's own (the Android app doesn't sync effects; PLAN B4).
+Each show's skip intro and outro (which do sync) are honored.
+
+Open (docs/PLAN.md, phase E): the video window's right-click menu doesn't
+open (E8, cause known), a real lid-close test (D2), drag to reorder (E6),
+then screenshots (D1) and release prep.
 
 ## What Legato is
 
@@ -66,17 +74,21 @@ what the API lists, or touch the user's Hyprland config.
 - Ids:
   - plugin id `io.github.cwilliams5.legato`
   - settings: the widget's entry in `~/.config/omarchy/shell.json`
-    (`showTitle`, `maxLabelWidth`, `defaultTab`, `skipBack`, `skipForward`,
-    `autoplay`, `unloadAfterMinutes`); speed and volume in the bridge's
-    `prefs.json`
+    (`showTitle`, `scrollTitle`, `maxLabelWidth`, `defaultTab`, `skipBack`,
+    `skipForward`, `autoplay`, `unloadAfterMinutes`, `pauseOnSleep`; the
+    schema in manifest.json drives the Settings page); the player's own
+    choices in the bridge's `prefs.json` (`volume`, `speed`, `trim`,
+    `boost`, `videoGeometry`, `videoPinned`)
   - state `$XDG_STATE_HOME/omarchy-legato/` (auth.json, playback.json,
     prefs.json, podcasts-cache.json, lock; all 0600, folder 0700)
   - cache `$XDG_CACHE_HOME/omarchy-legato/art/`
   - runtime `$XDG_RUNTIME_DIR/omarchy-legato/mpv.sock`
   - IPC targets `legato` (playPause, next, skipBack, skipForward, stop,
-    volumeUp, volumeDown, cycleSpeed, refresh, status) and the plugin id
-    (`toggle`, `about`)
-  - mpv window title `Legato`, audio client name `legato`
+    volumeUp, volumeDown, cycleSpeed, cycleTrim, toggleBoost, toggleVideo,
+    refresh, status) and the plugin id (`toggle`, `about`)
+  - mpv window title `Legato`, Wayland app id (Hyprland class)
+    `legato-video`, audio client name `legato`; mpv script-message
+    `legato-video-pin` (video window menu → service → `videopin toggle`)
   - User-Agent `legato/0.2 (+https://github.com/cwilliams5/omarchy-legato)`
 - Version: 0.2.0 now; 1.0.0 at the public release.
 - Branding: `branding/` (`python3 branding/build.py` regenerates it). See
@@ -88,8 +100,10 @@ what the API lists, or touch the user's Hyprland config.
 manifest.json        plugin manifest: service + bar-widget, settings schema
 Service.qml          the data layer, one per shell: bridge calls, mpv events, timers, IPC
 BarWidget.qml        the bar chip (cover, scrolling title), clicks and scroll
-Panel.qml            the panel: player, tabs, show pages, sign-in
+Panel.qml            the panel: player, effects row, tabs, show pages, right-click menu, sign-in
+SettingsView.qml     the panel's Settings page (gear), built from manifest.json's schema
 AboutView.qml        the panel's About page
+LegatoMark.qml       the logo, drawn with QtQuick.Shapes (bar chip, panel)
 Model.js             pure helpers (formatting, rows, trusted executables, closed environments)
 About.js             About facts and text (version and license read from the repo at run time)
 bin/legato-bridge    the Python helper: one subcommand per call, one JSON object out
@@ -217,12 +231,16 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   longer reaches `qs.Commons`' Color and renders black. The original has 7
   such references (PLAN A2).
 - **The video window** is mpv's own (`--wayland-app-id=legato-video`),
-  placed by a Hyprland window rule added at run time: `hyprctl repl
-  'hl.window_rule({ match = { class = "^legato-video$" }, float = true,
-  pin = true, no_initial_focus = true, size = {...}, move = {...} })'`
-  (the keys Omarchy's own webcam overlay uses). Runtime rules last until
-  Hyprland reloads its config, so the bridge adds it each time the video
-  opens. mpv needs `WAYLAND_DISPLAY` to draw at all: without it, selecting a
+  placed by a Hyprland window rule added at run time through `hyprctl repl`
+  (`video_rule_lua`): Omarchy's `o.window("^legato-video$", { name =
+  "legato-video", float, pin, no_initial_focus, size, move })` when it
+  exists (as Omarchy's webcam overlay does; see floating workspaces below),
+  plain `hl.window_rule` otherwise, plus a `hyprbars:no_bar` rule. Runtime
+  rules last until Hyprland reloads its config, so the bridge sends them
+  each time the video opens and before each episode load while the video
+  is on (mpv opens the next episode's video by itself). Size and position
+  are learned from the window (`videoGeometry`) only when it got the rule.
+  mpv needs `WAYLAND_DISPLAY` to draw at all: without it, selecting a
   video track silently does nothing. The first video of a session takes
   about 2.5 s (GPU set-up). mpv lists an episode's cover art as a video
   track too (`albumart: true`).
@@ -242,7 +260,8 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   players started by an older Legato.
 - **mpv's memory:** about 67 MB audio-only plus its buffer (capped at
   64 MB here, mpv's default is 150 MB); once a video has been shown, the
-  NVIDIA driver stays mapped (~570 MB in all) until mpv exits. Paused, it
+  GPU driver stays mapped until mpv exits (~98 MB on Intel; ~570 MB in all
+  when it was NVIDIA, see hybrid GPUs). Paused, it
   uses no CPU. An unloaded player can't receive media keys (no MPRIS player
   exists), which is what `unloadAfterMinutes` trades.
 - **mpv's on-screen controller** (osc.lua) loads even with `--no-config`;
@@ -273,17 +292,25 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   PLAN B4); a show's skip intro and outro (`autoStartFrom`,
   `autoSkipLast`) do reach the server.
 - **Widget settings** are changed with `omarchy bar set
-  io.github.cwilliams5.legato <key> <value>`; Omarchy 4.5 has no settings
-  form for plugin widgets. They reach the service through the panel
+  io.github.cwilliams5.legato <key> <value>`; Legato's Settings page
+  writes the same entry; Omarchy 4.5 itself has no settings form for
+  plugin widgets. They reach the service through the panel
   (`Panel.qml` `pushSettings`).
 
 ## Working on it
 
 - **Tests:** `tests/run` (Python with a real, muted mpv against a fake
-  Pocket Casts server, then node). About 20 s; nothing appears on screen.
-- **Live:** push, then `omarchy plugin update io.github.cwilliams5.legato`
-  and `omarchy restart shell` (QML stays cached otherwise; the bar blinks
-  once). For a quick try without pushing, `./install.sh` copies the checkout
+  Pocket Casts server, then node). About 40 s; nothing appears on screen.
+  Run before every commit.
+- **Live:** push, then `omarchy plugin update io.github.cwilliams5.legato
+  --yes` (it refuses without `--yes`, and refuses a live clone with local
+  changes) and `omarchy restart shell` (QML stays cached otherwise; the bar
+  blinks once; playback continues, mpv is detached). Bridge-only changes
+  need no restart.
+- **A running mpv keeps the options it started with.** New mpv flags reach
+  only players started afterwards (after Stop or the idle unload). Anything
+  the current player needs (window keys, `menu-data`, OSD settings) is also
+  applied in `set_video()` each time the video window opens. For a quick try without pushing, `./install.sh` copies the checkout
   over the live clone; `git -C ~/.config/omarchy/plugins/io.github.cwilliams5.legato
   checkout .` before the next update.
 - **Shell log:** `/run/user/$UID/quickshell/by-pid/<pid>/log.log`, pid from
@@ -296,7 +323,11 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   `legato-bridge volume 0`, restore everything afterwards, and never
   interrupt something he's playing. `tools/other-device.py` moves an
   episode's position the way a phone would; `tools/sample-bridge.py` counts
-  bridge launches.
+  bridge launches. Back up `prefs.json` and `playback.json` too, and put
+  them back.
+- **Looking at the screen:** screenshot only the region needed (`grim -g`,
+  logical coordinates) and delete it after; never move the user's pointer
+  or inject input (test a window's actions through mpv's socket instead).
 
 ## Credits
 

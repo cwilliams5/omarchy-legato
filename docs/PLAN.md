@@ -114,7 +114,8 @@ of its own.
 - [x] E2 Trim kept working with the video window (it used to switch off,
   and closing the window with its own × never put it back); polls repair
   the filter chain.
-- [x] E3 Video window without mpv's on-screen controls; `videoPinned`.
+- [x] E3 Video window without mpv's on-screen controls; always on top as
+  a choice (now in the window's own menu, E9, not a setting).
 - [x] E4 Settings page behind the gear (`g`), built from the schema.
 - [x] E5 Right-click menu (play, move to top/bottom, remove, mark played);
   right- and middle-click no longer remove from Up Next.
@@ -128,9 +129,29 @@ of its own.
   spot to give back the ~450 MB the GPU driver keeps mapped (an audio-only
   player is ~90 MB); today the idle unload does it eventually.
 
+- [ ] E8 **Bug (Cody, 2026-11-21): right-clicking the video window shows
+  no menu.** Cause: `bind_video_window_keys()` binds `MBTN_RIGHT` to
+  `context-menu`, which does nothing on Linux; mpv's menu here is
+  context_menu.lua, opened by `script-message-to context_menu open`
+  (verified live). Change the binding and its assertion in
+  tests/test_bridge.py (`test_closing_the_video_window_never_quits_the_player`),
+  deploy, then Cody re-opens the video (re-applies keys to his running
+  player) and right-clicks it.
+- [x] E9 Video window on Omarchy's floating workspaces: placed and pinned
+  (rule through `o.window`, named, re-sent before each load while video is
+  on), no title bar (`hyprbars:no_bar`), geometry only learned from a
+  window that got the rule; a right-click menu with Always on top: On/Off
+  (`videopin`, remembered in prefs.json), pause/play, hide; menu text at
+  full size (`--osd-scale-by-window=no`). Confirmed by Cody except the
+  menu itself (E8).
+- [x] E10 Up Next right-click menu confirmed by Cody.
+- [ ] D2 follow-up: Cody's real lid-close test (play, close the lid, the
+  phone shows the position, reopen: paused).
+
 ### Release prep (go-public)
 
 - [ ] CLAUDE.md current: status, rules, platform facts, Credits
+  (refreshed 2026-11-21 late; check again at release)
 - [ ] Then run the `go-public` skill
 
 ## Testing
