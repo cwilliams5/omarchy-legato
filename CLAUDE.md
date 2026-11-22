@@ -93,7 +93,9 @@ what the API lists, or touch the user's Hyprland config.
   - mpv window title `Legato`, Wayland app id (Hyprland class)
     `legato-video`, audio client name `legato`; mpv script-messages
     `legato-video-pin` and `legato-video-transparency <n>` (video window
-    menu → service → `videopin toggle`, `videotransparency <n>`); Lua
+    menu → service → `videopin toggle`, `videotransparency <n>`) and
+    `legato-key <action>` (the video window's keys, `VIDEO_WINDOW_KEYS` →
+    Service.qml `videoKey`, the same actions as the panel's keys); Lua
     globals in Hyprland `legato_video_alpha`, `legato_video_apply`,
     `legato_video_hook` (the opacity hook)
   - User-Agent `legato/0.2 (+https://github.com/cwilliams5/omarchy-legato)`
@@ -280,7 +282,10 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   `opacity_inactive` and their `_override`) wins over rules and survives
   their re-evaluation, so the same `hyprctl repl` call sets it on the
   open window and adds a `hl.on("window.open")` hook (once, checked with
-  `is_active()`) that sets it on each new one.
+  `is_active()`) that sets it on each new one. Only the inactive opacity
+  is see-through: mpv draws its right-click menu inside the window, so the
+  window is solid while it has focus (a right-click focuses it; Cody's
+  Hyprland focuses on click, `follow_mouse` 0).
   mpv needs `WAYLAND_DISPLAY` to draw at all: without it, selecting a
   video track silently does nothing. The first video of a session takes
   about 2.5 s (GPU set-up). mpv lists an episode's cover art as a video
@@ -297,10 +302,14 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   command is for native menus elsewhere), reads `menu-data`, draws at the
   pointer (top-left if the pointer is outside). Its check mark (✔) draws
   as a box here, so states are said in words; its submenu arrow (▸) draws,
-  and submenus (`"submenu": [...]`) open on hover. Keys, menus and OSD
-  settings set on a player only apply to that player: anything new is
-  applied again when the video window opens, for players started by an
-  older Legato.
+  and submenus (`"submenu": [...]`) open on hover. Its own keys while open
+  are forced bindings. **mpv's built-in keys** (and its scripts', like
+  stats on `i`) are weak bindings: `input-default-bindings` off, at run
+  time too, silences them all (tested) and leaves forced and `keybind`
+  ones working, so the video window gets only Legato's keys. Keys, menus
+  and OSD settings set on a player only apply to that player: anything
+  new is applied again when the video window opens, for players started
+  by an older Legato.
 - **mpv's memory:** about 67 MB audio-only plus its buffer (capped at
   64 MB here, mpv's default is 150 MB); once a video has been shown, the
   GPU driver stays mapped until mpv exits (~98 MB on Intel; ~570 MB in all

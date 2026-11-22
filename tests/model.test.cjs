@@ -140,6 +140,16 @@ test("errors from keybinds reach the OSD; the sleep guard backs off; the title r
   assert.match(bar, /running: labelItem\.scrolling/)
 })
 
+test("every key the bridge binds in the video window does something in the service", () => {
+  const bridge = fs.readFileSync(path.join(ROOT, "bin", "legato-bridge"), "utf8")
+  const service = fs.readFileSync(path.join(ROOT, "Service.qml"), "utf8")
+  const table = bridge.slice(bridge.indexOf("VIDEO_WINDOW_KEYS = ("), bridge.indexOf("VIDEO_KEY_ACTIONS"))
+  const actions = new Set([...table.matchAll(/\("[^"]+", "([A-Za-z]+)"\)/g)].map((m) => m[1]))
+  assert.ok(actions.size >= 10, [...actions].join(","))
+  for (const name of actions) assert.match(service, new RegExp('case "' + name + '": '), name)
+  assert.match(service, /message\.args\[0\] === "legato-key"[\s\S]{0,40}videoKey\(String\(message\.args\[1\] \|\| ""\)\)/)
+})
+
 test("no Python-style comments slipped into QML", () => {
   for (const name of fs.readdirSync(ROOT).filter((f) => f.endsWith(".qml"))) {
     const text = fs.readFileSync(path.join(ROOT, name), "utf8")

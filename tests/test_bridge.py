@@ -174,6 +174,9 @@ class Validation(unittest.TestCase):
         self.assertIn("legato_video_hook:is_active()", default)
         self.assertIn('w.class == "legato-video"', default)
         self.assertIn('"opacity_override"', default)
+        # Solid while it has focus (its right-click menu is drawn inside it).
+        self.assertIn('prop = "opacity", value = "1.0"', default)
+        self.assertIn('prop = "opacity_inactive", value = legato_video_alpha', default)
         self.assertTrue(default.endswith('return "ok"'))
         # Only the fixed levels ever reach the Lua text.
         for bad in (35, 90, 100, -10, "30", True, None, 30.0):
@@ -1290,6 +1293,18 @@ class VideoWindow(PlayerTestCase):
                         if b.get("section") == "default" and b.get("priority", 0) >= 0}
         for key in ("CLOSE_WIN", "q", "Q"):
             self.assertEqual(bindings.get(key), "set vid no", key)
+        # Legato's keys, not mpv's, in the video window.
+        self.assertEqual(bindings.get("SPACE"), "script-message legato-key playPause")
+        self.assertEqual(bindings.get("p"), "script-message legato-key cycleSpeed")
+        self.assertEqual(bindings.get("WHEEL_UP"), "script-message legato-key volumeUp")
+        self.assertEqual(bindings.get("LEFT"), "script-message legato-key skipBack")
+        with bridge.Mpv.connect() as player:
+            self.assertIs(player.get("input-default-bindings"), False)
+            speed, mute = player.get("speed"), player.get("mute")
+            for key in ("]", "m", "i", "ESC"):  # mpv's: faster, mute, stats, fullscreen
+                player.command("keypress", key)
+            time.sleep(0.3)
+            self.assertEqual((player.get("speed"), player.get("mute")), (speed, mute))
         # mpv's menu on Linux is its context_menu script; the context-menu
         # command only opens native menus (Windows, macOS) and did nothing.
         self.assertEqual(bindings.get("MBTN_RIGHT"), "script-message-to context_menu open")
@@ -1302,6 +1317,28 @@ class VideoWindow(PlayerTestCase):
         with bridge.Mpv.connect() as player:
             self.assertFalse(player.get("osd-scale-by-window"))  # full-size text in a small window
         self.assertEqual(menu[0]["cmd"], "script-message legato-video-pin toggle")
+
+    def test_a_key_in_the_video_window_reaches_legato(self):
+        self.play(EP_3, PODCAST_B)
+        listener = socket.socket(socket.AF_UNIX)
+        listener.connect(bridge.socket_path())
+        listener.settimeout(3)
+        try:
+            with bridge.Mpv.connect() as player:
+                player.command("keypress", "SPACE")
+            seen, buffer = None, b""
+            deadline = time.monotonic() + 3
+            while seen is None and time.monotonic() < deadline:
+                buffer += listener.recv(65536)
+                for line in buffer.split(b"\n"):
+                    event = json.loads(line) if line.strip().startswith(b"{") else {}
+                    if event.get("event") == "client-message":
+                        seen = event.get("args")
+            self.assertEqual(seen, ["legato-key", "playPause"])
+            with bridge.Mpv.connect() as player:
+                self.assertIs(player.get("pause"), False)  # only Legato pauses, through the bridge
+        finally:
+            listener.close()
 
     def test_an_audio_episode_has_no_video_to_show(self):
         view = self.play(EP_1, PODCAST_A)

@@ -235,7 +235,7 @@ Column {
       anchors.verticalCenter: parent.verticalCenter
       wrapMode: Text.WordWrap
       textFormat: Text.PlainText
-      text: "Transparency, to see the desktop through it"
+      text: "Transparency, to see the desktop through it (solid while you're using it)"
       color: root.foreground
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall

@@ -123,6 +123,7 @@ TRIM_LEVELS = {
     "madmax": (0.083, 0.0),
 }
 TRIM_ORDER = ("off", "mild", "medium", "madmax")
+TRIM_NAMES = {"off": "Off", "mild": "Mild", "medium": "Medium", "madmax": "Mad Max"}  # as Pocket Casts names them
 TRIM_LABEL = "@trim"
 
 # Volume Boost, as in the Pocket Casts apps: Android's LoudnessEnhancer at a
@@ -1592,20 +1593,55 @@ GEOMETRY_RE = re.compile(r"^-?\d{1,5}$")
 TRANSPARENCY_LEVELS = (0, 10, 20, 30, 40, 50, 60, 70, 80)
 
 
+# The video window's keys: Legato's own (the panel's), sent to the service
+# as `legato-key <action>` (Service.qml's videoKey), so they act exactly as
+# in the panel: a resume still asks Pocket Casts first. mpv's built-in keys
+# (and those its scripts add, like stats on `i`) are off in the window: a
+# stray `[` or `m` would change speed or mute behind Legato's back.
+VIDEO_WINDOW_KEYS = (
+    # Closing the window, or q inside it, hides the video; quitting the
+    # player would stop the episode.
+    ("CLOSE_WIN", "set vid no"), ("q", "set vid no"), ("Q", "set vid no"),
+    # Right-click: mpv's menu on Linux is its context_menu script (the
+    # `context-menu` command only opens the native menus of Windows and
+    # macOS, and does nothing here).
+    ("MBTN_RIGHT", "script-message-to context_menu open"),
+    ("SPACE", "playPause"),
+    ("f", "skipForward"), (".", "skipForward"), ("RIGHT", "skipForward"),
+    ("b", "skipBack"), (",", "skipBack"), ("LEFT", "skipBack"),
+    ("n", "next"), ("s", "stop"), ("p", "cycleSpeed"), ("t", "cycleTrim"),
+    ("o", "toggleBoost"), ("v", "toggleVideo"),
+    ("+", "volumeUp"), ("=", "volumeUp"), ("UP", "volumeUp"), ("WHEEL_UP", "volumeUp"),
+    ("-", "volumeDown"), ("DOWN", "volumeDown"), ("WHEEL_DOWN", "volumeDown"),
+)
+VIDEO_KEY_ACTIONS = frozenset(cmd for _, cmd in VIDEO_WINDOW_KEYS if " " not in cmd)
+
+
 def bind_video_window_keys(player, prefs=None):
-    """Closing the video window, or mpv's quit keys inside it, hide the
-    video instead of quitting the player (which would stop the episode).
-    Right-click opens Legato's menu instead of pausing: mpv's own menu on
-    Linux is its context_menu script (the `context-menu` command only opens
-    the native menus mpv has on Windows and macOS, and does nothing here)."""
-    for key, cmd in (("CLOSE_WIN", "set vid no"), ("q", "set vid no"), ("Q", "set vid no"),
-                     ("MBTN_RIGHT", "script-message-to context_menu open")):
+    """The video window's keys (VIDEO_WINDOW_KEYS) and right-click menu."""
+    try:
+        # Off at run time too, for a player that's already up: weak
+        # bindings, which are mpv's built-ins and its scripts' keys. The
+        # context menu's own keys while open are forced ones and stay.
+        player.command("set_property", "input-default-bindings", False)
+    except ApiError:
+        pass
+    for key, cmd in VIDEO_WINDOW_KEYS:
         try:
-            player.command("keybind", key, cmd)
+            player.command("keybind", key, cmd if " " in cmd else "script-message legato-key " + cmd)
         except ApiError:
             pass
     try:
         player.command("set_property", "menu-data", video_menu(prefs or load_prefs()))
+    except ApiError:
+        pass
+
+
+def osd(player, text):
+    """A brief message on the video window; an audio-only player has no
+    window, so nothing shows."""
+    try:
+        player.command("show-text", text, 1500)
     except ApiError:
         pass
 
@@ -1673,14 +1709,19 @@ def video_opacity_lua(transparency):
     as it drops the rules, and the next `video on` adds both again). The
     hook reads the level from a global, so a change needs no new hook.
     Override: the level is the window's whole opacity, not a fraction of
-    the user's own window opacity."""
+    the user's own window opacity.
+
+    Only while the window doesn't have focus: mpv draws its right-click
+    menu inside the window, so a see-through window has a see-through menu.
+    A click (right-click too) focuses it, solid while you use it; a click
+    elsewhere and it's see-through again."""
     alpha = "%.2f" % ((100 - video_transparency({"videoTransparency": transparency})) / 100.0)
     return ('legato_video_alpha = "%(alpha)s" '
             'legato_video_apply = function(w) '
             'if not (w and w.class == "%(id)s" and w.address) then return end '
             'local target = "address:" .. w.address '
-            'for _, prop in ipairs({ "opacity", "opacity_inactive" }) do '
-            'hl.dispatch(hl.dsp.window.set_prop({ prop = prop, value = legato_video_alpha, window = target })) end '
+            'hl.dispatch(hl.dsp.window.set_prop({ prop = "opacity", value = "1.0", window = target })) '
+            'hl.dispatch(hl.dsp.window.set_prop({ prop = "opacity_inactive", value = legato_video_alpha, window = target })) '
             'for _, prop in ipairs({ "opacity_override", "opacity_inactive_override" }) do '
             'hl.dispatch(hl.dsp.window.set_prop({ prop = prop, value = "true", window = target })) end '
             'end '
@@ -2584,10 +2625,11 @@ def cmd_seek(args):
     with StateLock():
         state = load_playback()
         with require_player() as player:
+            # osd-msg-bar: the video window (if shown) shows where it went.
             if args.relative:
-                player.command("seek", float(args.seconds), "relative")
+                player.command("osd-msg-bar", "seek", float(args.seconds), "relative")
             else:
-                player.command("seek", max(0.0, float(args.seconds)), "absolute")
+                player.command("osd-msg-bar", "seek", max(0.0, float(args.seconds)), "absolute")
             time.sleep(0.05)
             playing = player.get("pause") is False and player.get("eof-reached") is not True
             if playing and ended_here(state):
@@ -2610,6 +2652,7 @@ def cmd_volume(args):
         if player:
             with player:
                 player.set("volume", volume)
+                osd(player, "Volume %d%%" % volume)
     out({"volume": volume})
 
 
@@ -2626,6 +2669,7 @@ def cmd_speed(args):
         if player:
             with player:
                 player.set("speed", speed)
+                osd(player, "Speed %s×" % ("%.2f" % speed).rstrip("0").rstrip("."))
     out({"speed": speed})
 
 
@@ -2708,6 +2752,7 @@ def cmd_boost(args):
         if player:
             with player:
                 apply_boost(player, on)
+                osd(player, "Volume Boost %s" % ("on" if on else "off"))
     out({"boost": on})
 
 
@@ -2762,6 +2807,7 @@ def cmd_trim(args):
         if player:
             with player:
                 apply_trim(player, level)
+                osd(player, "Trim Silence: %s" % TRIM_NAMES.get(level, level))
     out({"trim": level})
 
 

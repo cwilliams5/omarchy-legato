@@ -548,6 +548,11 @@ Item {
       setVideoTransparency(Number(message.args[1]))
       return
     }
+    // A Legato key pressed in the video window (the bridge binds them there).
+    if (message.event === "client-message" && message.args && message.args[0] === "legato-key") {
+      videoKey(String(message.args[1] || ""))
+      return
+    }
     if (message.event === "end-file" && message.reason === "error") {
       loadFailed(typeof message.file_error === "string" ? message.file_error : "")
       settle()
@@ -805,6 +810,24 @@ Item {
     if (!hasVideo) return false
     action(["video", "toggle"])
     return true
+  }
+
+  // The video window's keys: the panel's, doing what they do there. Only
+  // these names; anything else from mpv is ignored.
+  function videoKey(name) {
+    switch (name) {
+    case "playPause": playPause(); break
+    case "skipBack": skipBack(); break
+    case "skipForward": skipForward(); break
+    case "next": next(); break
+    case "stop": stop(); break
+    case "cycleSpeed": cycleSpeed(); break
+    case "cycleTrim": cycleTrim(); break
+    case "toggleBoost": toggleBoost(); break
+    case "toggleVideo": toggleVideo(); break
+    case "volumeUp": nudgeVolume(5); break
+    case "volumeDown": nudgeVolume(-5); break
+    }
   }
 
   // Always on top for the video window: "on", "off" or "toggle".

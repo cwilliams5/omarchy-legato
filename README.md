@@ -88,8 +88,11 @@ bottom-right corner, without taking focus; move or resize it and it opens
 there next time. Closing it (its ×, or `q` inside it) hides the video and
 the episode plays on. Right-click it for a menu: Always on top (on every
 workspace, above other windows; remembered), Transparency (off to 80%, to
-see your desktop through it; remembered), pause or play, hide. Both are on
-the Settings page too.
+see your desktop through it while you work elsewhere; solid while you're
+using it; remembered), pause or play, hide. Both are on the Settings page
+too. Legato's keys work in the window (Space, `f`/`b` or the arrows, `n`,
+`s`, `p`, `t`, `o`, `v`, `+`/`-` or the wheel for volume); mpv's own keys
+are off there.
 
 **Settings:** the gear in the panel's header (or `g`) lists every setting
 below and saves changes as you make them. **Right-click** an episode for a

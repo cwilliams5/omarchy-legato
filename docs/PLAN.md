@@ -160,6 +160,15 @@ of its own.
   (new window at 30%, survives a rule re-evaluation, back to solid at 0);
   Cody to try it on the real one.
 
+- [x] E12 (Cody, testing E11): the transparency made the right-click
+  menu see-through too (mpv draws it inside the window). Now the window is
+  solid while it has focus, which a right-click gives it.
+- [x] E13 (Cody): keys pressed in the video window did mpv's own things.
+  Now Legato's keys work there (Space, f/b and the arrows, n, s, p, t, o,
+  v, +/-, the wheel for volume), through the service like the panel's,
+  and mpv's built-in keys are off in it. Speed, Trim, Boost, volume and
+  seeks show briefly on the video.
+
 ### F. Fresh-eyes review (2026-11-21, second session)
 
 Two independent reviews (bridge, QML), each finding checked against the
