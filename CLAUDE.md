@@ -10,13 +10,13 @@ Cody's work setup.
 
 ## Status (2026-11-21)
 
-Identity done (name Legato, logo "Slur"), and renamed from the hard fork:
-version 0.2.0, private, installed on Cody's laptop and in daily use. The
-three sync and performance fixes are in and were tested live (see "How it
-works"). Next: `docs/PLAN.md` phase A (offer the fixes upstream from the old
-fork, the Qt 6.12 colour fix, the chip icon), then Trim Silence (B) and the
-video window (C). Waiting on Cody: his review of the upstream issue and PR
-text before anything is posted.
+In development, 0.2.0, private, installed on Cody's laptop and in daily use.
+Done: the sync and performance fixes (also offered upstream as Nine Point
+Labs issues #4-6 and PRs #7-9), Qt 6.12 colours, Legato's mark in the bar,
+a still title by default, Trim Silence, and the picture-in-picture video
+window. Next (docs/PLAN.md): B4, following the phone's speed and trim,
+waits on Cody's call on the behavior; B4b (skip intro and outro per show);
+then D (screenshots) and release prep.
 
 ## What Legato is
 
