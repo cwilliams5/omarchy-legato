@@ -78,7 +78,9 @@ Click the bar chip to open the panel. The first time, it asks you to sign in.
 The panel has tabs for Up Next, In Progress, New releases and Podcasts. It
 also has a seek bar, skip back and forward, stop, playback speed (0.8× to 3×),
 and Trim Silence (Off, Mild, Medium, Mad Max: the same levels as the Pocket
-Casts apps), which cuts the pauses before the speed-up applies.
+Casts apps), which cuts the pauses before the speed-up applies, and Volume Boost (`o`),
+which makes voices louder the way the Pocket Casts apps do (+10 dB, with a
+limiter so it never clips).
 
 **Video:** for an episode with video, a video button (or `v` in the panel)
 opens it in a small floating window, pinned on every workspace in the
@@ -131,8 +133,8 @@ bindd = SUPER ALT, P, Legato play/pause, exec, omarchy-shell legato playPause
 ```
 
 The commands are `playPause`, `next`, `skipBack`, `skipForward`, `stop`,
-`volumeUp`, `volumeDown`, `cycleSpeed`, `cycleTrim`, `toggleVideo`, `refresh`
-and `status`.
+`volumeUp`, `volumeDown`, `cycleSpeed`, `cycleTrim`, `toggleBoost`, `toggleVideo`,
+`refresh` and `status`.
 
 ## Settings
 

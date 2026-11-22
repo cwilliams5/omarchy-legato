@@ -85,6 +85,7 @@ Item {
   readonly property int volume: player && player.volume !== undefined ? Number(player.volume) : 100
   readonly property real speed: player && player.speed ? Number(player.speed) : 1
   readonly property string trim: player && player.trim ? String(player.trim) : "off"
+  readonly property bool boost: player && player.boost === true
   readonly property bool hasVideo: playerActive && player.hasVideo === true
   readonly property bool videoOn: playerActive && player.video === true
 
@@ -684,6 +685,14 @@ Item {
     return true
   }
 
+  function toggleBoost() {
+    call(["boost", "toggle"], function(result) {
+      if (!result.ok) { root.reportError(result.error); return }
+      root.optimistic({ boost: result.data.boost })
+      root.flash("Volume Boost " + (result.data.boost ? "on" : "off"), false)
+    })
+  }
+
   function cycleTrim() {
     call(["trim", "cycle"], function(result) {
       if (!result.ok) { root.reportError(result.error); return }
@@ -837,6 +846,7 @@ Item {
     function cycleSpeed(): string { root.cycleSpeed(); return "ok" }
     function cycleTrim(): string { root.cycleTrim(); return "ok" }
     function toggleVideo(): string { return root.toggleVideo() ? "ok" : "unhandled" }
+    function toggleBoost(): string { root.toggleBoost(); return "ok" }
     function refresh(): string { root.refresh(); return "ok" }
     function status(): string {
       return JSON.stringify({

@@ -170,6 +170,14 @@ class Validation(unittest.TestCase):
         self.assertFalse(bridge.has_video({"track-list": [{"type": "video", "albumart": True}, {"type": "audio"}]}))
         self.assertFalse(bridge.has_video({}))
 
+    def test_volume_boost_is_ten_db_into_a_limiter_after_trim(self):
+        self.assertIn("level_in=3.1623", bridge.BOOST_FILTER)  # +10 dB, Pocket Casts' 1000 mB
+        self.assertIn("level=false", bridge.BOOST_FILTER)       # auto-level would undo it
+        self.assertEqual(bridge.audio_filters({}), "")
+        chain = bridge.audio_filters({"trim": "mild", "boost": True})
+        self.assertTrue(chain.startswith("@trim:") and ",@boost:" in chain)
+        self.assertEqual(bridge.audio_filters({"boost": True}), "@boost:" + bridge.BOOST_FILTER)
+
     def test_speed_is_clamped(self):
         self.assertEqual(bridge.clamp_speed("9"), 3.0)
         self.assertEqual(bridge.clamp_speed("0.1"), 0.5)
@@ -858,6 +866,20 @@ class TrimSilence(PlayerTestCase):
         self.wait_for(lambda: run_bridge("player") and self.fake["status"].get(EP_1) == bridge.STATUS_PLAYED)
         self.assertLess(time.monotonic() - started, 5.5)
         self.assertEqual(run_bridge("player")["data"]["trim"], "madmax")
+
+    def test_boost_toggles_live_and_stays_after_trim(self):
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.assertTrue(run_bridge("boost", "toggle")["data"]["boost"])
+        self.assertEqual(self.af(), ["boost"])
+        run_bridge("trim", "mild")
+        self.assertEqual(self.af(), ["trim", "boost"])  # trim judges silence before the boost
+        run_bridge("trim", "madmax")
+        self.assertEqual(self.af(), ["trim", "boost"])
+        self.assertTrue(run_bridge("player")["data"]["boost"])
+        self.assertFalse(run_bridge("boost", "off")["data"]["boost"])
+        self.assertEqual(self.af(), ["trim"])
+        self.assertIs(bridge.load_prefs()["boost"], False)
 
     def test_trim_changes_live_and_cycles(self):
         self.login()

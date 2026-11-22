@@ -57,6 +57,8 @@ test("the video window is offered only for video episodes, and mpv reports it", 
   assert.match(panel, /visible: root\.service && root\.service\.hasVideo/)
   assert.match(panel, /t === "v"\) root\.service\.toggleVideo\(\)/)
   assert.match(service, /function toggleVideo\(\): string/)
+  assert.match(panel, /t === "o"\) root\.service\.toggleBoost\(\)/)
+  assert.match(service, /function toggleBoost\(\): string/)
   assert.match(service, /"idle-active", "vid"\]/)
 })
 

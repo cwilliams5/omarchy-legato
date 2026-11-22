@@ -122,6 +122,15 @@ TRIM_LEVELS = {
 TRIM_ORDER = ("off", "mild", "medium", "madmax")
 TRIM_LABEL = "@trim"
 
+# Volume Boost, as in the Pocket Casts apps: Android's LoudnessEnhancer at a
+# 1000 mB (+10 dB) target (ShiftyCustomAudio.kt). Here the same gain goes
+# into a limiter, so peaks don't clip; its auto-level stays off (it would
+# undo the boost) and its delay is compensated (video stays in sync). It
+# runs after Trim Silence, which must judge silence before anything is
+# made louder.
+BOOST_FILTER = "lavfi=[alimiter=level_in=3.1623:limit=0.89:attack=5:release=50:level=false:latency=true]"
+BOOST_LABEL = "@boost"
+
 
 def safe_uuid(value):
     """Pocket Casts IDs are UUIDs. Anything else must not reach a URL path."""
@@ -1361,7 +1370,8 @@ def trim_filter(level):
 
 def apply_trim(player, level):
     """Swap the trim filter on a running player. While the video window
-    shows, trimming stays off (set_video puts it back)."""
+    shows, trimming stays off (set_video puts it back). It always goes first
+    in the chain ("pre"), ahead of Volume Boost."""
     if level not in (None, "off") and video_shown({"vid": player.get("vid")}):
         level = "off"
     try:
@@ -1370,7 +1380,28 @@ def apply_trim(player, level):
         pass  # none to remove
     spec = trim_filter(level)
     if spec:
-        player.command("af", "add", "%s:%s" % (TRIM_LABEL, spec))
+        player.command("af", "pre", "%s:%s" % (TRIM_LABEL, spec))
+
+
+def apply_boost(player, on):
+    """Swap Volume Boost on a running player; it goes last ("add")."""
+    try:
+        player.command("af", "remove", BOOST_LABEL)
+    except ApiError:
+        pass
+    if on:
+        player.command("af", "add", "%s:%s" % (BOOST_LABEL, BOOST_FILTER))
+
+
+def audio_filters(prefs):
+    """mpv's --af list for a new player: trim, then boost."""
+    chain = []
+    trim = trim_filter(prefs.get("trim"))
+    if trim:
+        chain.append("%s:%s" % (TRIM_LABEL, trim))
+    if prefs.get("boost") is True:
+        chain.append("%s:%s" % (BOOST_LABEL, BOOST_FILTER))
+    return ",".join(chain)
 
 
 def mpv_quote(value):
@@ -1406,9 +1437,9 @@ def start_mpv(prefs):
             "--user-agent=" + USER_AGENT,
             "--volume=%d" % max(0, min(100, as_int(prefs.get("volume", 100)) if "volume" in prefs else 100)),
             "--speed=%s" % clamp_speed(prefs.get("speed", 1.0))]
-    trim = trim_filter(prefs.get("trim"))
-    if trim:
-        argv.append("--af=%s:%s" % (TRIM_LABEL, trim))
+    filters = audio_filters(prefs)
+    if filters:
+        argv.append("--af=" + filters)
     argv.extend(MPV_EXTRA_ARGS)
     script = mpris_script()
     if script:
@@ -1656,6 +1687,7 @@ def player_view(snap, state, prefs, load_failed=False):
         "volume": int(round(snap.get("volume"))) if active and isinstance(snap.get("volume"), (int, float)) else as_int(prefs.get("volume", 100)) if "volume" in prefs else 100,
         "speed": float(snap.get("speed")) if active and isinstance(snap.get("speed"), (int, float)) else clamp_speed(prefs.get("speed", 1.0)),
         "trim": trim_level(prefs.get("trim")),
+        "boost": prefs.get("boost") is True,
         "hasVideo": active and has_video(snap),
         "video": active and video_shown(snap),
         "item": episode or None,
@@ -2129,6 +2161,18 @@ def cmd_video(args):
     out(view)
 
 
+def cmd_boost(args):
+    prefs = load_prefs()
+    on = not (prefs.get("boost") is True) if args.value == "toggle" else args.value == "on"
+    prefs["boost"] = on
+    save_prefs(prefs)
+    player = Mpv.connect()
+    if player:
+        with player:
+            apply_boost(player, on)
+    out({"boost": on})
+
+
 def cmd_trim(args):
     prefs = load_prefs()
     if args.value == "cycle":
@@ -2297,6 +2341,7 @@ def build_parser():
     p = sub.add_parser("speed"); p.add_argument("value"); p.set_defaults(fn=cmd_speed)
     p = sub.add_parser("trim"); p.add_argument("value"); p.set_defaults(fn=cmd_trim)
     p = sub.add_parser("video"); p.add_argument("value", choices=("on", "off", "toggle")); p.set_defaults(fn=cmd_video)
+    p = sub.add_parser("boost"); p.add_argument("value", choices=("on", "off", "toggle")); p.set_defaults(fn=cmd_boost)
     sub.add_parser("next").set_defaults(fn=cmd_next)
     p = sub.add_parser("stop"); p.add_argument("--if-paused", action="store_true"); p.set_defaults(fn=cmd_stop)
 
