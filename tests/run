@@ -1,6 +1,15 @@
 #!/bin/sh
-# Run every test: the bridge's Python suite, then the Model.js/QML node suite.
+# Run every test: the bridge's Python suite, then the Model.js/QML node suite,
+# then a QML syntax check (qmllint, when installed: the shell's own imports
+# can't resolve outside it, so only [syntax] findings count).
 set -eu
 cd "$(dirname "$0")/.."
 /usr/bin/python3 -I -B -m unittest discover -s tests -p 'test_*.py' "$@"
 node --test tests/model.test.cjs
+if [ -x /usr/lib/qt6/bin/qmllint ]; then
+  if /usr/lib/qt6/bin/qmllint ./*.qml 2>&1 | grep '\[syntax\]'; then
+    echo "QML syntax errors (above)" >&2
+    exit 1
+  fi
+  echo "QML syntax: ok"
+fi
