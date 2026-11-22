@@ -100,7 +100,8 @@ of its own.
 
 ### D. Polish
 
-- [ ] D1 Fresh screenshots of Legato's own UI (replace preview*.png).
+- [x] D1 Fresh screenshots of Legato's own UI (media/, preview.png;
+  2026-11-22, re-shot once after the video button's height fix).
 - [x] D2 Pausing before the machine sleeps: a logind delay guard while an
   episode is loaded (`sleepguard`, `pauseOnSleep`). Built 2026-11-21; the
   guard's lifecycle checked live, a real lid-close still to confirm.
@@ -289,9 +290,12 @@ history on other submissions). Fixed, each with a failing-first test:
 
 ### Release prep (go-public)
 
-- [ ] CLAUDE.md current: status, rules, platform facts, Credits
-  (refreshed 2026-11-21 late; check again at release)
-- [ ] Then run the `go-public` skill
+- [x] CLAUDE.md current: status, rules, platform facts, Credits
+- [x] The `go-public` skill: D1 screenshots, README, reviews (phase G),
+  1.0.0 public and released 2026-11-22; the install test from the public
+  URL passes; the marketplace baseline has no findings.
+- [ ] 1.0.1: G12 and G13, then the marketplace submission (the issue text
+  is drafted, with Cody's edit).
 
 ## Testing
 

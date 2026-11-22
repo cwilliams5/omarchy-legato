@@ -12,15 +12,14 @@ Cody's work setup.
 
 ## Status (2026-11-22)
 
-Release candidate for 1.0.0: development is done (B5 "time saved" waits for
-later), everything in docs/PLAN.md phases A to F is built and confirmed by
-Cody, and the go-public skill is under way. D1 screenshots were shot on
-2026-11-22 (`media/`, `preview.png`) and the README rewritten for release;
-both wait for Cody's look before they're committed. Then: version 1.0.0,
-the privacy scan last, the repo public, the marketplace's security baseline
-(it refuses private repos), the install test from the public URL, and the
-marketplace submission. Upstream, Nine Point Labs issues #4-6 and PRs #7-9
-are still open with no reply.
+Released: 1.0.0 is public (github.com/cwilliams5/omarchy-legato, release
+v1.0.0), installed from it on Cody's laptop. The marketplace's automated
+baseline gives "review-required" with no findings (capabilities: installer,
+package-manager). Not submitted yet: 1.0.1 comes first with what its human
+reviewer would block on (docs/PLAN.md G12, a sign-in field that isn't a
+native Qt text input; G13, a check that refuses feeds on the local network
+unless allowed). Upstream, Nine Point Labs issues #4-6 and PRs #7-9 are
+still open; the old fork's README points here.
 
 ## What Legato is
 
