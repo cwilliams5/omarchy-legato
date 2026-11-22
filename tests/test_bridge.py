@@ -159,8 +159,10 @@ class Validation(unittest.TestCase):
 
     def test_video_window_rule_and_geometry(self):
         default = bridge.video_rule_lua(None)
-        self.assertIn('match = { class = "^legato-video$" }', default)
-        self.assertIn("float = true, pin = true, no_initial_focus = true", default)
+        self.assertIn('o.window("^legato-video$", r)', default)  # Omarchy's floating mode leaves it alone
+        self.assertIn('match = { class = "^legato-video$" }', default)  # without Omarchy
+        self.assertIn('name = "legato-video", float = true, pin = true, no_initial_focus = true', default)
+        self.assertIn('["hyprbars:no_bar"] = true', default)
         self.assertIn("monitor_w*7/25", default)
         self.assertIn("pin = false", bridge.video_rule_lua(None, pinned=False))
         placed = bridge.video_rule_lua({"x": 800, "y": 500, "w": 400, "h": 225})
@@ -1061,8 +1063,28 @@ class VideoWindow(PlayerTestCase):
         self.assertTrue(hidden["playing"])
         self.assertIn("trim", self.af())
         self.assertIn(("clients", "-j"), self.hypr)  # where it was, for next time
-        run_bridge("video", "on", "--unpinned")
+
+        # Always on top, from the window's right-click menu.
+        self.assertFalse(run_bridge("videopin", "toggle")["data"]["videoPinned"])
+        self.assertIs(bridge.load_prefs()["videoPinned"], False)
+        dispatch = [a for a in self.hypr if a[0] == "dispatch"][-1][1]
+        self.assertEqual(dispatch, 'hl.dsp.window.pin({ action = "off", window = "class:^legato-video$" })')
         self.assertIn("pin = false", [a for a in self.hypr if a[0] == "repl"][-1][1])
+        with bridge.Mpv.connect() as player:
+            self.assertEqual(player.get("menu-data")[0]["state"], [])
+        run_bridge("video", "on")
+        self.assertIn("pin = false", [a for a in self.hypr if a[0] == "repl"][-1][1])
+
+    def test_a_window_that_missed_the_rule_is_not_remembered(self):
+        prefs = {"videoGeometry": {"x": 924, "y": 630, "w": 274, "h": 144}}
+        big = [{"class": "legato-video", "pinned": False, "at": [200, 130], "size": [768, 544]}]
+        with mock.patch.object(bridge, "hyprctl", lambda *a: json.dumps(big)):
+            bridge.remember_video_geometry(prefs)
+        self.assertEqual(prefs["videoGeometry"]["w"], 274)
+        moved = [{"class": "legato-video", "pinned": True, "at": [900, 600], "size": [300, 170]}]
+        with mock.patch.object(bridge, "hyprctl", lambda *a: json.dumps(moved)):
+            bridge.remember_video_geometry(prefs)
+        self.assertEqual(prefs["videoGeometry"], {"x": 900, "y": 600, "w": 300, "h": 170})
 
     def test_closing_the_video_window_never_quits_the_player(self):
         self.play(EP_3, PODCAST_B)
@@ -1071,6 +1093,12 @@ class VideoWindow(PlayerTestCase):
                         if b.get("section") == "default" and b.get("priority", 0) >= 0}
         for key in ("CLOSE_WIN", "q", "Q"):
             self.assertEqual(bindings.get(key), "set vid no", key)
+        self.assertEqual(bindings.get("MBTN_RIGHT"), "context-menu")
+        with bridge.Mpv.connect() as player:
+            menu = player.get("menu-data")
+        self.assertEqual(menu[0]["title"], "Always on top")
+        self.assertEqual(menu[0]["state"], ["checked"])
+        self.assertEqual(menu[0]["cmd"], "script-message legato-video-pin toggle")
 
     def test_an_audio_episode_has_no_video_to_show(self):
         view = self.play(EP_1, PODCAST_A)

@@ -86,7 +86,8 @@ limiter so it never clips).
 opens it in a small floating window, pinned on every workspace in the
 bottom-right corner, without taking focus; move or resize it and it opens
 there next time. Closing it (its ×, or `q` inside it) hides the video and
-the episode plays on. Trim Silence pauses while the video shows.
+the episode plays on. Right-click it for a menu: Always on top (on every
+workspace, above other windows; remembered), pause or play, hide.
 
 **Settings:** the gear in the panel's header (or `g`) lists every setting
 below and saves changes as you make them. **Right-click** an episode for a
@@ -164,7 +165,6 @@ The commands are `playPause`, `next`, `skipBack`, `skipForward`, `stop`,
 | `skipForward`   | `30`     | Seconds to skip forward                                   |
 | `autoplay`      | `true`   | Play the next Up Next episode when one finishes           |
 | `pauseOnSleep`  | `true`   | Pause and save your place before the computer sleeps      |
-| `videoPinned`   | `true`   | Keep the video window on top, on every workspace          |
 | `unloadAfterMinutes` | `15` | Unload the player after this many minutes paused; `0` keeps it loaded. An unloaded player isn't reachable by media keys; a loaded, paused one uses no CPU and about 90 MB (more once a video has been shown in it) |
 
 ## Privacy and security

@@ -38,8 +38,7 @@
       "skipForward": 30,
       "autoplay": true,
       "unloadAfterMinutes": 15,
-      "pauseOnSleep": true,
-      "videoPinned": true
+      "pauseOnSleep": true
     },
     "schema": [
       {
@@ -112,12 +111,6 @@
         "key": "pauseOnSleep",
         "type": "boolean",
         "label": "Pause and save your place before the computer sleeps",
-        "defaultValue": true
-      },
-      {
-        "key": "videoPinned",
-        "type": "boolean",
-        "label": "Keep the video window on top, on every workspace",
         "defaultValue": true
       }
     ]

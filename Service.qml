@@ -51,7 +51,6 @@ Item {
   readonly property int skipForwardSeconds: Math.max(1, Number(setting("skipForward", 30)) || 30)
   readonly property bool autoplay: setting("autoplay", true) !== false
   readonly property bool pauseOnSleep: setting("pauseOnSleep", true) !== false
-  readonly property bool videoPinned: setting("videoPinned", true) !== false
 
   // ---- Connection state (from `legato-bridge status`)
   property bool probed: false
@@ -522,6 +521,11 @@ Item {
     // property-change: one of the observed properties (its first value
     // arrives right after observe_property). playback-restart: a seek (from
     // here, a media widget or playerctl) or a new file has settled.
+    // The video window's right-click menu: Always on top.
+    if (message.event === "client-message" && message.args && message.args[0] === "legato-video-pin") {
+      call(["videopin", "toggle"], null)
+      return
+    }
     if (message.event === "end-file" && message.reason === "error") {
       loadFailed(typeof message.file_error === "string" ? message.file_error : "")
       settle()
@@ -712,7 +716,7 @@ Item {
   // The picture-in-picture video window (only for episodes with video).
   function toggleVideo() {
     if (!hasVideo) return false
-    action(videoPinned ? ["video", "toggle"] : ["video", "toggle", "--unpinned"])
+    action(["video", "toggle"])
     return true
   }
 

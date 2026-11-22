@@ -1558,7 +1558,7 @@ def start_mpv(prefs):
     while time.monotonic() < deadline:
         player = Mpv.connect(timeout=1.0)
         if player:
-            bind_video_window_keys(player)
+            bind_video_window_keys(player, prefs)
             return player
         time.sleep(0.1)
     raise ApiError("player", "mpv started but its control socket never appeared")
@@ -1578,14 +1578,20 @@ VIDEO_APP_ID = "legato-video"
 GEOMETRY_RE = re.compile(r"^-?\d{1,5}$")
 
 
-def bind_video_window_keys(player):
+def bind_video_window_keys(player, prefs=None):
     """Closing the video window, or mpv's quit keys inside it, hide the
-    video instead of quitting the player (which would stop the episode)."""
-    for key in ("CLOSE_WIN", "q", "Q"):
+    video instead of quitting the player (which would stop the episode).
+    Right-click opens Legato's menu instead of pausing."""
+    for key, cmd in (("CLOSE_WIN", "set vid no"), ("q", "set vid no"), ("Q", "set vid no"),
+                     ("MBTN_RIGHT", "context-menu")):
         try:
-            player.command("keybind", key, "set vid no")
+            player.command("keybind", key, cmd)
         except ApiError:
             pass
+    try:
+        player.command("set_property", "menu-data", video_menu(video_pinned(prefs or load_prefs())))
+    except ApiError:
+        pass
 
 
 def has_video(snap):
@@ -1614,7 +1620,14 @@ def video_rule_lua(geometry, pinned=True):
     """The window rule, as Lua for `hyprctl repl`. Numbers and fixed words
     only: nothing from outside reaches the Lua text. Pinned: on every
     workspace, above the rest; otherwise a floating window on the workspace
-    it opened on."""
+    it opened on.
+
+    It goes through Omarchy's own o.window where there is one, like
+    Omarchy's webcam overlay: that marks the app as floating on its own, so
+    a floating workspace's open rule (which sizes every other new window to
+    two thirds of the screen, centered) leaves it alone. Named, so adding it
+    again replaces it. A second rule turns off the floating workspace's title
+    bar for it (its buttons can't minimize or maximize a pinned window)."""
     if geometry:
         x, y, w, h = (int(geometry[k]) for k in ("x", "y", "w", "h"))
         size = '{ "%d", "%d" }' % (w, h)
@@ -1622,9 +1635,33 @@ def video_rule_lua(geometry, pinned=True):
     else:
         size = '{ "(monitor_w*7/25)", "(monitor_w*63/400)" }'
         move = '{ "(monitor_w-monitor_w*7/25-24)", "(monitor_h-monitor_w*63/400-60)" }'
-    return ('hl.window_rule({ match = { class = "^%s$" }, float = true, pin = %s, '
-            'no_initial_focus = true, size = %s, move = %s }) return "ok"'
-            % (VIDEO_APP_ID, "true" if pinned else "false", size, move))
+    return ('local r = { name = "%(id)s", float = true, pin = %(pin)s, no_initial_focus = true, '
+            'size = %(size)s, move = %(move)s } '
+            'if o and o.window then o.window("^%(id)s$", r) '
+            'else r.match = { class = "^%(id)s$" } hl.window_rule(r) end '
+            'pcall(hl.window_rule, { name = "%(id)s-nobar", match = { class = "^%(id)s$" }, ["hyprbars:no_bar"] = true }) '
+            'return "ok"' % {"id": VIDEO_APP_ID, "pin": "true" if pinned else "false", "size": size, "move": move})
+
+
+def video_pinned(prefs):
+    return prefs.get("videoPinned") is not False
+
+
+def video_menu(pinned):
+    """The video window's right-click menu (mpv's own context menu)."""
+    return [
+        {"title": "Always on top", "type": "checkbox", "state": ["checked"] if pinned else [],
+         "cmd": "script-message legato-video-pin toggle"},
+        {"type": "separator"},
+        {"title": "Pause / play", "cmd": "cycle pause"},
+        {"title": "Hide video", "cmd": "set vid no"},
+    ]
+
+
+def place_video_window(prefs):
+    """Send the placement rule (again: a Hyprland config reload drops rules
+    added at run time)."""
+    hyprctl("repl", video_rule_lua(saved_geometry(prefs), video_pinned(prefs)))
 
 
 def saved_geometry(prefs):
@@ -1643,6 +1680,8 @@ def remember_video_geometry(prefs):
         return
     for c in clients if isinstance(clients, list) else []:
         if isinstance(c, dict) and c.get("class") == VIDEO_APP_ID:
+            if bool(c.get("pinned")) != video_pinned(prefs):
+                return  # it missed the placement rule: don't learn that spot
             (x, y), (w, h) = c.get("at") or (0, 0), c.get("size") or (0, 0)
             geometry = {"x": int(x), "y": int(y), "w": int(w), "h": int(h)}
             if saved_geometry({"videoGeometry": geometry}) and geometry != prefs.get("videoGeometry"):
@@ -1651,12 +1690,12 @@ def remember_video_geometry(prefs):
             return
 
 
-def set_video(player, prefs, show, pinned=True):
+def set_video(player, prefs, show):
     """Show or hide the video window."""
     if show:
         if not has_video(player.snapshot()):
             raise ApiError("no_video", "This episode has no video")
-        hyprctl("repl", video_rule_lua(saved_geometry(prefs), pinned))
+        place_video_window(prefs)
         try:  # a player started before --osc=no still has its controls: hide them
             player.command("script-message", "osc-visibility", "never", "no-osd")
         except ApiError:
@@ -1794,6 +1833,9 @@ def load_into_mpv(item, prefs, position, skip_last=0):
         raise ApiError("not_found", "That episode has no playable audio link")
     player = ensure_mpv(prefs)
     with player:
+        if player.get("options/vid") == "auto":
+            # The video window is on and this episode may open it again.
+            place_video_window(prefs)
         title = item.get("name") or "Legato"
         if item.get("show"):
             title = "%s — %s" % (title, item["show"])
@@ -2415,7 +2457,7 @@ def cmd_video(args):
         prefs = load_prefs()
         with require_player() as player:
             show = not video_shown(player.snapshot()) if args.value == "toggle" else args.value == "on"
-            set_video(player, prefs, show, pinned=not args.unpinned)
+            set_video(player, prefs, show)
         view = poll_after_change(load_playback(), prefs)
     out(view)
 
@@ -2430,6 +2472,27 @@ def cmd_boost(args):
         with player:
             apply_boost(player, on)
     out({"boost": on})
+
+
+def cmd_videopin(args):
+    """Always on top for the video window (its right-click menu): pins or
+    unpins the open window now, and new windows open the same way."""
+    prefs = load_prefs()
+    pinned = not video_pinned(prefs) if args.value == "toggle" else args.value == "on"
+    prefs["videoPinned"] = pinned
+    save_prefs(prefs)
+    hyprctl("dispatch", 'hl.dsp.window.pin({ action = "%s", window = "class:^%s$" })'
+            % ("on" if pinned else "off", VIDEO_APP_ID))
+    place_video_window(prefs)
+    player = Mpv.connect()
+    if player:
+        with player:
+            try:
+                player.command("set_property", "menu-data", video_menu(pinned))
+                player.command("show-text", "Always on top: %s" % ("on" if pinned else "off"), 1500)
+            except ApiError:
+                pass
+    out({"videoPinned": pinned})
 
 
 def cmd_trim(args):
@@ -2603,8 +2666,8 @@ def build_parser():
     p = sub.add_parser("volume"); p.add_argument("percent", type=int); p.set_defaults(fn=cmd_volume)
     p = sub.add_parser("speed"); p.add_argument("value"); p.set_defaults(fn=cmd_speed)
     p = sub.add_parser("trim"); p.add_argument("value"); p.set_defaults(fn=cmd_trim)
-    p = sub.add_parser("video"); p.add_argument("value", choices=("on", "off", "toggle"))
-    p.add_argument("--unpinned", action="store_true"); p.set_defaults(fn=cmd_video)
+    p = sub.add_parser("video"); p.add_argument("value", choices=("on", "off", "toggle")); p.set_defaults(fn=cmd_video)
+    p = sub.add_parser("videopin"); p.add_argument("value", choices=("on", "off", "toggle")); p.set_defaults(fn=cmd_videopin)
     p = sub.add_parser("boost"); p.add_argument("value", choices=("on", "off", "toggle")); p.set_defaults(fn=cmd_boost)
     sub.add_parser("sleepguard").set_defaults(fn=cmd_sleepguard)
     sub.add_parser("next").set_defaults(fn=cmd_next)
