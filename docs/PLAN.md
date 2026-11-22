@@ -239,6 +239,26 @@ first. Cody picked all of these. Each has a test.
   nothing next; a broken stream's EOF counted as finished; the wall clock
   for `lastSyncAt`; About's `Qt.openUrlExternally` outside rule 6's letter.
 
+### G. Release review (2026-11-22, go-public stage 3)
+
+An independent correctness review of everything changed since fca392b
+(phase F's fixes and E11-E14). Each finding reproduced first; each fix has
+a test that fails on the old code.
+
+- [x] G1 A resume Pocket Casts never confirmed (network down) still pushed
+  on pause when the last push was under 90 s old: the paused rule saw a
+  "recent" push. Now an explicit `unconfirmed` flag, set on "unverified"
+  and cleared by Pocket Casts' answer; nothing is pushed while it's set.
+- [x] G2 A gathered seek (the 300 ms burst) fired after Next or a new
+  episode and landed on the new one (and could run it past its end). The
+  panel cancels it on Next, Stop, Play and episode changes, and the seek
+  names its episode (`seek --episode`), which the bridge checks.
+- [x] G3 An Up Next removal that only succeeded on a later retry left
+  `atTop` set, so a replay was later switched away. The retry clears it.
+- [x] G4 A sleep guard whose D-Bus monitor ended reported success and
+  restarted every 3 s while paused. It fails now, so the back-off applies.
+- [x] G5 About's privacy text still said the last tab was saved.
+
 ### Release prep (go-public)
 
 - [ ] CLAUDE.md current: status, rules, platform facts, Credits

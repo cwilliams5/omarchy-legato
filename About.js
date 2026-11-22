@@ -30,9 +30,9 @@ var PRIVACY = "No telemetry and no servers of Legato's own: it talks only to Poc
   + "from static.pocketcasts.com, all without your token. Audio streams through mpv straight from each "
   + "podcast's own server (the address in its feed), which sees your IP address as with any podcast "
   + "app. Your login tokens, email and account ID are kept in ~/.local/state/omarchy-legato/auth.json, "
-  + "readable only by you (0600), next to the episode loaded, your volume and speed, and a 10-minute "
+  + "readable only by you (0600), next to the episode loaded, the player's settings, and a 10-minute "
   + "list of your shows; signing out deletes the tokens. Cover art is cached in "
-  + "~/.cache/omarchy-legato/art, and the tab you last opened is saved in ~/.config/omarchy/shell.json."
+  + "~/.cache/omarchy-legato/art, and the panel's settings in ~/.config/omarchy/shell.json."
 
 // "0.1.0" from manifest.json's text, or "" when it can't be read.
 function manifestVersion(text) {

@@ -459,6 +459,7 @@ Item {
     // A new episode started (autoplay, or another device's queue): the queue
     // and the in-progress list have both changed under us.
     if (nowUuid !== "" && previousUuid !== "" && nowUuid !== previousUuid) {
+      cancelSeek()
       upNextLoadedAt = 0
       inProgressLoadedAt = 0
       if (panelOpen) loadUpNext()
@@ -627,7 +628,7 @@ Item {
       // start a fresh guard a moment later if still wanted.
       var result = null
       try { result = JSON.parse(String(sleepGuardOut.text || "")) } catch (e) { result = null }
-      if (result && result.ok === true) {
+      if (result && result.ok === true && result.data && result.data.sleeping === true) {
         root._guardFailures = 0
         sleepGuardRestart.interval = 3000
         root.settle()
@@ -648,6 +649,7 @@ Item {
   }
 
   function unloadPlayer() {
+    cancelSeek()
     // --if-paused: should anything have resumed it since (a media key whose
     // event was missed), the bridge leaves it playing.
     call(["stop", "--if-paused"], function(result) {
@@ -706,11 +708,13 @@ Item {
 
   function next() {
     if (!authenticated) return false
+    cancelSeek()
     action(["next"], "", function() { root.upNextLoadedAt = 0; root.loadUpNext() })
     return true
   }
 
   function stop() {
+    cancelSeek()
     action(["stop"])
   }
 
@@ -719,13 +723,22 @@ Item {
   // as one seek 300 ms after the last, not one process and push per step.
   property real _seekTarget: -1  // an absolute seek waiting to go, or -1
   property real _seekDelta: 0    // relative steps waiting to go
+  property string _seekEpisode: ""  // the episode they're for (the bridge refuses another)
   property int _seekSerial: 0
+
+  // Next, Stop, another episode: a seek still waiting is for the old one.
+  function cancelSeek() {
+    seekDebounce.stop()
+    _seekTarget = -1
+    _seekDelta = 0
+  }
 
   function seek(seconds) {
     if (!playerActive) return
     var clamped = Math.max(0, Math.min(duration > 0 ? duration : seconds, seconds))
     optimistic({ position: clamped })
     localPosition = clamped
+    if (!seekDebounce.running) _seekEpisode = nowUuid
     _seekTarget = clamped
     _seekDelta = 0
     seekDebounce.restart()
@@ -737,6 +750,7 @@ Item {
     if (duration > 0) target = Math.min(target, duration - 1)
     optimistic({ position: target })
     localPosition = target
+    if (!seekDebounce.running) _seekEpisode = nowUuid
     if (_seekTarget >= 0) _seekTarget = target  // fold the step into the seek waiting to go
     else _seekDelta += delta
     seekDebounce.restart()
@@ -752,8 +766,9 @@ Item {
 
   function sendSeek() {
     var args = null
-    if (_seekTarget >= 0) args = ["seek", String(Math.round(_seekTarget))]
-    else if (_seekDelta !== 0) args = ["seek", "--relative", "--", String(_seekDelta)]
+    var episode = _seekEpisode !== "" ? ["--episode", _seekEpisode] : []
+    if (_seekTarget >= 0) args = ["seek"].concat(episode, [String(Math.round(_seekTarget))])
+    else if (_seekDelta !== 0) args = ["seek"].concat(episode, ["--relative", "--", String(_seekDelta)])
     _seekTarget = -1
     _seekDelta = 0
     if (!args) return
@@ -865,6 +880,7 @@ Item {
 
   function playItem(item, fromStart) {
     if (!item || !item.uuid) return
+    cancelSeek()
     var args = ["play", item.uuid]
     if (item.podcast) args.push("--podcast", item.podcast)
     if (fromStart) args.push("--from-start")

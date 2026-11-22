@@ -237,6 +237,18 @@ class Validation(unittest.TestCase):
         self.assertTrue(chain.startswith("@trim:") and ",@boost:" in chain)
         self.assertEqual(bridge.audio_filters({"boost": True}), "@boost:" + bridge.BOOST_FILTER)
 
+    def test_a_sleep_guard_whose_monitor_dies_reports_a_failure(self):
+        real = bridge.trusted_tool
+        before = signal.getsignal(signal.SIGTERM)
+        try:
+            with mock.patch.object(bridge, "trusted_tool",
+                                   lambda name: "/usr/bin/false" if name == "dbus-monitor" else real(name)):
+                result = run_bridge("sleepguard")
+        finally:
+            signal.signal(signal.SIGTERM, before)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "sleepguard")
+
     def test_sleep_is_read_from_dbus_monitor(self):
         lines = ["signal time=1 sender=:1.2 -> destination=(null destination) serial=9 path=/org/freedesktop/login1; "
                  "interface=org.freedesktop.login1.Manager; member=PrepareForSleep\n",
@@ -783,6 +795,23 @@ class EndToEnd(PlayerTestCase):
         self.assertNotIn(EP_1, self.fake["upnext"])
         self.assertEqual(bridge.load_playback()["pendingFinish"], [])
 
+    def test_a_removal_that_lands_on_retry_clears_at_top(self):
+        # Review finding: atTop stayed true when Up Next's removal only
+        # succeeded on a retry, so a replay was later switched away.
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.fake["fail"] = {"/up_next/remove": 1}
+        self.wait_for(lambda: self.fake["status"].get(EP_1) == bridge.STATUS_PLAYED
+                      or run_bridge("player", "--no-autoplay") and False)
+        self.assertIn(EP_1, self.fake["upnext"])
+        self.assertIs(bridge.load_playback()["atTop"], True)
+        state = bridge.load_playback()
+        state["pendingFinish"][0]["tried"] -= 60
+        bridge.save_playback(state)
+        run_bridge("player", "--no-autoplay")
+        self.assertNotIn(EP_1, self.fake["upnext"])
+        self.assertIs(bridge.load_playback()["atTop"], False)
+
     def test_toggle_with_no_player_resumes_the_last_episode(self):
         self.login()
         self.fake["progress"][EP_2] = 2
@@ -1099,6 +1128,47 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         run_bridge("stop")
         self.assertEqual(self.pushes(EP_1)[before:], [])
         self.assertEqual(self.fake["progress"][EP_1], 60)
+
+    def test_an_unconfirmed_resume_pushes_nothing_even_soon_after_a_pause(self):
+        # Review finding: within 90 s of the last push, the paused rule let
+        # a pause push a position Pocket Casts never confirmed.
+        self.play_then_pause()
+        self.fake["fail"] = {"/up_next/list": 1000}  # the network is down: nothing can ask
+        start = self.position()
+        self.assertTrue(run_bridge("resume")["data"]["playing"])
+        self.wait_for(lambda: self.position() >= start + 1.5)  # it plays on here a little
+        self.other_device(EP_1, 60)
+        before = len(self.pushes(EP_1))
+        run_bridge("pause")      # a pause soon after, by this panel
+        self.mpv_set_pause(False)
+        self.mpv_set_pause(True)  # and one by a media key
+        run_bridge("player")
+        run_bridge("stop")
+        self.assertEqual([b for b in self.pushes(EP_1)[before:] if b["uuid"] == EP_1], [])
+        self.assertEqual(self.fake["progress"][EP_1], 60)
+
+    def test_once_pocket_casts_answers_pushes_resume(self):
+        self.play_then_pause()
+        self.fake["fail"] = {"/up_next/list": 1}
+        run_bridge("resume")                      # unconfirmed...
+        self.assertIs(bridge.load_playback().get("unconfirmed"), True)
+        run_bridge("player")                      # ...the next poll asks, and it answers
+        self.assertFalse(bridge.load_playback().get("unconfirmed"))
+        before = len(self.pushes(EP_1))
+        run_bridge("pause")
+        self.assertEqual(len(self.pushes(EP_1)[before:]), 1)
+
+    def test_a_seek_meant_for_another_episode_is_dropped(self):
+        # Review finding: a gathered seek fired after Next landed on the
+        # next episode. The panel names the episode; the bridge checks it.
+        self.play_then_pause()
+        at = self.position()
+        before = len(self.pushes(EP_1))
+        view = run_bridge("seek", "--episode", EP_2, "--relative", "--", "30")["data"]
+        self.assertLess(abs(view["position"] - at), 1)
+        self.assertEqual(self.pushes(EP_1)[before:], [])
+        view = run_bridge("seek", "--episode", EP_1, "20")["data"]  # meant for this one: it lands
+        self.assertGreaterEqual(view["position"], 19)
 
     def test_a_stopped_player_skips_an_episode_finished_elsewhere(self):
         self.play_then_pause()

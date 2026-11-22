@@ -2150,6 +2150,8 @@ def retry_pending_finish(state):
             # the state lock while its requests time out.
             entry["tried"] = now
             tell_finished(entry)
+        if entry.get("removed") and entry["uuid"] == (state.get("episode") or {}).get("uuid"):
+            state["atTop"] = False  # off Up Next now: no longer what Pocket Casts thinks is playing
         if not (entry.get("played") and entry.get("removed")):
             keep.append(entry)
     state["pendingFinish"] = keep
@@ -2181,6 +2183,7 @@ def reopen_ended(state, position):
     state["pendingFinish"] = [p for p in state.get("pendingFinish") or [] if p.get("uuid") != uuid]
     state.update({"handledEnd": "", "checkServer": False, "position": float(position), "lastSyncAt": time.time()})
     state.pop("endedAutoplay", None)
+    state.pop("unconfirmed", None)
     try:
         push_position(episode, position)
         state["lastSyncPos"] = float(position)
@@ -2240,6 +2243,7 @@ def check_server(state, prefs, player=None):
                 player.close()
         state["handledEnd"] = uuid
         state["checkServer"] = False
+        state.pop("unconfirmed", None)
         save_playback(state)
         return "finished", state
 
@@ -2263,6 +2267,7 @@ def check_server(state, prefs, player=None):
             state["lastSyncPos"] = float(server)
             episode["playedUpTo"] = server
     state["checkServer"] = False
+    state.pop("unconfirmed", None)  # Pocket Casts has answered
     state["lastSyncAt"] = time.time()
     save_playback(state)
     return "same", state
@@ -2292,6 +2297,11 @@ def resume_loaded(player, state, prefs):
         return
     if outcome == "finished":
         raise ApiError("finished_elsewhere", "Finished on another device, and Up Next is empty")
+    if outcome == "unverified":
+        # It plays (you pressed play), but where it is wasn't confirmed:
+        # nothing is pushed until a poll gets Pocket Casts' answer (rule 2).
+        state["unconfirmed"] = True
+        save_playback(state)
     player.set("pause", False)
 
 
@@ -2361,14 +2371,15 @@ def poll(autoplay=True):
         if outcome in ("switched", "finished"):
             return poll_after_change(state, prefs)
         if outcome == "unverified":
-            state["checkServer"] = True  # no push until Pocket Casts answers
+            state["checkServer"] = True  # ask again next time
+            state["unconfirmed"] = True  # and push nothing until Pocket Casts answers
             save_playback(state)
             return player_view(snap, state, prefs)
         return poll_after_change(state, prefs)
     due = False
     if snap.get("pause") is False and now - float(state.get("lastSyncAt") or 0) >= SYNC_INTERVAL:
         due = True
-    elif (snap.get("pause") is True and moved_since_push(state)
+    elif (snap.get("pause") is True and moved_since_push(state) and not state.get("unconfirmed")
           and now - float(state.get("lastSyncAt") or 0) < RECHECK_AFTER):
         # Paused somewhere new (a seek from a media widget): send it. A paused
         # position left unsent from before an interruption (the machine slept
@@ -2426,7 +2437,9 @@ def sync_now(player, state, force=False):
     if not episode.get("uuid") or not isinstance(position, (int, float)):
         return
     state["position"] = float(position)
-    if player.get("eof-reached") is True:
+    if player.get("eof-reached") is True or state.get("unconfirmed"):
+        # At the end (it's played), or on a resume Pocket Casts never
+        # confirmed: nothing is pushed until it answers (rule 2).
         save_playback(state)
         return
     if not force:
@@ -2436,7 +2449,7 @@ def sync_now(player, state, force=False):
                 save_playback(state)
                 return
         elif state.get("checkServer"):
-            save_playback(state)
+            save_playback(state)  # playing, but not yet checked
             return
     try:
         push_position(episode, position)
@@ -2614,13 +2627,11 @@ def cmd_toggle(args):
                     at_end = player.get("eof-reached") is True
                     playing = player.get("pause") is False and not at_end
                     if args.action == "pause" or (args.action == "toggle" and playing):
-                        # Playing on a resume Pocket Casts never confirmed (it
-                        # couldn't be reached): nothing is pushed until it answers.
-                        unconfirmed = playing and state.get("checkServer") is True
                         player.set("pause", True)
                         state["checkServer"] = True
-                        # Pausing what was already paused sends nothing new.
-                        sync_now(player, state, force=playing and not unconfirmed)
+                        # Pausing what was already paused sends nothing new;
+                        # an unconfirmed resume sends nothing (sync_now).
+                        sync_now(player, state, force=playing)
                     else:
                         resume_loaded(player, state, prefs)
         if idle and args.action != "pause":
@@ -2632,6 +2643,13 @@ def cmd_toggle(args):
 def cmd_seek(args):
     with StateLock():
         state = load_playback()
+        loaded = (state.get("episode") or {}).get("uuid", "")
+        if args.episode and safe_uuid(args.episode) != loaded:
+            # The panel sends seeks after a short pause to gather steps; a
+            # Next or a new episode got there first. Skipping into the new
+            # one (or past its end) would be wrong: drop the seek.
+            out(poll_after_change(state, load_prefs()))
+            return
         with require_player() as player:
             # osd-msg-bar: the video window (if shown) shows where it went.
             if args.relative:
@@ -2715,10 +2733,9 @@ def pause_for_sleep():
         with player:
             if player.get("pause") is not False or player.get("eof-reached") is True:
                 return False
-            unconfirmed = state.get("checkServer") is True  # see cmd_toggle
             player.set("pause", True)
             state["checkServer"] = True
-            sync_now(player, state, force=not unconfirmed)
+            sync_now(player, state, force=True)  # nothing if unconfirmed (sync_now)
         return True
 
 
@@ -2738,7 +2755,11 @@ def cmd_sleepguard(args):
         sleeping = wait_for_sleep(proc.stdout)
     finally:
         proc.terminate()
-    paused = pause_for_sleep() if sleeping else False
+    if not sleeping:
+        # The monitor ended without announcing a sleep (D-Bus restarted, say):
+        # a failure, so the service backs off instead of restarting it at once.
+        raise ApiError("sleepguard", "The sleep monitor stopped before any sleep")
+    paused = pause_for_sleep()
     out({"sleeping": sleeping, "paused": paused})
 
 
@@ -2968,7 +2989,9 @@ def build_parser():
     p.add_argument("--from-start", action="store_true"); p.set_defaults(fn=cmd_play)
     for action in ("toggle", "pause", "resume"):
         sub.add_parser(action).set_defaults(fn=cmd_toggle, action=action)
-    p = sub.add_parser("seek"); p.add_argument("seconds", type=float); p.add_argument("--relative", action="store_true"); p.set_defaults(fn=cmd_seek)
+    p = sub.add_parser("seek"); p.add_argument("seconds", type=float); p.add_argument("--relative", action="store_true")
+    p.add_argument("--episode", default="")  # the episode the seek was meant for; refused if another is loaded
+    p.set_defaults(fn=cmd_seek)
     p = sub.add_parser("volume"); p.add_argument("percent", type=int); p.set_defaults(fn=cmd_volume)
     p = sub.add_parser("speed"); p.add_argument("value"); p.set_defaults(fn=cmd_speed)
     p = sub.add_parser("trim"); p.add_argument("value"); p.set_defaults(fn=cmd_trim)
