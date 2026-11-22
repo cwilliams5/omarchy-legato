@@ -226,6 +226,20 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   video track silently does nothing. The first video of a session takes
   about 2.5 s (GPU set-up). mpv lists an episode's cover art as a video
   track too (`albumart: true`).
+- **Omarchy's floating workspaces** have an open rule that sizes every new
+  window to about two thirds of the screen and centers it, except apps that
+  registered a float rule through `o.window` (`o.floating_apps`); the rule
+  is re-registered whenever a window opens there, so a plain
+  `hl.window_rule` loses to it. Their title bars (the hyprbars fork) follow
+  the `omarchy-floating-workspace` tag and honor the `hyprbars:no_bar`
+  rule. `hl.dsp.window.pin({ action = "on"|"off", window = ... })` pins.
+- **mpv's context menu** on Linux is the built-in context_menu.lua: it
+  opens on `script-message-to context_menu open` (the `context-menu`
+  command is for native menus elsewhere), reads `menu-data`, draws at the
+  pointer (top-left if the pointer is outside), and its font has no check
+  mark. Keys, menus and OSD settings set on a player only apply to that
+  player: anything new is applied again when the video window opens, for
+  players started by an older Legato.
 - **mpv's memory:** about 67 MB audio-only plus its buffer (capped at
   64 MB here, mpv's default is 150 MB); once a video has been shown, the
   NVIDIA driver stays mapped (~570 MB in all) until mpv exits. Paused, it

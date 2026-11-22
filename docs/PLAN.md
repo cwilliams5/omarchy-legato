@@ -184,3 +184,11 @@ of its own.
   own mpv, proven by socket peer credentials), old players get their
   controls hidden, and the decoder may drop frames so trimmed video catches
   up. Checked live and restored.
+- 2026-11-21 (later still): on a floating workspace the video window grew
+  Omarchy's title bar (dead minimize/maximize on a pinned window) and, a
+  few episodes on, opened big and unpinned (Omarchy's floating open rule
+  won over Legato's). Fixed: rule via o.window, named, re-sent before each
+  load while the video is on; hyprbars:no_bar; geometry only learned from a
+  window that got the rule. New: the window's right-click menu (Always on
+  top: On/Off, pause/play, hide), full-size text in it. Checked live on
+  floating workspace 1 and restored.

@@ -1517,6 +1517,9 @@ def start_mpv(prefs):
             # Just the picture: no on-screen controls, which would act on
             # the player behind Legato's back.
             "--osc=no",
+            # Text (its menu, "Always on top: on") at full size; scaled to a
+            # mini-player it came out about 6 px tall.
+            "--osd-scale-by-window=no",
             # With Trim Silence the sound jumps ahead at every cut pause; let
             # the decoder skip frames too, so the picture catches up sooner.
             "--framedrop=decoder+vo",
@@ -1649,8 +1652,9 @@ def video_pinned(prefs):
 
 def video_menu(pinned):
     """The video window's right-click menu (mpv's own context menu)."""
+    # Said in words: the menu's font has no check mark glyph.
     return [
-        {"title": "Always on top", "type": "checkbox", "state": ["checked"] if pinned else [],
+        {"title": "Always on top: %s" % ("On" if pinned else "Off"),
          "cmd": "script-message legato-video-pin toggle"},
         {"type": "separator"},
         {"title": "Pause / play", "cmd": "cycle pause"},
@@ -1696,8 +1700,12 @@ def set_video(player, prefs, show):
         if not has_video(player.snapshot()):
             raise ApiError("no_video", "This episode has no video")
         place_video_window(prefs)
-        try:  # a player started before --osc=no still has its controls: hide them
+        # Keys and menu for the window, again: a player started by an older
+        # Legato has neither.
+        bind_video_window_keys(player, prefs)
+        try:  # a player started by an older Legato: no controls, full-size text
             player.command("script-message", "osc-visibility", "never", "no-osd")
+            player.command("set_property", "osd-scale-by-window", False)
         except ApiError:
             pass
         # The first video of a session sets up the GPU: allow it a while.

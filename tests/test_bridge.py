@@ -1071,7 +1071,7 @@ class VideoWindow(PlayerTestCase):
         self.assertEqual(dispatch, 'hl.dsp.window.pin({ action = "off", window = "class:^legato-video$" })')
         self.assertIn("pin = false", [a for a in self.hypr if a[0] == "repl"][-1][1])
         with bridge.Mpv.connect() as player:
-            self.assertEqual(player.get("menu-data")[0]["state"], [])
+            self.assertEqual(player.get("menu-data")[0]["title"], "Always on top: Off")
         run_bridge("video", "on")
         self.assertIn("pin = false", [a for a in self.hypr if a[0] == "repl"][-1][1])
 
@@ -1096,8 +1096,9 @@ class VideoWindow(PlayerTestCase):
         self.assertEqual(bindings.get("MBTN_RIGHT"), "context-menu")
         with bridge.Mpv.connect() as player:
             menu = player.get("menu-data")
-        self.assertEqual(menu[0]["title"], "Always on top")
-        self.assertEqual(menu[0]["state"], ["checked"])
+        self.assertEqual(menu[0]["title"], "Always on top: On")
+        with bridge.Mpv.connect() as player:
+            self.assertFalse(player.get("osd-scale-by-window"))  # full-size text in a small window
         self.assertEqual(menu[0]["cmd"], "script-message legato-video-pin toggle")
 
     def test_an_audio_episode_has_no_video_to_show(self):
