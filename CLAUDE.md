@@ -351,7 +351,9 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
 ## Working on it
 
 - **Tests:** `tests/run` (Python with a real, muted mpv against a fake
-  Pocket Casts server, then node). About 70 s; nothing appears on screen.
+  Pocket Casts server, then node, then a QML syntax check with qmllint;
+  QML is otherwise only checked when the shell loads it, and a panel's
+  only when it opens). About 70 s; nothing appears on screen.
   Run before every commit. The fake server can drop requests the way a
   network does: `self.fake["fail"] = {"/sync/update_episode": 1}`.
 - **Live:** push, then `omarchy plugin update io.github.cwilliams5.legato
