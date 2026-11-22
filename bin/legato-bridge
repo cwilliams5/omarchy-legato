@@ -1517,6 +1517,9 @@ def start_mpv(prefs):
             # Just the picture: no on-screen controls, which would act on
             # the player behind Legato's back.
             "--osc=no",
+            # With Trim Silence the sound jumps ahead at every cut pause; let
+            # the decoder skip frames too, so the picture catches up sooner.
+            "--framedrop=decoder+vo",
             # mpv 0.41 reads the clipboard at start-up; a podcast player has
             # no use for it.
             "--clipboard-backends-clr",

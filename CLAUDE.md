@@ -232,7 +232,21 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   uses no CPU. An unloaded player can't receive media keys (no MPRIS player
   exists), which is what `unloadAfterMinutes` trades.
 - **mpv's on-screen controller** (osc.lua) loads even with `--no-config`;
-  `--osc=no` keeps the video window to just the picture.
+  `--osc=no` keeps the video window to just the picture, and
+  `script-message osc-visibility never` hides it on a player already
+  running.
+- **Hybrid GPUs** (Cody's laptop: Intel Iris Xe drives the display, an
+  NVIDIA RTX A2000 is render-only): libplacebo picked the NVIDIA GPU for
+  the video window (1.8 s to create the device, ~450 MB mapped, dGPU awake)
+  and once deadlocked mpv's video output (all threads waiting, IPC silent,
+  killable). With `VK_LOADER_DRIVERS_DISABLE=*nvidia*` (set by the bridge
+  only when NVIDIA drives no connected display) it uses the Intel GPU:
+  1.5 ms, ~98 MB, vaapi decoding. A hung player is detected (2 s answer
+  check) and ended by the watchdog; `ptrace_scope` is 1 here, so a hung
+  mpv can't be stack-traced without sudo.
+- **Trim with video:** the picture falls behind at each cut pause (the
+  Pocket Casts Android app does the same); `--framedrop=decoder+vo` helps it
+  catch up.
 - **mpv 0.41 reads the clipboard at start-up** (its Wayland clipboard
   backend); `--clipboard-backends-clr` stops it.
 - **Omarchy pauses no media on lock or suspend**, so Legato does it itself

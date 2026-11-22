@@ -178,3 +178,9 @@ of its own.
   paused player: 0% CPU, ~90 MB audio-only, ~570 MB once a video has been
   shown in it (GPU driver), which is what unloadAfterMinutes trades against
   media keys working.
+- 2026-11-21 (late): the video window froze (mpv's video output deadlocked
+  on the NVIDIA dGPU). Fixed: video renders on the display's GPU (Intel:
+  0.11 s to show, 98 MB, vaapi), a watchdog ends a hung player (only our
+  own mpv, proven by socket peer credentials), old players get their
+  controls hidden, and the decoder may drop frames so trimmed video catches
+  up. Checked live and restored.
