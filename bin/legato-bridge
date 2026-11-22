@@ -630,10 +630,12 @@ def read_bounded(stream, limit, headers=None, deadline=None):
     return b"".join(chunks)
 
 
-def http_raw(method, url, headers=None, data=None, timeout=HTTP_TIMEOUT, limit=API_MAX_BYTES):
+def http_raw(method, url, headers=None, data=None, timeout=None, limit=API_MAX_BYTES):
     """Return (status, body_bytes, headers). Never raises for HTTP status codes;
     raises ApiError for transport failures and for any body — success or error
-    — over its cap."""
+    — over its cap. The timeout is read when called, not when defined, so the
+    sleep guard's shorter one (HTTP_TIMEOUT set at run time) applies."""
+    timeout = HTTP_TIMEOUT if timeout is None else timeout
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("User-Agent", USER_AGENT)
     for key, value in (headers or {}).items():
@@ -656,7 +658,7 @@ def http_raw(method, url, headers=None, data=None, timeout=HTTP_TIMEOUT, limit=A
         raise ApiError("network", "Pocket Casts request failed (%s)" % err)
 
 
-def http(method, url, headers=None, data=None, timeout=HTTP_TIMEOUT, limit=API_MAX_BYTES):
+def http(method, url, headers=None, data=None, timeout=None, limit=API_MAX_BYTES):
     """Return (status, body_text, headers); see http_raw."""
     status, body, resp_headers = http_raw(method, url, headers, data, timeout, limit)
     return status, body.decode("utf-8", "replace"), resp_headers
@@ -719,15 +721,17 @@ def clear_auth():
 
 class StateLock:
     """An exclusive flock on the state directory's lock file, so a player poll
-    and a click never both decide what plays next."""
+    and a click never both decide what plays next. `name` picks another lock
+    file in the same directory (prefs.json has its own, `prefs_update`)."""
 
-    def __init__(self, timeout=10.0):
+    def __init__(self, timeout=10.0, name="lock"):
         self.timeout = timeout
+        self.name = name
         self.fd = -1
 
     def __enter__(self):
         with state_dir(create=True) as held:
-            self.fd = os.open("lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=held.fd)
+            self.fd = os.open(self.name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=held.fd)
         st = os.fstat(self.fd)
         if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid():
             os.close(self.fd)
@@ -1301,6 +1305,7 @@ class Mpv:
         self.next_id += 1
         line = json.dumps({"command": list(args), "request_id": request_id}) + "\n"
         try:
+            self.sock.settimeout(timeout)
             self.sock.sendall(line.encode("utf-8"))
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
@@ -1315,6 +1320,9 @@ class Mpv:
                     if reply.get("error") not in (None, "success"):
                         raise ApiError("player", "mpv: %s" % reply.get("error"))
                     return reply.get("data")
+                # This command's own deadline, not the socket's connect-time
+                # timeout (2 s), which would cut off a slow `vid auto`.
+                self.sock.settimeout(max(0.05, deadline - time.monotonic()))
                 chunk = self.sock.recv(65536)
                 if not chunk:
                     break
@@ -1741,7 +1749,10 @@ def remember_video_geometry(prefs):
             geometry = {"x": int(x), "y": int(y), "w": int(w), "h": int(h)}
             if saved_geometry({"videoGeometry": geometry}) and geometry != prefs.get("videoGeometry"):
                 prefs["videoGeometry"] = geometry
-                save_prefs(prefs)
+                # Saved into prefs as they are now, not as this caller read
+                # them: a toggle made meanwhile must not be undone.
+                with prefs_update() as fresh:
+                    fresh["videoGeometry"] = geometry
             return
 
 
@@ -1855,6 +1866,21 @@ def save_prefs(prefs):
     save_state("prefs.json", prefs)
 
 
+@contextlib.contextmanager
+def prefs_update(save=True):
+    """Change prefs.json: read, change and save it under its own lock, so two
+    changes at once (a toggle, and a poll learning where the video window
+    was moved) never undo each other. Callers apply the change to the player
+    inside it too, so the player ends up as the file says. The state lock
+    may be held around this one, never the reverse: no deadlock. `save=False`
+    reads them under the lock without writing (nothing changed)."""
+    with StateLock(timeout=5.0, name="prefs.lock"):
+        prefs = load_prefs()
+        yield prefs
+        if save:
+            save_prefs(prefs)
+
+
 def chip_item(item):
     """The fields worth keeping for the bar chip and the panel's hero."""
     if not item:
@@ -1937,7 +1963,10 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
     # Casts considers playing. If the top later changes, another device has
     # moved on to something else (see check_server).
     state = {"episode": chip_item(item), "lastSyncAt": time.time(), "lastSyncPos": position,
-             "position": position, "handledEnd": "", "atTop": bool(at_top)}
+             "position": position, "handledEnd": "", "atTop": bool(at_top),
+             # Episodes that ended here while Pocket Casts couldn't be told.
+             "pendingFinish": [p for p in previous.get("pendingFinish") or []
+                               if isinstance(p, dict) and p.get("uuid") != item.get("uuid")]}
     save_playback(state)
     if queue:
         try:
@@ -1957,9 +1986,14 @@ def player_view(snap, state, prefs, load_failed=False):
     active = bool(snap) and not snap.get("idle-active") and bool(snap.get("path"))
     duration = snap.get("duration") if active else None
     position = snap.get("time-pos") if active else None
+    # mpv doesn't pause at the end of an episode (keep-open): it sits there
+    # with pause off. Ended is not playing: no poll timer, and the idle
+    # unload can close it.
+    ended = active and snap.get("eof-reached") is True
     view = {
         "active": active,
-        "playing": active and snap.get("pause") is False,
+        "playing": active and snap.get("pause") is False and not ended,
+        "ended": ended,
         # Still opening the stream (no position yet) reads as buffering too,
         # rather than as playing in silence.
         "buffering": active and (snap.get("paused-for-cache") is True or not isinstance(position, (int, float))),
@@ -2001,21 +2035,115 @@ def next_in_up_next(skip_uuid):
 
 def finish_current(state, prefs, autoplay):
     """The episode reached its end: mark it played, take it off Up Next, and
-    start the next one if autoplay is on."""
+    start the next one if autoplay is on.
+
+    From then on it's never pushed as in progress again (sync_now, poll):
+    only playing it again here (play_again) undoes that. Whatever Pocket
+    Casts couldn't be told now (the network dropped) is retried on later
+    polls (`pendingFinish`), while the next episode plays too."""
     episode = state.get("episode") or {}
-    state["handledEnd"] = episode.get("uuid", "")
+    uuid = episode.get("uuid", "")
+    state["handledEnd"] = uuid
+    state["endedAutoplay"] = bool(autoplay)
+    state["lastSyncAt"] = time.time()
     save_playback(state)
-    try:
-        push_position(episode, episode.get("duration") or state.get("position") or 0, STATUS_PLAYED)
-        up_next_remove([episode.get("uuid")])
-    except ApiError:
-        pass
+    entry = {"uuid": uuid, "podcast": episode.get("podcast", ""), "duration": episode.get("duration"),
+             "position": episode.get("duration") or state.get("position") or 0,
+             "played": False, "removed": False, "at": time.time(), "tried": time.time()}
+    tell_finished(entry)
+    if entry["removed"]:
+        state["atTop"] = False  # off Up Next: no longer what Pocket Casts thinks is playing
+    if not (entry["played"] and entry["removed"]):
+        state["pendingFinish"] = [p for p in state.get("pendingFinish") or [] if p.get("uuid") != uuid] + [entry]
+    save_playback(state)
     if not autoplay:
         return state
-    item = next_in_up_next(episode.get("uuid", ""))
+    item = next_in_up_next(uuid)
     if not item:
         return state
-    return play_item(item, prefs, queue=False, at_top=True)
+    # Taken off Up Next, the next one is its top already; if that failed,
+    # play_now puts the next one on top (and atTop says what really is).
+    return play_item(item, prefs, queue=not entry["removed"], at_top=entry["removed"])
+
+
+def tell_finished(entry):
+    """Mark an episode played and take it off Up Next, each step on its own;
+    `entry` records which went through."""
+    if not entry.get("played"):
+        try:
+            push_position(entry, entry.get("position") or 0, STATUS_PLAYED)
+            entry["played"] = True
+        except ApiError:
+            pass
+    if not entry.get("removed"):
+        try:
+            up_next_remove([entry["uuid"]])
+            entry["removed"] = True
+        except ApiError:
+            pass
+    return entry
+
+
+def retry_pending_finish(state):
+    """Tell Pocket Casts about episodes that ended here while it couldn't be
+    reached. Given up after six hours: by then another device has had its
+    say. Runs only from a poll, never on a timer of its own."""
+    pending = state.get("pendingFinish") or []
+    if not pending:
+        return
+    keep = []
+    now = time.time()
+    for entry in pending:
+        if not isinstance(entry, dict) or not entry.get("uuid") or now - float(entry.get("at") or 0) > 6 * 3600:
+            continue
+        if now - float(entry.get("tried") or 0) >= 60:
+            # At most once a minute: with the network down, each try holds
+            # the state lock while its requests time out.
+            entry["tried"] = now
+            tell_finished(entry)
+        if not (entry.get("played") and entry.get("removed")):
+            keep.append(entry)
+    state["pendingFinish"] = keep
+    save_playback(state)
+
+
+def play_again(player, state, from_start):
+    """Play again an episode that played to its end here (and was marked
+    played): from the top, or from where it was dragged back to. That makes
+    it in progress again, and this machine produced that, so it's pushed at
+    once with no question to Pocket Casts (which would answer "played" and
+    stop it)."""
+    if from_start:
+        player.command("seek", 0, "absolute")
+    if player.get("pause") is not False:
+        player.set("pause", False)
+    position = 0.0
+    if not from_start:
+        at = player.get("time-pos")
+        position = float(at) if isinstance(at, (int, float)) else float(state.get("position") or 0)
+    reopen_ended(state, position)
+
+
+def reopen_ended(state, position):
+    """The state side of play_again: no longer ended, nothing to retry for
+    it, and its new position pushed as in progress."""
+    episode = state.get("episode") or {}
+    uuid = episode.get("uuid", "")
+    state["pendingFinish"] = [p for p in state.get("pendingFinish") or [] if p.get("uuid") != uuid]
+    state.update({"handledEnd": "", "checkServer": False, "position": float(position), "lastSyncAt": time.time()})
+    state.pop("endedAutoplay", None)
+    try:
+        push_position(episode, position)
+        state["lastSyncPos"] = float(position)
+        episode["playedUpTo"] = int(position)
+    except ApiError:
+        pass  # the next periodic push sends it
+    save_playback(state)
+
+
+def ended_here(state):
+    episode = state.get("episode") or {}
+    return bool(episode.get("uuid")) and state.get("handledEnd") == episode.get("uuid")
 
 
 # Resuming is where devices meet: this machine paused an episode, you carried
@@ -2095,12 +2223,20 @@ def resume_loaded(player, state, prefs):
     """Unpause the loaded episode once Pocket Casts has said what should play
     and from where. Raises when another device finished it and nothing is
     left to play."""
-    if player.get("pause") is False:
+    at_end = player.get("eof-reached") is True
+    if player.get("pause") is False and not at_end:
         return  # already playing (a media key got there first)
-    if player.get("eof-reached") is True:
-        # It played to its end here (autoplay off): play it again.
-        player.command("seek", 0, "absolute")
-        player.set("pause", False)
+    if at_end or ended_here(state):
+        # It played to its end here and is still loaded. With autoplay on,
+        # nothing followed it (Up Next was empty, or Pocket Casts didn't
+        # answer): play what's queued now, if anything is. Otherwise play it
+        # again: from the top, or from where it was dragged back to.
+        if at_end and state.get("endedAutoplay"):
+            item = next_in_up_next((state.get("episode") or {}).get("uuid", ""))
+            if item:
+                play_item(item, prefs)
+                return
+        play_again(player, state, from_start=at_end)
         return
     outcome, state = check_server(state, prefs, player)
     if outcome == "switched":
@@ -2151,6 +2287,17 @@ def poll(autoplay=True):
     if snap.get("eof-reached") is True and state.get("handledEnd") != episode.get("uuid"):
         state = finish_current(state, prefs, autoplay)
         return poll_after_change(state, prefs)
+    retry_pending_finish(state)
+    if snap.get("eof-reached") is True:
+        # Ended here and marked played: nothing to push or check until it's
+        # played again. (mpv doesn't pause at the end; the view says ended.)
+        save_playback(state)
+        return player_view(snap, state, prefs)
+    if ended_here(state) and snap.get("pause") is False and isinstance(position, (int, float)):
+        # Dragged back into an episode that ended here (a media widget's
+        # seek), and it plays on: it's in progress again.
+        reopen_ended(state, position)
+        return player_view(snap, state, prefs)
     now = time.time()
     if snap.get("pause") is True:
         # Whoever paused it (this panel, a media key, playerctl), the next
@@ -2183,7 +2330,10 @@ def poll(autoplay=True):
         remember_video_geometry(prefs)  # so a window closed with its own X reopens where it was
     with Mpv.connect() or contextlib.nullcontext() as fixer:
         if fixer:
-            heal_filters(fixer, snap, prefs)
+            # From prefs as they are now (a toggle may have landed since this
+            # poll began), under their lock, so a toggle isn't undone.
+            with prefs_update(save=False) as fresh:
+                heal_filters(fixer, snap, fresh)
     if due and isinstance(position, (int, float)):
         try:
             push_position(episode, position)
@@ -2211,19 +2361,34 @@ def moved_since_push(state):
 
 
 def sync_now(player, state, force=False):
-    """Push the current position right away. A pause or a seek (`force`)
-    always pushes. Otherwise (stop, skip, switching episodes) a paused
-    episode is pushed only if it moved since its last push: an untouched
-    paused position is old news, another device may have carried on from it
-    since, and pushing it again would rewind that device."""
+    """Push the current position right away, if this machine produced it.
+
+    `force`: it was just playing here, from where Pocket Casts confirmed (a
+    pause, or a seek while playing). Otherwise (stop, next, switching
+    episodes, a seek while paused) a playing episode is pushed unless its
+    resume is still unconfirmed (Pocket Casts couldn't be asked), and a
+    paused one only if it moved since its last push and that push was
+    recent (under RECHECK_AFTER, the poll's rule too). An older paused
+    position is old news: another device may have carried on from it since,
+    and pushing it would rewind that device; the next resume asks first.
+    An episode at its end is never pushed as in progress (it's played)."""
     episode = state.get("episode") or {}
     position = player.get("time-pos")
     if not episode.get("uuid") or not isinstance(position, (int, float)):
         return
     state["position"] = float(position)
-    if not force and player.get("pause") is True and not moved_since_push(state):
+    if player.get("eof-reached") is True:
         save_playback(state)
         return
+    if not force:
+        if player.get("pause") is not False:
+            recent = time.time() - float(state.get("lastSyncAt") or 0) < RECHECK_AFTER
+            if not (moved_since_push(state) and recent):
+                save_playback(state)
+                return
+        elif state.get("checkServer"):
+            save_playback(state)
+            return
     try:
         push_position(episode, position)
         state["lastSyncAt"] = time.time()
@@ -2397,12 +2562,16 @@ def cmd_toggle(args):
             with player:
                 idle = player.get("idle-active") is True or not player.get("path")
                 if not idle:
-                    if args.action == "pause" or (args.action == "toggle" and player.get("pause") is False):
-                        was_playing = player.get("pause") is False
+                    at_end = player.get("eof-reached") is True
+                    playing = player.get("pause") is False and not at_end
+                    if args.action == "pause" or (args.action == "toggle" and playing):
+                        # Playing on a resume Pocket Casts never confirmed (it
+                        # couldn't be reached): nothing is pushed until it answers.
+                        unconfirmed = playing and state.get("checkServer") is True
                         player.set("pause", True)
                         state["checkServer"] = True
                         # Pausing what was already paused sends nothing new.
-                        sync_now(player, state, force=was_playing)
+                        sync_now(player, state, force=playing and not unconfirmed)
                     else:
                         resume_loaded(player, state, prefs)
         if idle and args.action != "pause":
@@ -2420,36 +2589,43 @@ def cmd_seek(args):
             else:
                 player.command("seek", max(0.0, float(args.seconds)), "absolute")
             time.sleep(0.05)
-            sync_now(player, state, force=True)
+            playing = player.get("pause") is False and player.get("eof-reached") is not True
+            if playing and ended_here(state):
+                # Dragged back from the end of an episode that ended here: mpv
+                # plays on from there, so it's in progress again.
+                play_again(player, state, from_start=False)
+            else:
+                # While paused, sync_now's rule decides: a seek right after
+                # pausing is sent; later, the next resume asks Pocket Casts.
+                sync_now(player, state, force=playing and not state.get("checkServer"))
         view = poll_after_change(load_playback(), load_prefs())
     out(view)
 
 
 def cmd_volume(args):
-    prefs = load_prefs()
-    prefs["volume"] = max(0, min(100, int(args.percent)))
-    save_prefs(prefs)
-    player = Mpv.connect()
-    if player:
-        with player:
-            player.set("volume", prefs["volume"])
-    out({"volume": prefs["volume"]})
+    volume = max(0, min(100, int(args.percent)))
+    with prefs_update() as prefs:
+        prefs["volume"] = volume
+        player = Mpv.connect()
+        if player:
+            with player:
+                player.set("volume", volume)
+    out({"volume": volume})
 
 
 def cmd_speed(args):
-    prefs = load_prefs()
-    if args.value == "cycle":
-        current = clamp_speed(prefs.get("speed", 1.0))
-        later = [s for s in SPEEDS if s > current + 0.001]
-        speed = later[0] if later else SPEEDS[0]
-    else:
-        speed = clamp_speed(args.value)
-    prefs["speed"] = speed
-    save_prefs(prefs)
-    player = Mpv.connect()
-    if player:
-        with player:
-            player.set("speed", speed)
+    with prefs_update() as prefs:
+        if args.value == "cycle":
+            current = clamp_speed(prefs.get("speed", 1.0))
+            later = [s for s in SPEEDS if s > current + 0.001]
+            speed = later[0] if later else SPEEDS[0]
+        else:
+            speed = clamp_speed(args.value)
+        prefs["speed"] = speed
+        player = Mpv.connect()
+        if player:
+            with player:
+                player.set("speed", speed)
     out({"speed": speed})
 
 
@@ -2485,11 +2661,12 @@ def pause_for_sleep():
         if not player:
             return False
         with player:
-            if player.get("pause") is not False:
+            if player.get("pause") is not False or player.get("eof-reached") is True:
                 return False
+            unconfirmed = state.get("checkServer") is True  # see cmd_toggle
             player.set("pause", True)
             state["checkServer"] = True
-            sync_now(player, state, force=True)
+            sync_now(player, state, force=not unconfirmed)
         return True
 
 
@@ -2524,71 +2701,67 @@ def cmd_video(args):
 
 
 def cmd_boost(args):
-    prefs = load_prefs()
-    on = not (prefs.get("boost") is True) if args.value == "toggle" else args.value == "on"
-    prefs["boost"] = on
-    save_prefs(prefs)
-    player = Mpv.connect()
-    if player:
-        with player:
-            apply_boost(player, on)
+    with prefs_update() as prefs:
+        on = not (prefs.get("boost") is True) if args.value == "toggle" else args.value == "on"
+        prefs["boost"] = on
+        player = Mpv.connect()
+        if player:
+            with player:
+                apply_boost(player, on)
     out({"boost": on})
 
 
 def cmd_videopin(args):
     """Always on top for the video window (its right-click menu): pins or
     unpins the open window now, and new windows open the same way."""
-    prefs = load_prefs()
-    pinned = not video_pinned(prefs) if args.value == "toggle" else args.value == "on"
-    prefs["videoPinned"] = pinned
-    save_prefs(prefs)
-    hyprctl("dispatch", 'hl.dsp.window.pin({ action = "%s", window = "class:^%s$" })'
-            % ("on" if pinned else "off", VIDEO_APP_ID))
-    place_video_window(prefs)
-    player = Mpv.connect()
-    if player:
-        with player:
-            try:
-                player.command("set_property", "menu-data", video_menu(prefs))
-                player.command("show-text", "Always on top: %s" % ("on" if pinned else "off"), 1500)
-            except ApiError:
-                pass
+    with prefs_update() as prefs:
+        pinned = not video_pinned(prefs) if args.value == "toggle" else args.value == "on"
+        prefs["videoPinned"] = pinned
+        hyprctl("dispatch", 'hl.dsp.window.pin({ action = "%s", window = "class:^%s$" })'
+                % ("on" if pinned else "off", VIDEO_APP_ID))
+        place_video_window(prefs)
+        player = Mpv.connect()
+        if player:
+            with player:
+                try:
+                    player.command("set_property", "menu-data", video_menu(prefs))
+                    player.command("show-text", "Always on top: %s" % ("on" if pinned else "off"), 1500)
+                except ApiError:
+                    pass
     out({"videoPinned": pinned})
 
 
 def cmd_videotransparency(args):
     """How see-through the video window is (its right-click menu, or the
     Settings page): the open window changes now, new ones open that way."""
-    prefs = load_prefs()
-    prefs["videoTransparency"] = args.value
-    save_prefs(prefs)
-    place_video_window(prefs)  # the level, to the open window and the hook
-    player = Mpv.connect()
-    if player:
-        with player:
-            try:
-                player.command("set_property", "menu-data", video_menu(prefs))
-                player.command("show-text", "Transparency: %s" % transparency_label(args.value).lower(), 1500)
-            except ApiError:
-                pass
+    with prefs_update() as prefs:
+        prefs["videoTransparency"] = args.value
+        place_video_window(prefs)  # the level, to the open window and the hook
+        player = Mpv.connect()
+        if player:
+            with player:
+                try:
+                    player.command("set_property", "menu-data", video_menu(prefs))
+                    player.command("show-text", "Transparency: %s" % transparency_label(args.value).lower(), 1500)
+                except ApiError:
+                    pass
     out({"videoTransparency": args.value})
 
 
 def cmd_trim(args):
-    prefs = load_prefs()
-    if args.value == "cycle":
-        current = TRIM_ORDER.index(trim_level(prefs.get("trim")))
-        level = TRIM_ORDER[(current + 1) % len(TRIM_ORDER)]
-    elif args.value in TRIM_LEVELS:
-        level = args.value
-    else:
+    if args.value != "cycle" and args.value not in TRIM_LEVELS:
         raise ApiError("bad_args", "Trim Silence is off, mild, medium or madmax")
-    prefs["trim"] = level
-    save_prefs(prefs)
-    player = Mpv.connect()
-    if player:
-        with player:
-            apply_trim(player, level)
+    with prefs_update() as prefs:
+        if args.value == "cycle":
+            current = TRIM_ORDER.index(trim_level(prefs.get("trim")))
+            level = TRIM_ORDER[(current + 1) % len(TRIM_ORDER)]
+        else:
+            level = args.value
+        prefs["trim"] = level
+        player = Mpv.connect()
+        if player:
+            with player:
+                apply_trim(player, level)
     out({"trim": level})
 
 
@@ -2624,7 +2797,7 @@ def cmd_stop(args):
             end_hung_player(player)
             out(player_view({}, load_playback(), load_prefs()))
             return
-        if player and args.if_paused and player.get("pause") is False:
+        if player and args.if_paused and player.get("pause") is False and player.get("eof-reached") is not True:
             # The panel's idle unload, but something (a media key) resumed
             # playback since: leave it playing.
             with player:

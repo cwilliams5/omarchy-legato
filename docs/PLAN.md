@@ -160,6 +160,66 @@ of its own.
   (new window at 30%, survives a rule re-evaluation, back to solid at 0);
   Cody to try it on the real one.
 
+### F. Fresh-eyes review (2026-11-21, second session)
+
+Two independent reviews (bridge, QML), each finding checked against the
+code before it was taken; the worst reproduced against the fake server
+first. Cody picked all of these. Each has a test.
+
+- [x] F1 **An episode that ended here was set back to in progress.** mpv
+  doesn't pause at the end (keep-open: `pause` stays off), so the view
+  said playing: the poll timer kept running, each poll after 30 s pushed
+  the end position as in progress, the idle unload never fired, and Play
+  paused instead (pushing in progress again). Hit whenever autoplay was off
+  or Up Next ran out. Now: an `ended` state, no pushes at the end, Play
+  plays what was queued since or the episode again (`play_again`, which
+  pushes it as in progress itself), dragging back from the end the same.
+- [x] F2 **A skip or seek while paused pushed without asking**, so coming
+  back after listening on the phone and skipping back first rewound the
+  phone. Stop, Next, switching and the idle unload did the same with a
+  paused position whose push failed before a sleep. One rule now (CLAUDE.md
+  rule 1): paused, push only if moved and the last push was under 90 s
+  ago; nothing while a resume is unconfirmed, not even on pause.
+- [x] F3 The episode in the player, right-clicked in In Progress, New or a
+  show page: Play reloaded it from Pocket Casts' older position; Remove or
+  Move to bottom took it off the top of Up Next, which the next resume read
+  as another device moving on. Now it offers only Play/Pause; `q`, `m` and
+  the row buttons refuse it ("Next moves on").
+- [x] F4 A "played" mark or Up Next removal that failed at an episode's
+  end (network blip) is retried by later polls (`pendingFinish`, once a
+  minute, six hours); the removal no longer depends on the mark; the next
+  episode is put on top properly when the removal failed.
+- [x] F5 The sleep guard's 4 s request timeout never applied (a default
+  argument bound at definition); mpv commands waiting over 2 s (a slow
+  `vid auto`) failed on the socket's connect timeout.
+- [x] F6 prefs.json races: every change under its own lock
+  (`prefs_update`), applied to mpv inside it; the poll re-reads prefs
+  before repairing filters or saving the video window's spot. In the
+  panel, a poll that began before a change is dropped for a fresh one.
+- [x] F7 Seeks: holding `f`/`b`, wheel steps over the progress bar and
+  right-clicks on the chip sent one bridge process and push each (busy
+  errors, overshoot); now one seek per burst. A sideways swipe over the
+  progress bar no longer seeks back.
+- [x] F8 `x` (speed) never worked: the shell's key catcher takes `x` as
+  delete. Speed is `p`; `x`/Delete take the highlighted episode off Up
+  Next.
+- [x] F9 A list reload asked for while that list was loading was dropped
+  (two quick queue changes left the lists wrong for 5 minutes).
+- [x] F10 Switching tabs overwrote "Tab to open first" (and rewrote
+  shell.json each time); it no longer saves.
+- [x] F11 Errors from speed (keybind) and volume changes with the panel
+  closed now reach the OSD.
+- [x] F12 The scrolling title froze mid-scroll when paused; it goes back
+  to the start.
+- [x] F13 The sleep guard backs off when it can't stay up (6 s doubling,
+  gives up after five and says so), and polls only after a real sleep.
+- Not taken (lower value, noted for later): concurrent token refreshes
+  could sign you out if Pocket Casts rotates refresh tokens (unconfirmed);
+  keyboard focus after signing in; the hero hidden while signed out with
+  audio playing; `cmd_next` removing the current episode before finding
+  nothing next; a broken stream's EOF counted as finished; the wall clock
+  for `lastSyncAt`; About's `Qt.openUrlExternally` outside rule 6's letter.
+
 ### Release prep (go-public)
 
 - [ ] CLAUDE.md current: status, rules, platform facts, Credits
@@ -231,3 +291,7 @@ of its own.
   floating workspace (Omarchy's tag rule forces opacity 1 and wins), the
   window's own property can; a window.open hook covers windows mpv opens
   later. The menu's check mark draws as a box, its submenu arrow draws.
+  Then a fresh-eyes review (two independent reviewers, findings checked
+  against the code): phase F, all fixed with tests (79 Python, 26 node).
+  The worst: an episode finished here was set back to in progress, and a
+  skip while paused could rewind the phone.

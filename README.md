@@ -76,7 +76,7 @@ Click the bar chip to open the panel. The first time, it asks you to sign in.
 | Scroll       | Volume ±5               |
 
 The panel has tabs for Up Next, In Progress, New releases and Podcasts. It
-also has a seek bar, skip back and forward, stop, playback speed (0.8× to 3×),
+also has a seek bar, skip back and forward, stop, playback speed (0.8× to 3×, `p`),
 and Trim Silence (Off, Mild, Medium, Mad Max: the same levels as the Pocket
 Casts apps), which cuts the pauses before the speed-up applies, and Volume Boost (`o`),
 which makes voices louder the way the Pocket Casts apps do (+10 dB, with a
@@ -87,12 +87,21 @@ opens it in a small floating window, pinned on every workspace in the
 bottom-right corner, without taking focus; move or resize it and it opens
 there next time. Closing it (its ×, or `q` inside it) hides the video and
 the episode plays on. Right-click it for a menu: Always on top (on every
-workspace, above other windows; remembered), pause or play, hide.
+workspace, above other windows; remembered), Transparency (off to 80%, to
+see your desktop through it; remembered), pause or play, hide. Both are on
+the Settings page too.
 
 **Settings:** the gear in the panel's header (or `g`) lists every setting
 below and saves changes as you make them. **Right-click** an episode for a
 menu: play, move to the top or bottom of Up Next (play next or last for
-one not queued), remove from Up Next, mark played or unplayed.
+one not queued), remove from Up Next, mark played or unplayed. The episode
+in the player only offers play or pause: Next (`n`) moves on from it. `x`
+or Delete takes the highlighted episode off Up Next.
+
+**At the end of an episode** with nothing to follow (autoplay off, or Up
+Next empty), Legato stops there and Pocket Casts has it as played. Play
+then starts what you've queued since (with autoplay on), or the episode
+again.
 
 **Before sleep:** while an episode is loaded, Legato holds a short logind
 sleep delay. When the computer is about to sleep (a closed lid, say) it

@@ -27,6 +27,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 import urllib.parse
 from unittest import mock
 
@@ -188,6 +189,38 @@ class Validation(unittest.TestCase):
         self.assertTrue(bridge.has_video({"track-list": [{"type": "video"}, {"type": "audio"}]}))
         self.assertFalse(bridge.has_video({"track-list": [{"type": "video", "albumart": True}, {"type": "audio"}]}))
         self.assertFalse(bridge.has_video({}))
+
+    def test_the_sleep_guards_short_timeout_reaches_requests(self):
+        seen = []
+
+        class Opener:
+            def open(self, req, timeout=None):
+                seen.append(timeout)
+                raise urllib.error.URLError("offline")
+
+        with mock.patch.object(bridge, "opener", lambda: Opener()), mock.patch.object(bridge, "HTTP_TIMEOUT", 4):
+            with self.assertRaises(bridge.ApiError):
+                bridge.http_raw("POST", "https://api.pocketcasts.com/x")
+        self.assertEqual(seen, [4])
+
+    def test_an_mpv_command_may_wait_longer_than_the_socket_timeout(self):
+        ours, theirs = socket.socketpair()
+        ours.settimeout(0.3)  # as if connected with a short timeout
+
+        def answer():
+            line = theirs.makefile("rb").readline()
+            time.sleep(0.6)
+            theirs.sendall(json.dumps({"request_id": json.loads(line)["request_id"], "error": "success",
+                                       "data": "auto"}).encode() + b"\n")
+
+        thread = threading.Thread(target=answer)
+        thread.start()
+        try:
+            self.assertEqual(bridge.Mpv(ours).command("set_property", "vid", "auto", timeout=3), "auto")
+        finally:
+            thread.join()
+            ours.close()
+            theirs.close()
 
     def test_volume_boost_is_ten_db_into_a_limiter_after_trim(self):
         self.assertIn("level_in=3.1623", bridge.BOOST_FILTER)  # +10 dB, Pocket Casts' 1000 mB
@@ -398,6 +431,11 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(length) or b"{}")
         path = urllib.parse.urlsplit(self.path).path
         s["log"].append((path, body))
+        fails = s.setdefault("fail", {})
+        if fails.get(path, 0) > 0:  # a dropped request, as when the network goes
+            fails[path] -= 1
+            self.reply(503, {})
+            return
         token = (self.headers.get("Authorization") or "").replace("Bearer ", "")
         if path == "/user/login_pocket_casts":
             if body.get("password") == PASSWORD:
@@ -655,6 +693,88 @@ class EndToEnd(PlayerTestCase):
         stopped = run_bridge("stop")["data"]
         self.assertFalse(stopped["active"])
         self.assertFalse(self.mpv_running())
+
+    def test_an_episode_finished_here_stays_played(self):
+        """Autoplay off (or nothing left in Up Next): the episode ends here,
+        is marked played, and nothing afterwards (later polls, the idle
+        unload, Stop) sets it back to in progress."""
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.wait_for(lambda: self.fake["status"].get(EP_1) == bridge.STATUS_PLAYED
+                      or run_bridge("player", "--no-autoplay") and False)
+        view = run_bridge("player", "--no-autoplay")["data"]
+        self.assertFalse(view["playing"])  # ended: no poll timer, and the idle unload may close it
+        state = bridge.load_playback()
+        state["lastSyncAt"] -= 31  # the next poll, half a minute on
+        bridge.save_playback(state)
+        run_bridge("player", "--no-autoplay")
+        run_bridge("stop", "--if-paused")      # the idle unload
+        self.assertFalse(self.mpv_running())
+        last = self.writes("/sync/update_episode")[-1]
+        self.assertEqual((last["uuid"], last["status"]), (EP_1, bridge.STATUS_PLAYED))
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
+
+    def end_without_autoplay(self):
+        """Play One to its end with autoplay off; returns once it's marked played."""
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.wait_for(lambda: self.fake["status"].get(EP_1) == bridge.STATUS_PLAYED
+                      or run_bridge("player", "--no-autoplay") and False)
+        return run_bridge("player", "--no-autoplay")["data"]
+
+    def test_play_after_the_end_plays_it_again(self):
+        view = self.end_without_autoplay()
+        self.assertTrue(view["ended"])
+        played = run_bridge("resume")["data"]
+        self.assertTrue(played["playing"])
+        self.assertFalse(played["ended"])
+        self.assertLess(played["position"], 2)
+        last = self.writes("/sync/update_episode")[-1]
+        self.assertEqual((last["uuid"], last["status"], last["position"]), (EP_1, bridge.STATUS_IN_PROGRESS, 0))
+        # Pocket Casts' "played" from before must not stop it a while later.
+        state = bridge.load_playback()
+        state["lastSyncAt"] -= 600
+        bridge.save_playback(state)
+        self.assertTrue(run_bridge("player", "--no-autoplay")["data"]["playing"])
+        self.assertTrue(self.mpv_running())
+        # And at its end again, it's marked played again.
+        self.wait_for(lambda: run_bridge("player", "--no-autoplay")["data"]["ended"])
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
+
+    def test_dragged_back_from_the_end_it_plays_on_in_progress(self):
+        self.end_without_autoplay()
+        view = run_bridge("seek", "1")["data"]
+        self.assertTrue(view["playing"])
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_IN_PROGRESS)
+        self.assertEqual(bridge.load_playback()["handledEnd"], "")
+
+    def test_play_at_the_end_takes_what_was_queued_since(self):
+        self.fake["upnext"] = [EP_1]
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        # Autoplay on, but nothing follows: it ends and stays there.
+        view = self.wait_for(lambda: (lambda v: v if v["ended"] else None)(run_bridge("player")["data"]))
+        self.assertFalse(view["playing"])
+        self.fake["upnext"].append(EP_2)  # queued later, on the phone
+        played = run_bridge("resume")["data"]
+        self.assertEqual(played["item"]["uuid"], EP_2)
+        self.assertEqual(self.fake["upnext"][0], EP_2)
+
+    def test_a_played_mark_that_failed_is_retried(self):
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.fake["fail"] = {"/sync/update_episode": 1, "/up_next/remove": 1}
+        # Two plays on (autoplay); One is still unmarked and on Up Next.
+        self.wait_for(lambda: (lambda v: v if v["item"] and v["item"]["uuid"] == EP_2 else None)(run_bridge("player")["data"]))
+        self.assertEqual(self.fake["upnext"][0], EP_2)  # put on top all the same
+        self.assertFalse(bridge.load_playback()["atTop"] is False)
+        state = bridge.load_playback()
+        state["pendingFinish"][0]["tried"] -= 60  # a minute on
+        bridge.save_playback(state)
+        run_bridge("player")  # the next poll tells Pocket Casts
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
+        self.assertNotIn(EP_1, self.fake["upnext"])
+        self.assertEqual(bridge.load_playback()["pendingFinish"], [])
 
     def test_toggle_with_no_player_resumes_the_last_episode(self):
         self.login()
@@ -930,6 +1050,49 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         self.assertEqual(self.pushes(EP_1)[before:], [])
         self.assertEqual(self.fake["progress"][EP_1], 60)
 
+    def test_a_skip_while_paused_never_pushes_an_old_position(self):
+        self.play_then_pause()
+        self.other_device(EP_1, 60)  # listened on, on the phone
+        self.age_last_push(600)
+        before = len(self.pushes(EP_1))
+        run_bridge("seek", "--relative", "--", "-10")  # back here: skip back first
+        self.assertEqual(self.pushes(EP_1)[before:], [])
+        self.assertEqual(self.fake["progress"][EP_1], 60)
+        run_bridge("resume")  # the resume asks, and the phone's place wins
+        self.wait_for(lambda: self.position() >= 59)
+
+    def test_a_skip_right_after_pausing_is_sent(self):
+        self.play_then_pause()
+        before = len(self.pushes(EP_1))
+        run_bridge("seek", "20")
+        sent = [b["position"] for b in self.pushes(EP_1)[before:]]
+        self.assertEqual(len(sent), 1)
+        self.assertIn(sent[0], (19, 20))  # mpv reads 19.98 right after the seek
+
+    def test_stop_and_switching_never_push_a_position_unsent_before_sleep(self):
+        self.play_then_pause()
+        with bridge.Mpv.connect() as player:
+            player.command("seek", 30, "absolute")  # moved while paused, never sent...
+        self.age_last_push(600)                     # ...and then the machine slept
+        self.other_device(EP_1, 60)
+        before = len(self.pushes(EP_1))
+        run_bridge("play", EP_3, "--podcast", PODCAST_B)
+        run_bridge("stop")
+        self.assertEqual(self.pushes(EP_1)[before:], [])
+        self.assertEqual(self.fake["progress"][EP_1], 60)
+
+    def test_pausing_a_resume_pocket_casts_never_confirmed_pushes_nothing(self):
+        self.play_then_pause()
+        self.age_last_push(600)
+        self.fake["fail"] = {"/up_next/list": 1}  # the resume can't ask
+        self.assertTrue(run_bridge("resume")["data"]["playing"])
+        self.other_device(EP_1, 60)
+        before = len(self.pushes(EP_1))
+        run_bridge("pause")
+        run_bridge("stop")
+        self.assertEqual(self.pushes(EP_1)[before:], [])
+        self.assertEqual(self.fake["progress"][EP_1], 60)
+
     def test_a_stopped_player_skips_an_episode_finished_elsewhere(self):
         self.play_then_pause()
         run_bridge("stop")
@@ -1196,6 +1359,32 @@ class ShowSkips(PlayerTestCase):
         self.assertLess(time.monotonic() - started, 9)
         self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
         self.assertEqual(view["item"]["uuid"], EP_2)
+
+
+class PrefsLock(TempHome):
+    """prefs.json is changed from several processes at once (a click, the
+    bar's poll); none may undo another's change."""
+
+    def test_learning_the_window_spot_never_undoes_a_toggle(self):
+        stale = bridge.load_prefs()   # a poll read prefs...
+        run_bridge("boost", "on")     # ...a toggle landed meanwhile...
+        moved = [{"class": "legato-video", "pinned": True, "at": [900, 600], "size": [300, 170]}]
+        with mock.patch.object(bridge, "hyprctl", lambda *a: json.dumps(moved)):
+            bridge.remember_video_geometry(stale)  # ...and the poll saves where the window went
+        prefs = bridge.load_prefs()
+        self.assertIs(prefs["boost"], True)
+        self.assertEqual(prefs["videoGeometry"], {"x": 900, "y": 600, "w": 300, "h": 170})
+
+    def test_changes_wait_for_each_other(self):
+        done = []
+        with bridge.StateLock(name="prefs.lock"):
+            worker = threading.Thread(target=lambda: done.append(run_bridge("trim", "mild")))
+            worker.start()
+            time.sleep(0.3)
+            self.assertTrue(worker.is_alive())  # waiting its turn, not writing over
+        worker.join(5)
+        self.assertEqual(done[0]["data"]["trim"], "mild")
+        self.assertEqual(bridge.load_prefs()["trim"], "mild")
 
 
 class AboutTests(TempHome):

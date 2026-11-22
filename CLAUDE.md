@@ -23,9 +23,11 @@ menu, pause-and-save before sleep. Speed, Trim Silence and Volume Boost are
 global and Legato's own (the Android app doesn't sync effects; PLAN B4).
 Each show's skip intro and outro (which do sync) are honored.
 
-Lid-close test passed. Open (docs/PLAN.md, phase E): Cody to confirm the
-video window's right-click menu (E8, fixed) and its transparency (E11,
-new); then screenshots (D1) and release prep. Drag to reorder (E6) is
+Lid-close test passed. A fresh-eyes review (PLAN phase F) found and fixed
+sync bugs (an episode finished here was set back to in progress; a skip
+while paused could rewind the phone) and a dozen smaller ones. Open: Cody
+to confirm the video window's right-click menu (E8) and transparency
+(E11); then screenshots (D1) and release prep. Drag to reorder (E6) is
 decided not for v1.
 
 ## What Legato is
@@ -81,7 +83,8 @@ what the API lists, or touch the user's Hyprland config.
     choices in the bridge's `prefs.json` (`volume`, `speed`, `trim`,
     `boost`, `videoGeometry`, `videoPinned`, `videoTransparency`)
   - state `$XDG_STATE_HOME/omarchy-legato/` (auth.json, playback.json,
-    prefs.json, podcasts-cache.json, lock; all 0600, folder 0700)
+    prefs.json, podcasts-cache.json, lock, prefs.lock; all 0600, folder
+    0700)
   - cache `$XDG_CACHE_HOME/omarchy-legato/art/`
   - runtime `$XDG_RUNTIME_DIR/omarchy-legato/mpv.sock`
   - IPC targets `legato` (playPause, next, skipBack, skipForward, stop,
@@ -122,12 +125,18 @@ docs/PLAN.md         what's left to build
 ## Rules that must not be broken (and why)
 
 1. **Never push a position this machine didn't just produce.** A paused
-   episode that hasn't moved since its last push is never pushed again: not
-   on stop, skip, switching episodes, idle unload, or a second pause
-   (`sync_now` without `force`, `save_outgoing`). Why: Pocket Casts keeps the
-   last write, so re-sending an old position rewinds the phone. The original
-   did this; it was reproduced live on 2026-11-21 (phone at 25:00, rewound
-   to 3:20 within 12 seconds of resuming on the laptop).
+   episode is pushed (stop, next, switching episodes, idle unload, a seek
+   or skip while paused: `sync_now` without `force`, `save_outgoing`) only
+   if it moved since its last push *and* that push was under
+   `RECHECK_AFTER` (90 s) ago; later, the next resume asks first. Nothing
+   is pushed while a resume is unconfirmed (Pocket Casts couldn't be
+   asked: `checkServer` set while playing), not even on pause. An episode
+   that ended here is never pushed as in progress (only `play_again`
+   reopens it). Why: Pocket Casts keeps the last write, so re-sending an
+   old position rewinds the phone. The original did this; it was
+   reproduced live on 2026-11-21 (phone at 25:00, rewound to 3:20 within
+   12 seconds of resuming on the laptop). A fresh-eyes review found two
+   more ways in (PLAN F1, F2), both now tested.
 2. **Every resume asks Pocket Casts first** (`check_server`): the top of Up
    Next and this episode's record. Its answer wins: seek to where another
    device left off, follow it to a different episode, or stop if it finished
@@ -181,6 +190,16 @@ docs/PLAN.md         what's left to build
   top of Up Next; `playback.json`'s `atTop` records whether this machine's
   episode was put there, so a different top later means another device moved
   on.
+- **The end of an episode:** mpv (keep-open) doesn't pause there: it sits
+  with `pause` off and `eof-reached` on. The bridge's view says `ended`, not
+  `playing`, so the poll timer stops and the idle unload can close it.
+  `finish_current` marks it played and takes it off Up Next (each step on
+  its own; whatever fails waits in `pendingFinish` and a later poll retries
+  it, once a minute at most, for six hours), then autoplays. Play on an
+  ended episode starts what was queued since (if autoplay was on) or plays
+  it again (`play_again`, which pushes it as in progress itself, since
+  Pocket Casts would say "played" and stop it). Dragging back from the end
+  does the same.
 - **Idle unload:** paused for `unloadAfterMinutes` (15), the player closes
   (`stop --if-paused`). The next play goes through `resume_last`, which asks
   Pocket Casts what to play.
@@ -191,12 +210,22 @@ docs/PLAN.md         what's left to build
   legato-bridge sleepguard`. The guard waits on `dbus-monitor` for logind's
   PrepareForSleep, then pauses a playing episode, pushes its position (4 s
   deadline), sets `checkServer`, and exits, releasing the delay; the
-  service starts a fresh guard 3 s later. A paused position that missed its
-  push before a sleep is never pushed blind afterwards (the next resume
-  asks first).
+  service starts a fresh guard 3 s later. A guard that fails instead
+  waits longer each time (6 s, doubling) and after five failures in a row
+  the service gives up and says so, until the next episode is loaded. A
+  paused position that missed its push before a sleep is never pushed
+  blind afterwards (the next resume asks first).
 - **Effects:** speed, Trim Silence (`@trim`, first in mpv's filter chain)
   and Volume Boost (`@boost`, last) are global, in `prefs.json`; mpv's own
-  scaletempo2 follows them. Each show's skip intro/outro comes from the
+  scaletempo2 follows them. Every change to `prefs.json` goes through
+  `prefs_update()` (its own `prefs.lock`, the change applied to mpv inside
+  it), and the poll re-reads prefs under it before repairing filters or
+  saving the video window's spot, so no two changes undo each other.
+- **The panel's own races:** a poll that began before a change made in the
+  panel (`optimistic`, `_changeSerial`) is dropped for a fresh one. Seeks
+  and skips show at once and go to the bridge as one seek 300 ms after the
+  last step. A list reload asked for mid-load runs again when the load
+  answers. Each show's skip intro/outro comes from the
   subscriptions list (`start=` and `end=-N` on loadfile).
 
 ## Platform facts this depends on (re-check after updates)
@@ -296,6 +325,14 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   catch up.
 - **mpv 0.41 reads the clipboard at start-up** (its Wayland clipboard
   backend); `--clipboard-backends-clr` stops it.
+- **mpv at the end of a file** (`--keep-open=yes`): `eof-reached` turns
+  on but `pause` stays off (tested, mpv 0.41). Seeking back makes it play
+  on from there.
+- **The shell's `PanelKeyCatcher`** takes `x`, `X` and Delete as
+  `deleteRequested` before `textKey` sees them (so `x` can't be a panel
+  key); **`PanelSlider`'s wheel** reads a zero vertical delta (a sideways
+  swipe) as a step back, so the progress bar lets only vertical wheel
+  events through.
 - **Omarchy pauses no media on lock or suspend**, so Legato does it itself
   (the sleep guard). logind allows sleep delays up to 15 s here
   (`InhibitDelayMaxUSec`); NetworkManager holds its own delay, so the network
@@ -314,8 +351,9 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
 ## Working on it
 
 - **Tests:** `tests/run` (Python with a real, muted mpv against a fake
-  Pocket Casts server, then node). About 40 s; nothing appears on screen.
-  Run before every commit.
+  Pocket Casts server, then node). About 70 s; nothing appears on screen.
+  Run before every commit. The fake server can drop requests the way a
+  network does: `self.fake["fail"] = {"/sync/update_episode": 1}`.
 - **Live:** push, then `omarchy plugin update io.github.cwilliams5.legato
   --yes` (it refuses without `--yes`, and refuses a live clone with local
   changes) and `omarchy restart shell` (QML stays cached otherwise; the bar

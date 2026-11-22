@@ -99,6 +99,57 @@ test("right-click opens a menu and removes nothing; the gear's page comes from t
   for (const entry of manifest.barWidget.schema) assert.ok(["boolean", "integer", "enum"].includes(entry.type), entry.key)
 })
 
+test("the loaded episode can't be moved or marked; keys and tabs behave", () => {
+  const panel = fs.readFileSync(path.join(ROOT, "Panel.qml"), "utf8")
+  const service = fs.readFileSync(path.join(ROOT, "Service.qml"), "utf8")
+  // Taking it off the top of Up Next would read as another device moving on.
+  assert.match(service, /function isLoaded\(item\) \{ return playerActive && !!item && item\.uuid === nowUuid \}/)
+  assert.match(service, /function queue\(item, where\) \{\s*if \(!item \|\| !item\.uuid\) return\s*if \(isLoaded\(item\)\) \{ refuseLoaded\(\); return \}/)
+  assert.match(service, /function markPlayed\(item, played\) \{\s*if \(!item \|\| !item\.uuid \|\| !item\.podcast\) return\s*if \(isLoaded\(item\)\)/)
+  assert.match(panel, /if \(service && service\.isLoaded\(item\)\) return \[\{ id: "play"/)
+  assert.match(panel, /if \(id === "play" && service\.isLoaded\(item\)\) service\.playPause\(\)/)
+  // The shell's key catcher takes x (and Delete) as delete before textKey.
+  assert.ok(!/t === "x"/.test(panel), "x never reaches onTextKey")
+  assert.match(panel, /t === "p"\) root\.service\.cycleSpeed\(\)/)
+  assert.match(panel, /onDeleteRequested: \{[^}]*root\.removeCursor\(\) \}/)
+  // Switching tabs doesn't overwrite "Tab to open first".
+  assert.ok(!/persistSettings\(\{ defaultTab/.test(panel), "tab switches aren't saved")
+})
+
+test("seeks go as one per burst; lists reload when asked mid-load; stale polls are dropped", () => {
+  const service = fs.readFileSync(path.join(ROOT, "Service.qml"), "utf8")
+  const body = (name) => service.slice(service.indexOf("function " + name + "("), service.indexOf("\n  }\n", service.indexOf("function " + name + "(")))
+  assert.ok(!/action\(\["seek"/.test(body("seek")) && !/action\(\["seek"/.test(body("skip")), "seek and skip wait for the burst")
+  assert.match(body("seek"), /seekDebounce\.restart\(\)/)
+  assert.match(body("skip"), /seekDebounce\.restart\(\)/)
+  assert.match(service, /id: seekDebounce\s*interval: 300\s*repeat: false/)
+  assert.match(body("loadList"), /if \(force \|\| loadedAt === 0\)/)
+  assert.match(body("loadList"), /if \(rerun\) root\.loadList\(kind, args, true\)/)
+  assert.match(body("refreshPlayer"), /var stale = serial !== root\._changeSerial/)
+  assert.match(body("optimistic"), /_changeSerial\+\+/)
+})
+
+test("errors from keybinds reach the OSD; the sleep guard backs off; the title resets", () => {
+  const service = fs.readFileSync(path.join(ROOT, "Service.qml"), "utf8")
+  const bar = fs.readFileSync(path.join(ROOT, "BarWidget.qml"), "utf8")
+  assert.match(service, /function cycleSpeed\(\) \{\s*call\(\["speed", "cycle"\], function\(result\) \{\s*if \(!result\.ok\) \{ root\.reportError/)
+  assert.match(service, /root\.call\(\["volume", String\(pending\)\], function\(result\)[\s\S]{0,200}root\.reportError\(result\.error\)/)
+  assert.match(service, /running: root\.wantSleepGuard && !sleepGuardRestart\.running && root\._guardFailures < root\.guardMaxFailures/)
+  assert.match(service, /if \(result && result\.ok === true\) \{\s*root\._guardFailures = 0[\s\S]{0,80}root\.settle\(\)/)
+  assert.match(bar, /onScrollingChanged: if \(!scrolling\) x = 0/)
+  assert.match(bar, /running: labelItem\.scrolling/)
+})
+
+test("no Python-style comments slipped into QML", () => {
+  for (const name of fs.readdirSync(ROOT).filter((f) => f.endsWith(".qml"))) {
+    const text = fs.readFileSync(path.join(ROOT, name), "utf8")
+    text.split("\n").forEach((line, i) => {
+      const code = line.replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/\/\/.*$/, "")
+      assert.ok(!/(^|\s)#\s/.test(code), name + ":" + (i + 1) + " has a # comment: " + line.trim())
+    })
+  }
+})
+
 test("dates read relative to today", () => {
   const now = new Date(2026, 9, 1, 12, 0, 0)
   assert.equal(Model.fmtDate("2026-10-01T09:00:00Z", now), "Today")
@@ -216,7 +267,7 @@ test("nothing runs on a timer while paused or idle; while playing, polls are syn
 test("audio that never loads is reported, on the OSD when no panel is open", () => {
   const service = fs.readFileSync(path.join(ROOT, "Service.qml"), "utf8")
   assert.match(service, /message\.event === "end-file" && message\.reason === "error"/)
-  assert.match(service, /player\.loadFailed === true/)
+  assert.match(service, /view\.loadFailed === true/)
   assert.match(service, /shell\.summon\("omarchy\.osd"/)
   assert.match(service, /if \(!panelOpen && shell/)
 })

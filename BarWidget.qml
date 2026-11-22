@@ -132,7 +132,7 @@ BarWidget {
     fixedHeight: root.vertical ? Style.bar.iconSlot : -1
     horizontalMargin: root.labelShown ? 7 : 6
     tooltipText: root.playerActive && root.labelText !== ""
-      ? (root.isPlaying ? "Legato · " : "Legato (paused) · ") + root.labelText
+      ? (root.isPlaying ? "Legato · " : (root.service && root.service.ended ? "Legato (finished) · " : "Legato (paused) · ")) + root.labelText
       : (root.authenticated ? "Legato" : "Legato — not signed in to Pocket Casts")
 
     onPressed: function(b) {
@@ -225,11 +225,14 @@ BarWidget {
           elide: root.scrollTitle ? Text.ElideNone : Text.ElideRight
 
           readonly property bool needsScroll: root.scrollTitle && implicitWidth > scrollClip.width + 1
+          readonly property bool scrolling: needsScroll && root.isPlaying && !root.opened
 
           // Marquee only while playing and the panel is closed; a paused
-          // chip sits still like the rest of the bar.
+          // chip sits still like the rest of the bar, at the title's start
+          // (a stopped animation would leave it wherever it had got to).
+          onScrollingChanged: if (!scrolling) x = 0
           NumberAnimation on x {
-            running: labelItem.needsScroll && root.isPlaying && !root.opened
+            running: labelItem.scrolling
             loops: Animation.Infinite
             duration: Math.max(6000, labelItem.implicitWidth * 28)
             from: scrollClip.width

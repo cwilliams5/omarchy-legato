@@ -99,6 +99,9 @@ Panel {
   function closeMenu() { menuItem = null }
   function menuEntries(item) {
     if (!item) return []
+    // The episode loaded now: play or pause it, nothing else. Moving it in
+    // Up Next, or marking it, would confuse its sync (Next moves on).
+    if (service && service.isLoaded(item)) return [{ id: "play", label: isPlaying ? "Pause" : "Play" }]
     var queued = service && Model.containsUuid(service.upNext, item.uuid)
     var played = item.status === Model.statusPlayed
     var out = [{ id: "play", label: "Play" }]
@@ -117,7 +120,8 @@ Panel {
     var item = menuItem
     closeMenu()
     if (!item || !service) return
-    if (id === "play") service.playItem(item, false)
+    if (id === "play" && service.isLoaded(item)) service.playPause()
+    else if (id === "play") service.playItem(item, false)
     else if (id === "top") service.queue(item, "next")
     else if (id === "bottom") service.queue(item, "last")
     else if (id === "remove") service.queue(item, "remove")
@@ -165,6 +169,7 @@ Panel {
     if (!authenticated) return ""
     if (!service.mpvInstalled) return "mpv is not installed — run: omarchy pkg add mpv"
     if (service.buffering) return "Buffering…"
+    if (playerActive && service.ended) return "Finished"
     if (playerActive) return (isPlaying ? "Playing" : "Paused") + (service.speed !== 1 ? " at " + Model.fmtSpeed(service.speed) : "")
     if (service.email !== "") return "Signed in as " + service.email
     return "Signed in"
@@ -185,10 +190,9 @@ Panel {
 
   function setTab(name) {
     if (service) service.closeDetail()
-    if (currentTab !== name) {
-      currentTab = name
-      persistSettings({ defaultTab: name })
-    }
+    // Not saved: "Tab to open first" (Settings) is the user's choice, and a
+    // write per switch would churn shell.json (which dotfiles may track).
+    if (currentTab !== name) currentTab = name
     if (service) service.loadTab(name, false)
     cursorIndex = Model.firstItemIndex(rows, 0, 1)
     Qt.callLater(function() { if (listFlick) listFlick.contentY = 0 })
@@ -246,6 +250,12 @@ Panel {
   function queueCursor() {
     var item = cursorItem()
     if (item && item.type === "episode" && service) service.toggleQueued(item)
+  }
+
+  // x or Delete (the shell's delete keys): take the cursor's episode off Up Next.
+  function removeCursor() {
+    var item = cursorItem()
+    if (item && item.type === "episode" && service && Model.containsUuid(service.upNext, item.uuid)) service.queue(item, "remove")
   }
 
   function markCursor() {
@@ -427,6 +437,7 @@ Panel {
         root.close()
       }
       onTabRequested: function(direction) { root.switchPanel(direction) }
+      onDeleteRequested: { if (root.pageOpen || root.menuItem) return; root.removeCursor() }
       onTextKey: function(t) {
         if (t === "i") { root.setAbout(!root.showAbout); return }
         if (t === "g") { root.setSettings(!root.showSettings); return }
@@ -439,7 +450,7 @@ Panel {
         else if (t === "s" && root.playerActive) root.service.stop()
         else if (t === "b" || t === ",") root.service.skipBack()
         else if (t === "f" || t === ".") root.service.skipForward()
-        else if (t === "x") root.service.cycleSpeed()
+        else if (t === "p") root.service.cycleSpeed()
         else if (t === "t") root.service.cycleTrim()
         else if (t === "v") root.service.toggleVideo()
         else if (t === "o") root.service.toggleBoost()
@@ -826,6 +837,14 @@ Panel {
                   knobSize: Style.space(12)
                   trackHeight: Style.space(4)
                   onReleased: function(v) { if (root.service) root.service.seek(v) }
+
+                  // The slider's own wheel handling reads a sideways swipe
+                  // (no vertical delta) as a step back: let only up/down through.
+                  MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.NoButton
+                    onWheel: function(wheel) { wheel.accepted = wheel.angleDelta.y === 0 }
+                  }
                 }
 
                 Item {
@@ -955,7 +974,7 @@ Panel {
 
               TransportButton {
                 text: Model.fmtSpeed(root.service ? root.service.speed : 1)
-                tooltipText: "Playback speed (x)"
+                tooltipText: "Playback speed (p)"
                 selected: root.service && root.service.speed !== 1
                 fontSize: Style.font.caption
                 onClicked: if (root.service) root.service.cycleSpeed()
@@ -1106,6 +1125,7 @@ Panel {
                 readonly property bool isEpisode: isItem && item.type === "episode"
                 readonly property bool hasCursor: isItem && root.cursorIndex === index
                 readonly property bool isNow: isEpisode && item.uuid === root.nowUuid
+                readonly property bool loaded: isNow && root.playerActive
                 readonly property bool queued: isEpisode && root.service && Model.containsUuid(root.service.upNext, item.uuid)
                 readonly property bool played: isEpisode && item.status === Model.statusPlayed
                 readonly property real progress: isEpisode ? Model.progressFraction(item) : 0
@@ -1240,6 +1260,7 @@ Panel {
                     width: visible ? implicitWidth : 0
 
                     PanelActionButton {
+                      visible: !rowItem.loaded
                       iconText: rowItem.played ? Model.glyph.unplayed : Model.glyph.played
                       tooltipText: rowItem.played ? "Mark as unplayed (m)" : "Mark as played (m)"
                       foreground: root.foreground
@@ -1247,6 +1268,7 @@ Panel {
                       onClicked: if (root.service) root.service.markPlayed(rowItem.item, !rowItem.played)
                     }
                     PanelActionButton {
+                      visible: !rowItem.loaded
                       iconText: rowItem.queued ? Model.glyph.close : Model.glyph.queue
                       tooltipText: rowItem.queued ? "Remove from Up Next (q)" : "Add to Up Next (q)"
                       foreground: root.foreground

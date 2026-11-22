@@ -79,6 +79,8 @@ Item {
   property real localPosition: 0
   readonly property bool playerActive: player && player.active === true
   readonly property bool isPlaying: playerActive && player.playing === true
+  // Played to its end and still loaded (Play plays it again, or what's queued).
+  readonly property bool ended: playerActive && player.ended === true
   readonly property bool buffering: playerActive && player.buffering === true
   readonly property var nowItem: player && player.item ? player.item : null
   readonly property string nowUuid: nowItem && nowItem.uuid ? nowItem.uuid : ""
@@ -420,23 +422,31 @@ Item {
   // A poll that arrives while one is running is not dropped: it runs again
   // once the first answers, so the last event always gets a fresh read.
   property bool _pollAgain: false
+  // Bumped by every change made here (optimistic). A poll that began before
+  // one read the old state (a volume or Boost the bridge hadn't saved yet):
+  // its answer is dropped for a fresh poll, rather than undoing the change on
+  // screen, where no mpv event would put it right.
+  property int _changeSerial: 0
 
   function refreshPlayer() {
     if (!active) return
     if (playerLoading) { _pollAgain = true; return }
     playerLoading = true
+    var serial = _changeSerial
     var args = ["player"]
     if (!autoplay) args.push("--no-autoplay")
     call(args, function(result) {
       root.playerLoading = false
-      if (root._pollAgain) { root._pollAgain = false; root.settle() }
+      var stale = serial !== root._changeSerial
+      if (root._pollAgain || (stale && result.ok)) { root._pollAgain = false; root.settle() }
       if (!result.ok) {
         if (root.absorbAuthError(result)) return
         root.playerError = result.error
         return
       }
       root.playerError = ""
-      root.applyPlayer(result.data)
+      if (!stale) root.applyPlayer(result.data)
+      else root.reportPlayerProblems(result.data)  // said once, so not lost with the rest
     })
   }
 
@@ -453,9 +463,14 @@ Item {
       inProgressLoadedAt = 0
       if (panelOpen) loadUpNext()
     }
-    if (player.loadFailed === true) loadFailed("")
-    if (player.playerHung === true) reportError("The player stopped responding and was closed. Press play to carry on.")
+    reportPlayerProblems(player)
     syncPlayerEvents()
+  }
+
+  function reportPlayerProblems(view) {
+    if (!view) return
+    if (view.loadFailed === true) loadFailed("")
+    if (view.playerHung === true) reportError("The player stopped responding and was closed. Press play to carry on.")
   }
 
   // Where playback is now: the last read from mpv, carried forward by the
@@ -587,17 +602,36 @@ Item {
   readonly property var sleepGuardCommand: python === "" ? [] : Model.sleepGuardCommand(python, bridge)
   readonly property bool wantSleepGuard: active && pauseOnSleep && playerActive && sleepGuardCommand.length > 0
 
+  // A guard that fails (or is stopped) instead of handling a sleep counts
+  // here; each failure doubles the wait before the next try (6 s to 48 s),
+  // and after five in a row it gives up and says so, until an episode is
+  // next loaded. Never a loop of processes and polls while paused.
+  property int _guardFailures: 0
+  readonly property int guardMaxFailures: 5
+  onWantSleepGuardChanged: _guardFailures = 0
+
   Process {
     id: sleepGuard
     command: root.sleepGuardCommand
     clearEnvironment: true
     environment: root.bridgeEnvironment
-    running: root.wantSleepGuard && !sleepGuardRestart.running
+    running: root.wantSleepGuard && !sleepGuardRestart.running && root._guardFailures < root.guardMaxFailures
     stdout: StdioCollector { id: sleepGuardOut; waitForEnd: true }
     onExited: {
-      // It exits once it has handled a sleep (or if it failed): read the
-      // player again, and start a fresh guard a moment later if still wanted.
-      root.settle()
+      // It exits once it has handled a sleep: read the player again, and
+      // start a fresh guard a moment later if still wanted.
+      var result = null
+      try { result = JSON.parse(String(sleepGuardOut.text || "")) } catch (e) { result = null }
+      if (result && result.ok === true) {
+        root._guardFailures = 0
+        sleepGuardRestart.interval = 3000
+        root.settle()
+      } else if (root.wantSleepGuard) {
+        root._guardFailures++
+        sleepGuardRestart.interval = 3000 * Math.pow(2, root._guardFailures)
+        if (root._guardFailures === root.guardMaxFailures)
+          root.reportError("Couldn't set up pause-before-sleep" + (result && result.error ? ": " + result.error : ""))
+      }
       sleepGuardRestart.restart()
     }
   }
@@ -626,6 +660,7 @@ Item {
   function settle() { settleTimer.restart() }
 
   function optimistic(patch) {
+    _changeSerial++
     var next = {}
     for (var k in player) next[k] = player[k]
     for (var p in patch) next[p] = patch[p]
@@ -674,12 +709,21 @@ Item {
     action(["stop"])
   }
 
+  // Seeks and skips show at once but reach the bridge once per burst: a
+  // held key, a run of wheel steps or right-clicks on the chip add up and go
+  // as one seek 300 ms after the last, not one process and push per step.
+  property real _seekTarget: -1  // an absolute seek waiting to go, or -1
+  property real _seekDelta: 0    // relative steps waiting to go
+  property int _seekSerial: 0
+
   function seek(seconds) {
     if (!playerActive) return
     var clamped = Math.max(0, Math.min(duration > 0 ? duration : seconds, seconds))
     optimistic({ position: clamped })
     localPosition = clamped
-    action(["seek", String(Math.round(clamped))])
+    _seekTarget = clamped
+    _seekDelta = 0
+    seekDebounce.restart()
   }
 
   function skip(delta) {
@@ -688,8 +732,41 @@ Item {
     if (duration > 0) target = Math.min(target, duration - 1)
     optimistic({ position: target })
     localPosition = target
-    action(["seek", "--relative", "--", String(delta)])
+    if (_seekTarget >= 0) _seekTarget = target  // fold the step into the seek waiting to go
+    else _seekDelta += delta
+    seekDebounce.restart()
     return true
+  }
+
+  Timer {
+    id: seekDebounce
+    interval: 300
+    repeat: false
+    onTriggered: root.sendSeek()
+  }
+
+  function sendSeek() {
+    var args = null
+    if (_seekTarget >= 0) args = ["seek", String(Math.round(_seekTarget))]
+    else if (_seekDelta !== 0) args = ["seek", "--relative", "--", String(_seekDelta)]
+    _seekTarget = -1
+    _seekDelta = 0
+    if (!args) return
+    _changeSerial++  // a poll begun before this seek would show the old place
+    var serial = ++_seekSerial
+    actionRunning = true
+    call(args, function(result) {
+      root.actionRunning = false
+      if (!result.ok) {
+        if (!root.absorbAuthError(result)) root.reportError(result.error)
+        root.settle()
+        return
+      }
+      // A newer seek is on its way: its answer will say where things are.
+      if (serial !== root._seekSerial || seekDebounce.running) return
+      if (result.data && result.data.active !== undefined) root.applyPlayer(result.data)
+      else root.settle()
+    })
   }
 
   function skipBack() { return skip(-skipBackSeconds) }
@@ -707,14 +784,17 @@ Item {
     property int pending: -1
     interval: 180
     repeat: false
-    onTriggered: if (pending >= 0) root.call(["volume", String(pending)], null)
+    onTriggered: if (pending >= 0) root.call(["volume", String(pending)], function(result) {
+      root._changeSerial++  // saved now: a poll that began before it read the old volume
+      if (!result.ok) { if (!root.absorbAuthError(result)) root.reportError(result.error); root.settle() }
+    })
   }
 
   function nudgeVolume(delta) { setVolume(volume + delta) }
 
   function cycleSpeed() {
     call(["speed", "cycle"], function(result) {
-      if (!result.ok) { root.flash(result.error, true); return }
+      if (!result.ok) { root.reportError(result.error); return }
       root.optimistic({ speed: result.data.speed })
       root.flash("Speed " + Model.fmtSpeed(result.data.speed), false)
     })
@@ -776,8 +856,16 @@ Item {
 
   // ------------------------------------------------------- episode actions --
 
+  // The episode loaded in the player. Taking it off the top of Up Next would
+  // read, at the next resume, as another device moving on; marking it played
+  // would be undone by its next position push. Next (n) moves on from it.
+  function isLoaded(item) { return playerActive && !!item && item.uuid === nowUuid }
+
+  function refuseLoaded() { flash("That's the episode in the player: Next (n) moves on from it", true) }
+
   function queue(item, where) {
     if (!item || !item.uuid) return
+    if (isLoaded(item)) { refuseLoaded(); return }
     var args = ["queue", where, item.uuid]
     if (item.podcast) args.push("--podcast", item.podcast)
     var label = where === "remove" ? "Removed from Up Next" : (where === "next" ? "Playing next" : "Added to Up Next")
@@ -795,6 +883,7 @@ Item {
 
   function markPlayed(item, played) {
     if (!item || !item.uuid || !item.podcast) return
+    if (isLoaded(item)) { refuseLoaded(); return }
     call(["mark", played ? "played" : "unplayed", item.uuid, "--podcast", item.podcast], function(result) {
       if (!result.ok) { if (!root.absorbAuthError(result)) root.flash(result.error, true); return }
       root.patchItem(item.uuid, { status: played ? Model.statusPlayed : Model.statusUnplayed, playedUpTo: 0 })
@@ -832,17 +921,32 @@ Item {
 
   // ------------------------------------------------------------- lists --
 
+  // A reload asked for while that list is loading (forced, or after it was
+  // marked stale) isn't dropped: the load under way began before the change
+  // and would be taken as fresh for five minutes. It runs again on answering.
+  property var _listAgain: ({})
+
   function loadList(kind, args, force) {
     var loadedAt = root[kind + "LoadedAt"]
-    if (!authenticated || root[kind + "Loading"]) return
+    if (!authenticated) return
+    if (root[kind + "Loading"]) {
+      if (force || loadedAt === 0) { var again = _listAgain; again[kind] = true; _listAgain = again }
+      return
+    }
     if (!force && loadedAt > 0 && Date.now() - loadedAt < staleMs) return
     root[kind + "Loading"] = true
     root[kind + "Error"] = ""
     call(args, function(result) {
       root[kind + "Loading"] = false
-      if (!result.ok) { if (!root.absorbAuthError(result)) root[kind + "Error"] = result.error; return }
-      root[kind] = result.data.items || []
-      root[kind + "LoadedAt"] = Date.now()
+      var rerun = root._listAgain[kind] === true
+      if (rerun) { var again = root._listAgain; delete again[kind]; root._listAgain = again }
+      if (!result.ok) {
+        if (!root.absorbAuthError(result)) root[kind + "Error"] = result.error
+      } else {
+        root[kind] = result.data.items || []
+        root[kind + "LoadedAt"] = Date.now()
+      }
+      if (rerun) root.loadList(kind, args, true)
     })
   }
 
