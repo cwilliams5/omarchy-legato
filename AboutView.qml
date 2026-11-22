@@ -47,7 +47,7 @@ Column {
       objectName: "aboutBack"
       iconText: "󰁍"
       text: "Back"
-      tooltipText: "Back to Pocket Casts (Esc)"
+      tooltipText: "Back to Legato (Esc)"
       foreground: root.foreground
       accent: root.accent
       fontFamily: root.fontFamily
@@ -113,7 +113,10 @@ Column {
     verticalItemAlignment: Grid.AlignVCenter
 
     Text { width: root.labelWidth; text: "Made by"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-    Text { text: About.ORGANIZATION; textFormat: Text.PlainText; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+    Text { text: About.MAINTAINER; textFormat: Text.PlainText; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+
+    Text { width: root.labelWidth; text: "Based on"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+    Text { text: About.BASED_ON; textFormat: Text.PlainText; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
 
     Text { width: root.labelWidth; text: "Created"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
     Text { text: About.CREATED; textFormat: Text.PlainText; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
@@ -147,29 +150,29 @@ Column {
       Text {
         anchors.verticalCenter: parent.verticalCenter
         textFormat: Text.PlainText
-        text: About.SUPPORT_EMAIL
+        text: "GitHub Issues"
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.bodySmall
       }
       Button {
-        objectName: "aboutEmail"
-        text: "Email"
-        tooltipText: "Opens your mail app with the version details filled in"
+        objectName: "aboutIssue"
+        text: "Report"
+        tooltipText: "Opens a new issue in your browser with the version details filled in"
         foreground: root.foreground
         accent: root.accent
         fontFamily: root.fontFamily
         fontSize: Style.font.caption
-        onClicked: Qt.openUrlExternally(About.mailto(root.version, root.details))
+        onClicked: Qt.openUrlExternally(About.issueUrl(root.details))
       }
       Button {
-        objectName: "aboutCopyEmail"
+        objectName: "aboutCopyLink"
         text: "Copy"
         foreground: root.foreground
         accent: root.accent
         fontFamily: root.fontFamily
         fontSize: Style.font.caption
-        onClicked: root.copy(About.SUPPORT_EMAIL, "Address")
+        onClicked: root.copy(About.SUPPORT_URL, "Link")
       }
     }
   }

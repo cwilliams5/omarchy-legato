@@ -1,11 +1,12 @@
 {
   "schemaVersion": 1,
-  "id": "ninepointlabs.pocketcasts",
-  "name": "Pocket Casts",
-  "version": "0.1.1",
-  "author": "Nine Point Labs",
+  "id": "io.github.cwilliams5.legato",
+  "name": "Legato",
+  "version": "0.2.0",
+  "author": "Cody Williams",
   "license": "MIT",
-  "description": "Pocket Casts in the Omarchy bar — sign in, play your Up Next, in-progress and new episodes through mpv, browse your shows, and keep your listening position in sync with your phone.",
+  "homepage": "https://github.com/cwilliams5/omarchy-legato",
+  "description": "A Pocket Casts player in the Omarchy bar that keeps your place across your phone and computers: Up Next, in-progress and new episodes through mpv, your shows, and a resume that always asks Pocket Casts first. Unofficial.",
   "kinds": [
     "service",
     "bar-widget"
@@ -16,10 +17,11 @@
     "barWidget": "BarWidget.qml"
   },
   "barWidget": {
-    "displayName": "Pocket Casts",
-    "description": "Now playing in the bar; click for the player, Up Next, In Progress, New releases and your podcasts.",
+    "displayName": "Legato",
+    "description": "Now playing in the bar; click for the player, Up Next, In Progress, New releases and your shows. Keeps your place in step with Pocket Casts on your other devices.",
     "category": "Media",
     "aliases": [
+      "legato",
       "pocketcasts",
       "pocket casts",
       "podcasts",

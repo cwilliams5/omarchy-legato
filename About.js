@@ -5,18 +5,22 @@
 // The version comes from manifest.json and the license from LICENSE at run
 // time, so neither is copied here and neither can drift from the real file.
 
-var NAME = "Pocket Casts"
-var TAGLINE = "Pocket Casts in the Omarchy bar: Up Next, in-progress and new episodes through mpv, your shows, and your listening position in sync."
-var ORGANIZATION = "Nine Point Labs"
-var CREATED = "October 2026" // first commit: 2026-10-01
-var SUPPORT_EMAIL = "help@ninepointlabs.com"
+var NAME = "Legato"
+var TAGLINE = "A Pocket Casts player in the Omarchy bar: Up Next, in-progress and new episodes through mpv, your shows, "
+  + "and your place kept in step across your phone and computers. Unofficial: not affiliated with or endorsed by "
+  + "Pocket Casts or Automattic."
+var MAINTAINER = "Cody Williams"
+// Legato is a hard fork; the original keeps its credit here, in LICENSE and in the README.
+var BASED_ON = "Nine Point Labs' Pocket Casts plugin"
+var CREATED = "November 2026" // as Legato; the original's first commit: 2026-10-01
+var SUPPORT_URL = "https://github.com/cwilliams5/omarchy-legato/issues"
 
-// Must stay true to what the plugin does. Network: only bin/pocketcasts-bridge
+// Must stay true to what the plugin does. Network: only bin/legato-bridge
 // (API, SHOW_HOSTS, ART_HOST_RE), mpv streaming the episode's own audio URL,
 // and the panel showing a cover straight from static.pocketcasts.com when it
 // could not be cached. Files: auth.json, playback.json, prefs.json,
 // podcasts-cache.json (all 0600), the art cache, shell.json.
-var PRIVACY = "No telemetry and no Nine Point Labs servers: the plugin talks only to Pocket Casts and "
+var PRIVACY = "No telemetry and no servers of Legato's own: it talks only to Pocket Casts and "
   + "to the podcasts you play. Your email and password go to api.pocketcasts.com once, at sign-in; the "
   + "password is never stored. With your login token, api.pocketcasts.com then serves your Up Next, "
   + "in-progress and new episodes and your shows, and receives your changes: queueing, marking played, "
@@ -25,10 +29,10 @@ var PRIVACY = "No telemetry and no Nine Point Labs servers: the plugin talks onl
   + "podcast-api.pocketcasts.com, podcasts.pocketcasts.com and cache.pocketcasts.com, and cover art "
   + "from static.pocketcasts.com, all without your token. Audio streams through mpv straight from each "
   + "podcast's own server (the address in its feed), which sees your IP address as with any podcast "
-  + "app. Your login tokens, email and account ID are kept in ~/.local/state/omarchy-pocketcasts/auth.json, "
+  + "app. Your login tokens, email and account ID are kept in ~/.local/state/omarchy-legato/auth.json, "
   + "readable only by you (0600), next to the episode loaded, your volume and speed, and a 10-minute "
   + "list of your shows; signing out deletes the tokens. Cover art is cached in "
-  + "~/.cache/omarchy-pocketcasts/art, and the tab you last opened is saved in ~/.config/omarchy/shell.json."
+  + "~/.cache/omarchy-legato/art, and the tab you last opened is saved in ~/.config/omarchy/shell.json."
 
 // "0.1.0" from manifest.json's text, or "" when it can't be read.
 function manifestVersion(text) {
@@ -40,20 +44,21 @@ function manifestVersion(text) {
   }
 }
 
-// "MIT License, © 2026 Nine Point Labs" from LICENSE's text: its first line
-// plus its copyright line, as written there.
+// "MIT License, © 2026 Nine Point Labs, © 2026 Cody Williams" from LICENSE's
+// text: its first line plus every copyright line, as written there.
 function licenseSummary(text) {
   var lines = String(text || "").split("\n")
   var name = ""
-  var holder = ""
+  var holders = []
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i].trim()
     if (line === "") continue
     if (name === "") name = line
     var m = /^Copyright\s+(?:\(c\)|©)\s*(.+)$/i.exec(line)
-    if (m) { holder = "© " + m[1]; break }
+    if (m) holders.push("© " + m[1])
+    else if (holders.length > 0) break
   }
-  return holder ? name + ", " + holder : name
+  return holders.length ? name + ", " + holders.join(", ") : name
 }
 
 // LICENSE with one line per paragraph, so it wraps to the panel's width.
@@ -85,24 +90,23 @@ function builtWith(v) {
   return out.length ? out.join(", ") + " and mpv" : "Quickshell, Qt, Python and mpv"
 }
 
-// Version details to paste into a support email.
+// Version details to paste into an issue.
 function details(version, v, desktop) {
-  return "Omarchy " + NAME + " plugin " + (version || "unknown version") + "\n"
+  return NAME + " " + (version || "unknown version") + "\n"
     + builtWith(v) + "\n"
     + (desktop || "unknown desktop")
 }
 
-function mailto(version, detailText) {
-  return "mailto:" + SUPPORT_EMAIL
-    + "?subject=" + encodeURIComponent("Omarchy " + NAME + " plugin " + (version || ""))
-    + "&body=" + encodeURIComponent("\n\n--\n" + detailText)
+// A new GitHub issue with the version details already in its body.
+function issueUrl(detailText) {
+  return SUPPORT_URL + "/new?body=" + encodeURIComponent("\n\n--\n" + detailText)
 }
 
 if (typeof module !== "undefined") {
   module.exports = {
-    NAME: NAME, TAGLINE: TAGLINE, ORGANIZATION: ORGANIZATION, CREATED: CREATED,
-    SUPPORT_EMAIL: SUPPORT_EMAIL, PRIVACY: PRIVACY,
+    NAME: NAME, TAGLINE: TAGLINE, MAINTAINER: MAINTAINER, BASED_ON: BASED_ON, CREATED: CREATED,
+    SUPPORT_URL: SUPPORT_URL, PRIVACY: PRIVACY,
     manifestVersion: manifestVersion, licenseSummary: licenseSummary, licenseBody: licenseBody,
-    probedVersion: probedVersion, builtWith: builtWith, details: details, mailto: mailto
+    probedVersion: probedVersion, builtWith: builtWith, details: details, issueUrl: issueUrl
   }
 }

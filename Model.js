@@ -1,11 +1,11 @@
-// Pure helpers for the Pocket Casts plugin — formatting, row building, and
+// Pure helpers for Legato — formatting, row building, and
 // the small bits of shared vocabulary (tabs, glyphs). No state lives here;
 // the service owns data and the panel owns UI state.
 
 .pragma library
 
 var glyph = {
-  pocketcasts: "󰦔",
+  app: "󰦔",
   play: "󰐊",
   pause: "󰏤",
   next: "󰒭",
@@ -255,7 +255,7 @@ var signInNotes = [
 //
 // The shell never starts a program through the session PATH and never hands
 // one the session environment:
-//  - the bridge runs as `<absolute python3> -I -B bin/pocketcasts-bridge …`.
+//  - the bridge runs as `<absolute python3> -I -B bin/legato-bridge …`.
 //    -I ignores every PYTHON* variable and user site-packages and keeps the
 //    script's own directory off sys.path. The interpreter is found by a
 //    startup probe over pythonCandidates, never via `#!/usr/bin/env`.

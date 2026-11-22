@@ -18,7 +18,7 @@ mkdir -p "$dest"
 for entry in manifest.json Model.js About.js Service.qml BarWidget.qml Panel.qml AboutView.qml README.md LICENSE bin; do
   [[ -e "$src/$entry" ]] && cp -r "$src/$entry" "$dest/"
 done
-chmod +x "$dest/bin/pocketcasts-bridge"
+chmod +x "$dest/bin/legato-bridge"
 
 if ! command -v mpv >/dev/null 2>&1; then
   echo "Note: mpv is not installed; audio plays through it. Run: omarchy pkg add mpv"

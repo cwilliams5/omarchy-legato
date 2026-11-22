@@ -9,7 +9,7 @@ import qs.Ui
 import "Model.js" as Model
 import "About.js" as About
 
-// The Pocket Casts panel: a now-playing hero (cover, progress, skip back /
+// Legato's panel: a now-playing hero (cover, progress, skip back /
 // play / skip forward / next, speed, volume) and four tabs — Up Next, In
 // Progress, New, Podcasts — that all render into one flat row list so a
 // single keyboard cursor walks whichever is showing. A podcast drills into
@@ -19,7 +19,7 @@ import "About.js" as About
 // shell can inject bar/settings/anchorItem/hostWidget into it.
 Panel {
   id: root
-  moduleName: "ninepointlabs.pocketcasts"
+  moduleName: "io.github.cwilliams5.legato"
 
   property var anchorItem: null
   property var hostWidget: null
@@ -398,7 +398,7 @@ Panel {
         foreground: root.foreground
         accent: root.accent
         fontFamily: root.fontFamily
-        icon: Model.glyph.pocketcasts
+        icon: Model.glyph.app
         version: About.manifestVersion(manifestFile.loaded ? manifestFile.text() : "")
         licenseText: licenseFile.loaded ? licenseFile.text() : ""
         versions: root.aboutVersions
@@ -433,7 +433,7 @@ Panel {
                 spacing: Style.space(6)
                 Text {
                   textFormat: Text.PlainText
-                  text: Model.glyph.pocketcasts
+                  text: Model.glyph.app
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.title
@@ -441,7 +441,7 @@ Panel {
                 }
                 Text {
                   textFormat: Text.PlainText
-                  text: "POCKET CASTS"
+                  text: "LEGATO"
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.title
@@ -620,7 +620,7 @@ Panel {
                 width: Style.space(84)
                 height: Style.space(84)
                 source: root.heroArt
-                placeholder: Model.glyph.pocketcasts
+                placeholder: Model.glyph.app
                 opacity: root.playerActive ? 1.0 : 0.55
 
                 MouseArea {

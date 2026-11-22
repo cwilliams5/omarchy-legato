@@ -7,7 +7,7 @@ import "Model.js" as Model
 // entry point. Every bar widget (one per monitor) and every open panel reads
 // this one instance, so player polling and library fetches never run more
 // than once per shell. All Pocket Casts and mpv traffic goes through
-// bin/pocketcasts-bridge, which prints one JSON object per call.
+// bin/legato-bridge, which prints one JSON object per call.
 Item {
   id: root
 
@@ -18,7 +18,7 @@ Item {
   property bool active: true
 
   readonly property string pluginDir: decodeURIComponent(Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "")).replace(/\/$/, "")
-  readonly property string bridge: pluginDir + "/bin/pocketcasts-bridge"
+  readonly property string bridge: pluginDir + "/bin/legato-bridge"
 
   // ---- Trust boundary. Nothing here starts a program through the session
   //      PATH or hands it the session environment. The bridge runs under an
@@ -51,7 +51,7 @@ Item {
   readonly property int skipForwardSeconds: Math.max(1, Number(setting("skipForward", 30)) || 30)
   readonly property bool autoplay: setting("autoplay", true) !== false
 
-  // ---- Connection state (from `pocketcasts-bridge status`)
+  // ---- Connection state (from `legato-bridge status`)
   property bool probed: false
   property bool probing: false
   property double probedAt: 0
@@ -156,7 +156,7 @@ Item {
           result = JSON.parse(text)
         } catch (e) {
           var detail = text.trim() !== "" ? text.trim() : err.trim()
-          result = { ok: false, code: exitCode === 0 ? "parse" : "crash", error: Model.conciseError(detail, "pocketcasts-bridge returned nothing") }
+          result = { ok: false, code: exitCode === 0 ? "parse" : "crash", error: Model.conciseError(detail, "legato-bridge returned nothing") }
         }
         if (result && result.ok === false && result.error) result.error = Model.conciseError(result.error)
         var cb = proc.callback
@@ -180,7 +180,7 @@ Item {
     var command = python === "" ? [] : Model.bridgeCommand(python, bridge, args)
     if (command.length === 0) {
       // Fail closed: no trusted interpreter means no bridge call at all.
-      var failure = { ok: false, code: "no_python", error: pythonError || "Could not build the pocketcasts-bridge command" }
+      var failure = { ok: false, code: "no_python", error: pythonError || "Could not build the legato-bridge command" }
       if (callback) Qt.callLater(function() { callback(failure) })
       return null
     }
@@ -209,7 +209,7 @@ Item {
     if (command.length === 0) {
       _pythonProbing = false
       pythonError = "No Python 3 found in " + Model.trustedBinaryDirectories.join(", ")
-        + " — the Pocket Casts plugin will not run python3 from your PATH"
+        + " — Legato will not run python3 from your PATH"
       flushQueuedCalls()
       return
     }
@@ -807,7 +807,7 @@ Item {
   IpcHandler {
     // Only the shared instance answers IPC; the per-panel fallback stays quiet.
     enabled: root.active
-    target: "pocketcasts"
+    target: "legato"
 
     function playPause(): string { return root.playPause() ? "ok" : "unhandled" }
     function next(): string { return root.next() ? "ok" : "unhandled" }

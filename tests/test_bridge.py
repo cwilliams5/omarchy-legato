@@ -1,4 +1,4 @@
-"""Tests for bin/pocketcasts-bridge: private state files, input validation,
+"""Tests for bin/legato-bridge: private state files, input validation,
 bounded and host-checked HTTP, token refresh, and an end-to-end run of the
 player against a fake Pocket Casts server with a real mpv — play, pause,
 position sync, the end of an episode, mark-played and autoplay.
@@ -29,11 +29,11 @@ import urllib.parse
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-BRIDGE = ROOT / "bin" / "pocketcasts-bridge"
+BRIDGE = ROOT / "bin" / "legato-bridge"
 
 sys.dont_write_bytecode = True
-_loader = importlib.machinery.SourceFileLoader("pocketcasts_bridge", str(BRIDGE))
-_spec = importlib.util.spec_from_loader("pocketcasts_bridge", _loader)
+_loader = importlib.machinery.SourceFileLoader("legato_bridge", str(BRIDGE))
+_spec = importlib.util.spec_from_loader("legato_bridge", _loader)
 bridge = importlib.util.module_from_spec(_spec)
 _loader.exec_module(bridge)
 
@@ -80,7 +80,7 @@ class TempHome(unittest.TestCase):
 
     @property
     def state(self):
-        return os.path.join(self.home, ".local", "state", "omarchy-pocketcasts")
+        return os.path.join(self.home, ".local", "state", "omarchy-legato")
 
 
 def run_bridge(*argv, stdin=""):
@@ -558,13 +558,13 @@ class EndToEnd(PlayerTestCase):
     def test_socket_and_runtime_dir_are_private(self):
         self.login()
         run_bridge("play", EP_1, "--podcast", PODCAST_A)
-        runtime = os.path.join(os.environ["XDG_RUNTIME_DIR"], "omarchy-pocketcasts")
+        runtime = os.path.join(os.environ["XDG_RUNTIME_DIR"], "omarchy-legato")
         self.assertEqual(mode_of(runtime), 0o700)
         self.assertTrue(stat.S_ISSOCK(os.lstat(os.path.join(runtime, "mpv.sock")).st_mode))
 
     def test_status_names_the_socket_the_panel_listens_on(self):
         socket_path = run_bridge("status")["data"]["socket"]
-        runtime = os.path.join(os.environ["XDG_RUNTIME_DIR"], "omarchy-pocketcasts")
+        runtime = os.path.join(os.environ["XDG_RUNTIME_DIR"], "omarchy-legato")
         self.assertEqual(socket_path, os.path.join(runtime, "mpv.sock"))
         self.assertEqual(mode_of(runtime), 0o700)
 
@@ -807,9 +807,9 @@ class AboutTests(TempHome):
 
     def test_privacy_matches_what_is_kept_and_synced(self):
         privacy = self.privacy()
-        self.assertIn("~/.local/state/omarchy-pocketcasts/auth.json", privacy)
+        self.assertIn("~/.local/state/omarchy-legato/auth.json", privacy)
         self.assertIn("0600", privacy)
-        self.assertIn("~/.cache/omarchy-pocketcasts/art", privacy)
+        self.assertIn("~/.cache/omarchy-legato/art", privacy)
         self.assertIn("~/.config/omarchy/shell.json", privacy)
         self.assertIn("password is never stored", privacy)
         self.assertIn("every %d seconds" % bridge.SYNC_INTERVAL, privacy)

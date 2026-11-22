@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""pocketcasts-bridge — the Pocket Casts and mpv helper behind the Omarchy Pocket Casts plugin.
+"""legato-bridge — the Pocket Casts and mpv helper behind Legato, a Pocket Casts player for the Omarchy bar.
 
 The QML side never talks HTTP or to the player itself. It runs this script
 with one subcommand per request and reads exactly one JSON object from stdout:
@@ -14,11 +14,11 @@ Pocket Casts has no public API. This talks to the same endpoints the Pocket
 Casts web player uses (api.pocketcasts.com), which can change without notice.
 Login takes your email and password once, read from stdin, and keeps only the
 access and refresh tokens Pocket Casts hands back, in
-$XDG_STATE_HOME/omarchy-pocketcasts/auth.json (0600). The password is never
+$XDG_STATE_HOME/omarchy-legato/auth.json (0600). The password is never
 written anywhere.
 
 Audio plays in mpv, started detached by this script and driven over its JSON
-IPC socket in $XDG_RUNTIME_DIR/omarchy-pocketcasts/ (0700). Playback outlives
+IPC socket in $XDG_RUNTIME_DIR/omarchy-legato/ (0700). Playback outlives
 the shell; every `player` poll pushes the listening position back to Pocket
 Casts so your phone picks up where this machine left off, and the other way
 round: before a paused episode plays again, Pocket Casts is asked where you
@@ -61,7 +61,7 @@ from concurrent.futures import ThreadPoolExecutor
 API = "https://api.pocketcasts.com"
 PODCAST_API = "https://podcast-api.pocketcasts.com"
 ART_BASE = "https://static.pocketcasts.com/discover/images"
-USER_AGENT = "omarchy-pocketcasts/0.1 (+https://github.com/Ninepointlabs-Omarchy-Extras/omarchy-pocketcasts)"
+USER_AGENT = "legato/0.2 (+https://github.com/cwilliams5/omarchy-legato)"
 
 HTTP_TIMEOUT = 15
 ART_TIMEOUT = 8
@@ -635,7 +635,7 @@ def http(method, url, headers=None, data=None, timeout=HTTP_TIMEOUT, limit=API_M
 # ----------------------------------------------------------------- state store
 
 def state_dir(create=False):
-    return open_dir(xdg_home("XDG_STATE_HOME", ".local", "state"), ("omarchy-pocketcasts",), create)
+    return open_dir(xdg_home("XDG_STATE_HOME", ".local", "state"), ("omarchy-legato",), create)
 
 
 def load_json_at(held, name, limit, private):
@@ -905,7 +905,7 @@ def art_dir():
     global _ART_DIR
     with _ART_DIR_LOCK:
         if _ART_DIR is None:
-            _ART_DIR = open_dir(xdg_home("XDG_CACHE_HOME", ".cache"), ("omarchy-pocketcasts", "art"), create=True)
+            _ART_DIR = open_dir(xdg_home("XDG_CACHE_HOME", ".cache"), ("omarchy-legato", "art"), create=True)
         return _ART_DIR
 
 
@@ -1175,7 +1175,7 @@ MPV_PROPERTIES = ("path", "pause", "time-pos", "duration", "volume", "speed", "e
 
 def runtime_dir(create=False):
     base = clean_env_value("XDG_RUNTIME_DIR", os.environ.get("XDG_RUNTIME_DIR")) or "/run/user/%d" % os.geteuid()
-    return open_dir(base, ("omarchy-pocketcasts",), create)
+    return open_dir(base, ("omarchy-legato",), create)
 
 
 def socket_path(create=False):
@@ -1344,8 +1344,8 @@ def start_mpv(prefs):
     except OSError:
         pass
     argv = [mpv, "--no-config", "--idle=yes", "--no-video", "--no-terminal", "--keep-open=yes",
-            "--ytdl=no", "--input-ipc-server=" + path, "--title=Pocket Casts",
-            "--audio-client-name=omarchy-pocketcasts", "--cache=yes", "--network-timeout=30",
+            "--ytdl=no", "--input-ipc-server=" + path, "--title=Legato",
+            "--audio-client-name=legato", "--cache=yes", "--network-timeout=30",
             "--user-agent=" + USER_AGENT,
             "--volume=%d" % max(0, min(100, as_int(prefs.get("volume", 100)) if "volume" in prefs else 100)),
             "--speed=%s" % clamp_speed(prefs.get("speed", 1.0))]
@@ -1432,7 +1432,7 @@ def load_into_mpv(item, prefs, position):
         raise ApiError("not_found", "That episode has no playable audio link")
     player = ensure_mpv(prefs)
     with player:
-        title = item.get("name") or "Pocket Casts"
+        title = item.get("name") or "Legato"
         if item.get("show"):
             title = "%s — %s" % (title, item["show"])
         options = "start=%d,force-media-title=%s,pause=no" % (int(position), mpv_quote(title))
@@ -2086,7 +2086,7 @@ def cmd_episodes(args):
 # --------------------------------------------------------------------- main
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="pocketcasts-bridge", description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(prog="legato-bridge", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status").set_defaults(fn=cmd_status)

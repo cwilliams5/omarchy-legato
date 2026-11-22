@@ -1,13 +1,20 @@
-# Pocket Casts for Omarchy
+# Legato
 
-A Pocket Casts player in the Omarchy bar. Sign in with your Pocket Casts
-account, then play your Up Next, in-progress and new episodes, browse your
-shows, and keep your listening position in sync with your phone.
+A Pocket Casts player in the Omarchy bar that keeps your place across your
+phone and your computers. Sign in with your Pocket Casts account, then play
+your Up Next, in-progress and new episodes and browse your shows. Pause here,
+carry on on your phone, come back: Legato asks Pocket Casts where you are
+before it plays again.
+
+In development. Legato is a hard fork of Nine Point Labs'
+[Pocket Casts plugin](https://github.com/Ninepointlabs-Omarchy-Extras/omarchy-pocketcasts)
+(MIT), with a resume that never rewinds your other devices, no background
+polling, and more to come.
 
 Audio plays through `mpv` in the background. There's no browser and no app
 window.
 
-![The Pocket Casts panel open on the Podcasts tab](preview.png)
+![The panel open on the Podcasts tab](preview.png)
 
 | Up Next | In Progress | New releases |
 |---|---|---|
@@ -28,7 +35,7 @@ window.
 ## Install
 
 ```sh
-omarchy plugin add https://github.com/Ninepointlabs-Omarchy-Extras/omarchy-pocketcasts.git --enable
+omarchy plugin add https://github.com/cwilliams5/omarchy-legato.git --enable
 ```
 
 The chip appears in the right section of the bar.
@@ -36,9 +43,9 @@ The chip appears in the right section of the bar.
 To work from a checkout instead:
 
 ```sh
-git clone https://github.com/Ninepointlabs-Omarchy-Extras/omarchy-pocketcasts ~/Projects/omarchy-pocketcasts
-~/Projects/omarchy-pocketcasts/install.sh          # adds the widget to the right of the bar
-~/Projects/omarchy-pocketcasts/install.sh center   # or pick a section
+git clone https://github.com/cwilliams5/omarchy-legato ~/Projects/omarchy-legato
+~/Projects/omarchy-legato/install.sh          # adds the widget to the right of the bar
+~/Projects/omarchy-legato/install.sh center   # or pick a section
 ```
 
 Run `install.sh` again after you pull changes. If the panel doesn't pick
@@ -50,8 +57,8 @@ Stop playback first (the stop button, or **Sign out**, which also closes the
 player), since mpv keeps running on its own. Then:
 
 ```sh
-omarchy plugin remove ninepointlabs.pocketcasts
-rm -rf ~/.local/state/omarchy-pocketcasts ~/.cache/omarchy-pocketcasts   # login tokens, playback state, cover cache
+omarchy plugin remove io.github.cwilliams5.legato
+rm -rf ~/.local/state/omarchy-legato ~/.cache/omarchy-legato   # login tokens, playback state, cover cache
 ```
 
 `mpv` and `mpv-mpris` are ordinary packages; remove them with
@@ -93,27 +100,26 @@ position that hasn't moved is never sent again, so pausing, stopping or
 switching episodes here can't rewind your phone.
 
 **About:** the 󰋽 button at the top of the panel (or `i` in the panel, or
-`omarchy-shell ninepointlabs.pocketcasts about`) shows the version, the
-license (readable in place), Nine Point Labs, what the plugin does with your
-data, and the support address,
-[help@ninepointlabs.com](mailto:help@ninepointlabs.com), with *Email*, *Copy*
-and *Copy version details* buttons. Back or `Esc` returns to the player.
+`omarchy-shell io.github.cwilliams5.legato about`) shows the version, the
+license (readable in place), who made it and what it's based on, what it
+does with your data, and a *Report* button that opens a new GitHub issue
+with your version details filled in. Back or `Esc` returns to the player.
 
 ### Keybindings
 
-The service listens for IPC commands under the `pocketcasts` target:
+The service listens for IPC commands under the `legato` target:
 
 ```sh
-omarchy-shell ninepointlabs.pocketcasts toggle   # open/close the panel
-omarchy-shell ninepointlabs.pocketcasts about    # open the panel on its About page
-omarchy-shell pocketcasts playPause
-omarchy-shell pocketcasts status                 # JSON: playing, title, show, position, speed
+omarchy-shell io.github.cwilliams5.legato toggle   # open/close the panel
+omarchy-shell io.github.cwilliams5.legato about    # open the panel on its About page
+omarchy-shell legato playPause
+omarchy-shell legato status                 # JSON: playing, title, show, position, speed
 ```
 
 For example, in `~/.config/hypr/bindings.conf`:
 
 ```
-bindd = SUPER ALT, P, Pocket Casts play/pause, exec, omarchy-shell pocketcasts playPause
+bindd = SUPER ALT, P, Legato play/pause, exec, omarchy-shell legato playPause
 ```
 
 The commands are `playPause`, `next`, `skipBack`, `skipForward`, `stop`,
@@ -136,7 +142,7 @@ The commands are `playPause`, `next`, `skipBack`, `skipForward`, `stop`,
 - The password goes to Pocket Casts once, at sign-in, over stdin. It's never
   passed as a command-line argument and never stored.
 - Only the access and refresh tokens are kept, in
-  `$XDG_STATE_HOME/omarchy-pocketcasts/auth.json` (mode 0600). Signing out
+  `$XDG_STATE_HOME/omarchy-legato/auth.json` (mode 0600). Signing out
   deletes them.
 - The bridge only connects to Pocket Casts hosts: `api.pocketcasts.com` (the
   only one that gets your token), the episode-list CDN, and
@@ -152,4 +158,6 @@ node --test tests/model.test.cjs                             # Model.js and stat
 
 ## License
 
-MIT
+MIT. Copyright (c) 2026 Nine Point Labs and (c) 2026 Cody Williams; see
+[LICENSE](LICENSE). Not affiliated with or endorsed by Pocket Casts or
+Automattic.

@@ -85,11 +85,11 @@ test("trustedExecutable accepts only clean paths inside trusted directories", ()
 })
 
 test("the bridge runs under an isolated absolute interpreter or not at all", () => {
-  assert.deepEqual(plain(Model.bridgeCommand("/usr/bin/python3", "/p/bin/pocketcasts-bridge", ["play", "a b; $(id)"])),
-    ["/usr/bin/python3", "-I", "-B", "/p/bin/pocketcasts-bridge", "play", "a b; $(id)"])
-  assert.deepEqual(plain(Model.bridgeCommand("python3", "/p/bin/pocketcasts-bridge", ["status"])), [])
-  assert.deepEqual(plain(Model.bridgeCommand("/home/x/bin/python3", "/p/bin/pocketcasts-bridge", ["status"])), [])
-  assert.deepEqual(plain(Model.bridgeCommand("/usr/bin/python3", "bin/pocketcasts-bridge", ["status"])), [])
+  assert.deepEqual(plain(Model.bridgeCommand("/usr/bin/python3", "/p/bin/legato-bridge", ["play", "a b; $(id)"])),
+    ["/usr/bin/python3", "-I", "-B", "/p/bin/legato-bridge", "play", "a b; $(id)"])
+  assert.deepEqual(plain(Model.bridgeCommand("python3", "/p/bin/legato-bridge", ["status"])), [])
+  assert.deepEqual(plain(Model.bridgeCommand("/home/x/bin/python3", "/p/bin/legato-bridge", ["status"])), [])
+  assert.deepEqual(plain(Model.bridgeCommand("/usr/bin/python3", "bin/legato-bridge", ["status"])), [])
   for (const candidate of Model.pythonCandidates) {
     const command = plain(Model.pythonProbeCommand(candidate))
     assert.equal(command[0], candidate)
@@ -171,21 +171,24 @@ test("the password travels on stdin, never in argv, and is cleared after use", (
   assert.match(panel, /passwordField\.text = ""/)
 })
 
-test("About: facts come from the repo, details and mailto are well formed", () => {
+test("About: facts come from the repo, details and the issue link are well formed", () => {
   const About = require(path.join(ROOT, "About.js"))
   const manifest = fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8")
   assert.equal(About.manifestVersion(manifest), JSON.parse(manifest).version)
   assert.equal(About.manifestVersion("not json"), "")
   assert.equal(About.manifestVersion('{"version":"1.0 <b>"}'), "")
-  assert.equal(JSON.parse(manifest).author, "Nine Point Labs")
+  assert.equal(JSON.parse(manifest).author, "Cody Williams")
   assert.equal(About.NAME, JSON.parse(manifest).name)
-  assert.equal(About.ORGANIZATION, "Nine Point Labs")
-  assert.equal(About.SUPPORT_EMAIL, "help@ninepointlabs.com")
+  assert.equal(About.MAINTAINER, "Cody Williams")
+  assert.match(About.BASED_ON, /^Nine Point Labs' Pocket Casts plugin$/)
+  assert.equal(About.SUPPORT_URL, JSON.parse(manifest).homepage + "/issues")
+  assert.match(About.TAGLINE, /not affiliated with or endorsed by Pocket Casts or Automattic/)
 
+  // A hard fork keeps the original's copyright line, then adds its own.
   const license = fs.readFileSync(path.join(ROOT, "LICENSE"), "utf8")
-  assert.equal(About.licenseSummary(license), "MIT License, © 2026 Nine Point Labs")
+  assert.equal(About.licenseSummary(license), "MIT License, © 2026 Nine Point Labs, © 2026 Cody Williams")
   const body = About.licenseBody(license)
-  assert.ok(body.startsWith("MIT License\n\nCopyright (c) 2026 Nine Point Labs\n\nPermission"))
+  assert.ok(body.startsWith("MIT License\n\nCopyright (c) 2026 Nine Point Labs Copyright (c) 2026 Cody Williams\n\nPermission"))
   assert.ok(!body.includes("a copy\nof"))
 
   assert.equal(About.probedVersion((major, minor) => major === 6 && minor <= 11, 6), "6.11")
@@ -196,14 +199,17 @@ test("About: facts come from the repo, details and mailto are well formed", () =
   const versions = { quickshell: "0.3", qt: "6.11", python: "3.14.7" }
   assert.equal(About.builtWith(versions), "Quickshell 0.3, Qt 6.11, Python 3.14.7 and mpv")
   assert.equal(About.builtWith({}), "Quickshell, Qt, Python and mpv")
-  const details = About.details("0.1.0", versions, "Hyprland, wayland")
-  assert.equal(details, "Omarchy Pocket Casts plugin 0.1.0\nQuickshell 0.3, Qt 6.11, Python 3.14.7 and mpv\nHyprland, wayland")
-  const mail = About.mailto("0.1.0", details)
-  assert.ok(mail.startsWith("mailto:help@ninepointlabs.com?subject=Omarchy%20Pocket%20Casts%20plugin%200.1.0&body="))
-  assert.ok(decodeURIComponent(mail.split("&body=")[1]).endsWith("Python 3.14.7 and mpv\nHyprland, wayland"))
+  const details = About.details("0.2.0", versions, "Hyprland, wayland")
+  assert.equal(details, "Legato 0.2.0\nQuickshell 0.3, Qt 6.11, Python 3.14.7 and mpv\nHyprland, wayland")
+  const issue = About.issueUrl(details)
+  assert.ok(issue.startsWith("https://github.com/cwilliams5/omarchy-legato/issues/new?body="))
+  assert.ok(decodeURIComponent(issue.split("?body=")[1]).endsWith("Python 3.14.7 and mpv\nHyprland, wayland"))
 })
 
-test("About: the repo spells the company Nine Point Labs", () => {
+test("About: Nine Point Labs is credited, and spelled right", () => {
+  for (const file of ["LICENSE", "README.md", "About.js"]) {
+    assert.match(fs.readFileSync(path.join(ROOT, file), "utf8"), /Nine Point Labs/, file)
+  }
   for (const file of ["LICENSE", "manifest.json", "README.md", "About.js", "AboutView.qml", "Panel.qml", "BarWidget.qml", "Service.qml"]) {
     const text = fs.readFileSync(path.join(ROOT, file), "utf8")
     assert.ok(!/Ninepoint Labs|NINEPOINT LABS/.test(text), file)

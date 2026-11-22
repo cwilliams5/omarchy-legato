@@ -20,7 +20,7 @@ import "Model.js" as Model
 //   scroll = volume ±5
 BarWidget {
   id: root
-  moduleName: "ninepointlabs.pocketcasts"
+  moduleName: "io.github.cwilliams5.legato"
 
   readonly property var service: panelLoader.item ? panelLoader.item.service : null
   readonly property bool authenticated: service ? service.authenticated === true : false
@@ -101,7 +101,7 @@ BarWidget {
   }
 
   IpcHandler {
-    target: "ninepointlabs.pocketcasts"
+    target: "io.github.cwilliams5.legato"
 
     function open(): void { root.open() }
     function close(): void { root.close() }
@@ -128,8 +128,8 @@ BarWidget {
     fixedHeight: root.vertical ? Style.bar.iconSlot : -1
     horizontalMargin: root.labelShown ? 7 : 6
     tooltipText: root.playerActive && root.labelText !== ""
-      ? (root.isPlaying ? "Pocket Casts · " : "Pocket Casts (paused) · ") + root.labelText
-      : (root.authenticated ? "Pocket Casts" : "Pocket Casts — not signed in")
+      ? (root.isPlaying ? "Legato · " : "Legato (paused) · ") + root.labelText
+      : (root.authenticated ? "Legato" : "Legato — not signed in to Pocket Casts")
 
     onPressed: function(b) {
       if (b === Qt.MiddleButton) { if (root.service) root.service.playPause() }
@@ -159,7 +159,7 @@ BarWidget {
         OpticalGlyph {
           anchors.fill: parent
           visible: !root.artShown
-          text: Model.glyph.pocketcasts
+          text: Model.glyph.app
           fontFamily: button.fontFamily
           fontSize: Style.bar.iconFont
           color: root.chipColor
