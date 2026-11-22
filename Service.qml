@@ -87,6 +87,9 @@ Item {
   readonly property real speed: player && player.speed ? Number(player.speed) : 1
   readonly property string trim: player && player.trim ? String(player.trim) : "off"
   readonly property bool boost: player && player.boost === true
+  // The video window's own choices (its right-click menu, the Settings page).
+  readonly property int videoTransparency: player && typeof player.videoTransparency === "number" ? player.videoTransparency : 0
+  readonly property bool videoPinned: !player || player.videoPinned !== false
   readonly property bool hasVideo: playerActive && player.hasVideo === true
   readonly property bool videoOn: playerActive && player.video === true
 
@@ -521,9 +524,13 @@ Item {
     // property-change: one of the observed properties (its first value
     // arrives right after observe_property). playback-restart: a seek (from
     // here, a media widget or playerctl) or a new file has settled.
-    // The video window's right-click menu: Always on top.
+    // The video window's right-click menu: Always on top, Transparency.
     if (message.event === "client-message" && message.args && message.args[0] === "legato-video-pin") {
-      call(["videopin", "toggle"], null)
+      setVideoPinned("toggle")
+      return
+    }
+    if (message.event === "client-message" && message.args && message.args[0] === "legato-video-transparency") {
+      setVideoTransparency(Number(message.args[1]))
       return
     }
     if (message.event === "end-file" && message.reason === "error") {
@@ -718,6 +725,23 @@ Item {
     if (!hasVideo) return false
     action(["video", "toggle"])
     return true
+  }
+
+  // Always on top for the video window: "on", "off" or "toggle".
+  function setVideoPinned(value) {
+    call(["videopin", value], function(result) {
+      if (!result.ok) { root.reportError(result.error); return }
+      root.optimistic({ videoPinned: result.data.videoPinned })
+    })
+  }
+
+  // How see-through the video window is, in percent: 0 to 80 in tens.
+  function setVideoTransparency(level) {
+    if (!Number.isInteger(level) || level < 0 || level > 80 || level % 10 !== 0) return
+    call(["videotransparency", String(level)], function(result) {
+      if (!result.ok) { root.reportError(result.error); return }
+      root.optimistic({ videoTransparency: result.data.videoTransparency })
+    })
   }
 
   function toggleBoost() {

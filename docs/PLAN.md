@@ -119,24 +119,25 @@ of its own.
 - [x] E4 Settings page behind the gear (`g`), built from the schema.
 - [x] E5 Right-click menu (play, move to top/bottom, remove, mark played);
   right- and middle-click no longer remove from Up Next.
-- [ ] E6 Drag to reorder Up Next. The web player does it with
+- [x] E6 Drag to reorder Up Next: **decided 2026-11-21, not for v1.** The
+  right-click menu's "to top" and "to bottom" are enough; drag would bring
+  multi-select with it, and the feature keeps deepening. If it's ever
+  revisited: the web player does it with
   `POST /up_next/sync {"version":2,"upNext":{"changes":[{"action":5,
   "modified":<ms>,"episodes":[{uuid,title,url,podcast,published}, ...]}]}}`,
   the whole list in its new order (action 5 = replace). Risk: a replace
   sent while the phone changes Up Next can drop the phone's change, so
   re-read the list just before sending. UI: a drag handle on queued rows.
-- [ ] E7 Optional: after the video window closes, restart mpv at the same
-  spot to give back the ~450 MB the GPU driver keeps mapped (an audio-only
-  player is ~90 MB); today the idle unload does it eventually.
+- [x] E7 Restarting mpv after the video window closes, to give back GPU
+  memory: **dropped 2026-11-21.** It was ~450 MB on the NVIDIA GPU; on the
+  display's Intel GPU it's ~98 MB, and the idle unload frees it anyway.
 
-- [ ] E8 **Bug (Cody, 2026-11-21): right-clicking the video window shows
-  no menu.** Cause: `bind_video_window_keys()` binds `MBTN_RIGHT` to
+- [x] E8 **Bug (Cody, 2026-11-21): right-clicking the video window shows
+  no menu.** Cause: `bind_video_window_keys()` bound `MBTN_RIGHT` to
   `context-menu`, which does nothing on Linux; mpv's menu here is
-  context_menu.lua, opened by `script-message-to context_menu open`
-  (verified live). Change the binding and its assertion in
-  tests/test_bridge.py (`test_closing_the_video_window_never_quits_the_player`),
-  deploy, then Cody re-opens the video (re-applies keys to his running
-  player) and right-clicks it.
+  context_menu.lua, opened by `script-message-to context_menu open`.
+  Fixed and deployed with E11; a running player gets it when its video
+  window is next shown. Cody to confirm with a real right-click.
 - [x] E9 Video window on Omarchy's floating workspaces: placed and pinned
   (rule through `o.window`, named, re-sent before each load while video is
   on), no title bar (`hyprbars:no_bar`), geometry only learned from a
@@ -145,8 +146,19 @@ of its own.
   full size (`--osd-scale-by-window=no`). Confirmed by Cody except the
   menu itself (E8).
 - [x] E10 Up Next right-click menu confirmed by Cody.
-- [ ] D2 follow-up: Cody's real lid-close test (play, close the lid, the
-  phone shows the position, reopen: paused).
+- [x] D2 follow-up: Cody's real lid-close test (play, close the lid, the
+  phone shows the position, reopen: paused). Passed 2026-11-21.
+- [ ] E11 Video window transparency (Cody's idea, 2026-11-21), so the
+  desktop shows through: Off (default) to 80% in tens, in the window's
+  right-click menu (a "Transparency" submenu) and on the Settings page
+  (a Video window section, with Always on top). Kept in prefs.json
+  (`videoTransparency`) beside `videoPinned`. Applied as the window's own
+  opacity (`set_prop`), not a rule: Omarchy's floating workspaces force
+  every window opaque by a tag rule that beats another rule (tested). A
+  `window.open` hook, added once per Hyprland config, sets it on each new
+  video window. Built, tested and checked live on a stand-in window
+  (new window at 30%, survives a rule re-evaluation, back to solid at 0);
+  Cody to try it on the real one.
 
 ### Release prep (go-public)
 
@@ -213,3 +225,9 @@ of its own.
   window that got the rule. New: the window's right-click menu (Always on
   top: On/Off, pause/play, hide), full-size text in it. Checked live on
   floating workspace 1 and restored.
+- 2026-11-21 (second session): Cody's lid-close test passed (D2). E6
+  (drag) decided not for v1, E7 dropped. E8 fixed (right-click opens mpv's
+  context_menu script). E11 transparency built: a rule can't do it on a
+  floating workspace (Omarchy's tag rule forces opacity 1 and wins), the
+  window's own property can; a window.open hook covers windows mpv opens
+  later. The menu's check mark draws as a box, its submenu arrow draws.

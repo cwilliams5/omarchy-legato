@@ -23,9 +23,10 @@ menu, pause-and-save before sleep. Speed, Trim Silence and Volume Boost are
 global and Legato's own (the Android app doesn't sync effects; PLAN B4).
 Each show's skip intro and outro (which do sync) are honored.
 
-Open (docs/PLAN.md, phase E): the video window's right-click menu doesn't
-open (E8, cause known), a real lid-close test (D2), drag to reorder (E6),
-then screenshots (D1) and release prep.
+Lid-close test passed. Open (docs/PLAN.md, phase E): Cody to confirm the
+video window's right-click menu (E8, fixed) and its transparency (E11,
+new); then screenshots (D1) and release prep. Drag to reorder (E6) is
+decided not for v1.
 
 ## What Legato is
 
@@ -78,7 +79,7 @@ what the API lists, or touch the user's Hyprland config.
     `skipForward`, `autoplay`, `unloadAfterMinutes`, `pauseOnSleep`; the
     schema in manifest.json drives the Settings page); the player's own
     choices in the bridge's `prefs.json` (`volume`, `speed`, `trim`,
-    `boost`, `videoGeometry`, `videoPinned`)
+    `boost`, `videoGeometry`, `videoPinned`, `videoTransparency`)
   - state `$XDG_STATE_HOME/omarchy-legato/` (auth.json, playback.json,
     prefs.json, podcasts-cache.json, lock; all 0600, folder 0700)
   - cache `$XDG_CACHE_HOME/omarchy-legato/art/`
@@ -87,8 +88,11 @@ what the API lists, or touch the user's Hyprland config.
     volumeUp, volumeDown, cycleSpeed, cycleTrim, toggleBoost, toggleVideo,
     refresh, status) and the plugin id (`toggle`, `about`)
   - mpv window title `Legato`, Wayland app id (Hyprland class)
-    `legato-video`, audio client name `legato`; mpv script-message
-    `legato-video-pin` (video window menu → service → `videopin toggle`)
+    `legato-video`, audio client name `legato`; mpv script-messages
+    `legato-video-pin` and `legato-video-transparency <n>` (video window
+    menu → service → `videopin toggle`, `videotransparency <n>`); Lua
+    globals in Hyprland `legato_video_alpha`, `legato_video_apply`,
+    `legato_video_hook` (the opacity hook)
   - User-Agent `legato/0.2 (+https://github.com/cwilliams5/omarchy-legato)`
 - Version: 0.2.0 now; 1.0.0 at the public release.
 - Branding: `branding/` (`python3 branding/build.py` regenerates it). See
@@ -240,6 +244,14 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   each time the video opens and before each episode load while the video
   is on (mpv opens the next episode's video by itself). Size and position
   are learned from the window (`videoGeometry`) only when it got the rule.
+  Its transparency is not a rule: Omarchy's floating workspaces tag every
+  window and a rule on that tag forces opacity `1.0 override`, beating a
+  later rule of ours (tested: our rule's 0.5 read back as 1). The
+  window's own property (`hl.dsp.window.set_prop`, props `opacity`,
+  `opacity_inactive` and their `_override`) wins over rules and survives
+  their re-evaluation, so the same `hyprctl repl` call sets it on the
+  open window and adds a `hl.on("window.open")` hook (once, checked with
+  `is_active()`) that sets it on each new one.
   mpv needs `WAYLAND_DISPLAY` to draw at all: without it, selecting a
   video track silently does nothing. The first video of a session takes
   about 2.5 s (GPU set-up). mpv lists an episode's cover art as a video
@@ -254,10 +266,12 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
 - **mpv's context menu** on Linux is the built-in context_menu.lua: it
   opens on `script-message-to context_menu open` (the `context-menu`
   command is for native menus elsewhere), reads `menu-data`, draws at the
-  pointer (top-left if the pointer is outside), and its font has no check
-  mark. Keys, menus and OSD settings set on a player only apply to that
-  player: anything new is applied again when the video window opens, for
-  players started by an older Legato.
+  pointer (top-left if the pointer is outside). Its check mark (✔) draws
+  as a box here, so states are said in words; its submenu arrow (▸) draws,
+  and submenus (`"submenu": [...]`) open on hover. Keys, menus and OSD
+  settings set on a player only apply to that player: anything new is
+  applied again when the video window opens, for players started by an
+  older Legato.
 - **mpv's memory:** about 67 MB audio-only plus its buffer (capped at
   64 MB here, mpv's default is 150 MB); once a video has been shown, the
   GPU driver stays mapped until mpv exits (~98 MB on Intel; ~570 MB in all

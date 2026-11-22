@@ -165,6 +165,20 @@ class Validation(unittest.TestCase):
         self.assertIn('["hyprbars:no_bar"] = true', default)
         self.assertIn("monitor_w*7/25", default)
         self.assertIn("pin = false", bridge.video_rule_lua(None, pinned=False))
+        # Opacity is the window's own property (a rule loses to Omarchy's
+        # floating workspaces), set now and by a window.open hook added once.
+        self.assertIn('legato_video_alpha = "1.00"', default)
+        self.assertIn('legato_video_alpha = "0.70"', bridge.video_rule_lua(None, transparency=30))
+        self.assertIn('hl.on("window.open"', default)
+        self.assertIn("legato_video_hook:is_active()", default)
+        self.assertIn('w.class == "legato-video"', default)
+        self.assertIn('"opacity_override"', default)
+        self.assertTrue(default.endswith('return "ok"'))
+        # Only the fixed levels ever reach the Lua text.
+        for bad in (35, 90, 100, -10, "30", True, None, 30.0):
+            self.assertEqual(bridge.video_transparency({"videoTransparency": bad}), 0, bad)
+            self.assertIn('legato_video_alpha = "1.00"', bridge.video_rule_lua(None, transparency=bad))
+        self.assertEqual(bridge.video_transparency({"videoTransparency": 80}), 80)
         placed = bridge.video_rule_lua({"x": 800, "y": 500, "w": 400, "h": 225})
         self.assertIn('size = { "400", "225" }, move = { "800", "500" }', placed)
         # Only whole numbers, and a sane size, are ever kept.
@@ -1074,6 +1088,26 @@ class VideoWindow(PlayerTestCase):
             self.assertEqual(player.get("menu-data")[0]["title"], "Always on top: Off")
         run_bridge("video", "on")
         self.assertIn("pin = false", [a for a in self.hypr if a[0] == "repl"][-1][1])
+        self.assertIn('legato_video_alpha = "1.00"', [a for a in self.hypr if a[0] == "repl"][-1][1])
+
+        # Transparency, from the menu or the Settings page.
+        self.assertEqual(run_bridge("videotransparency", "30")["data"]["videoTransparency"], 30)
+        self.assertEqual(bridge.load_prefs()["videoTransparency"], 30)
+        self.assertIn('legato_video_alpha = "0.70"', [a for a in self.hypr if a[0] == "repl"][-1][1])
+        with bridge.Mpv.connect() as player:
+            menu = player.get("menu-data")
+        self.assertEqual(menu[1]["title"], "Transparency: 30%")
+        self.assertIn({"title": "30% (current)", "cmd": "script-message legato-video-transparency 30"},
+                      menu[1]["submenu"])
+        self.assertEqual(run_bridge("player")["data"]["videoTransparency"], 30)
+        run_bridge("video", "off")
+        run_bridge("video", "on")  # a new window opens see-through too
+        self.assertIn('legato_video_alpha = "0.70"', [a for a in self.hypr if a[0] == "repl"][-1][1])
+        with mock.patch.object(sys, "stderr", io.StringIO()):
+            for bad in ("35", "90", "-10", "x"):
+                with self.assertRaises(SystemExit):
+                    run_bridge("videotransparency", bad)
+        self.assertEqual(bridge.load_prefs()["videoTransparency"], 30)
 
     def test_a_window_that_missed_the_rule_is_not_remembered(self):
         prefs = {"videoGeometry": {"x": 924, "y": 630, "w": 274, "h": 144}}
@@ -1093,10 +1127,15 @@ class VideoWindow(PlayerTestCase):
                         if b.get("section") == "default" and b.get("priority", 0) >= 0}
         for key in ("CLOSE_WIN", "q", "Q"):
             self.assertEqual(bindings.get(key), "set vid no", key)
-        self.assertEqual(bindings.get("MBTN_RIGHT"), "context-menu")
+        # mpv's menu on Linux is its context_menu script; the context-menu
+        # command only opens native menus (Windows, macOS) and did nothing.
+        self.assertEqual(bindings.get("MBTN_RIGHT"), "script-message-to context_menu open")
         with bridge.Mpv.connect() as player:
             menu = player.get("menu-data")
         self.assertEqual(menu[0]["title"], "Always on top: On")
+        self.assertEqual(menu[1]["title"], "Transparency: Off")
+        self.assertEqual([i["title"] for i in menu[1]["submenu"]],
+                         ["Off (current)", "10%", "20%", "30%", "40%", "50%", "60%", "70%", "80%"])
         with bridge.Mpv.connect() as player:
             self.assertFalse(player.get("osd-scale-by-window"))  # full-size text in a small window
         self.assertEqual(menu[0]["cmd"], "script-message legato-video-pin toggle")

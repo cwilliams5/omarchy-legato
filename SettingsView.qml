@@ -7,7 +7,9 @@ import qs.Ui
 // manifest.json's barWidget.schema, with a control for its type, so a new
 // setting shows up here by being added to the schema. Changes are saved to
 // this widget's entry in ~/.config/omarchy/shell.json, as `omarchy bar set`
-// would, and take effect at once.
+// would, and take effect at once. Below them, the video window's own
+// choices, which the player keeps (as it keeps speed, Trim and Boost) and
+// its right-click menu also changes.
 Column {
   id: root
 
@@ -17,9 +19,13 @@ Column {
   property var schema: []      // barWidget.schema
   property var defaults: ({})  // barWidget.defaults
   property var values: ({})    // the widget's settings entry
+  property int videoTransparency: 0  // percent, 0 to 80 in tens
+  property bool videoPinned: true
 
   signal backRequested()
   signal changeRequested(string key, var value)
+  signal videoTransparencyRequested(int level)
+  signal videoPinnedRequested(bool pinned)
 
   readonly property color dim: Qt.darker(foreground, 1.55)
 
@@ -170,6 +176,114 @@ Column {
     wrapMode: Text.WordWrap
     textFormat: Text.PlainText
     text: "Saved to ~/.config/omarchy/shell.json, as `omarchy bar set io.github.cwilliams5.legato <key> <value>` would. Speed, Trim Silence and Volume Boost are on the player itself."
+    color: root.dim
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+  }
+
+  Text {
+    width: parent.width
+    topPadding: Style.space(6)
+    text: "VIDEO WINDOW"
+    color: root.dim
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+    font.bold: true
+  }
+
+  Item {
+    width: root.width
+    height: Math.max(pinLabel.implicitHeight, pinButton.implicitHeight)
+
+    Text {
+      id: pinLabel
+      anchors.left: parent.left
+      anchors.right: pinButton.left
+      anchors.rightMargin: Style.space(12)
+      anchors.verticalCenter: parent.verticalCenter
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: "Always on top, on every workspace"
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
+    Button {
+      id: pinButton
+      objectName: "videoPinned"
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      text: root.videoPinned ? "On" : "Off"
+      selected: root.videoPinned
+      foreground: root.foreground
+      accent: root.accent
+      fontFamily: root.fontFamily
+      fontSize: Style.font.caption
+      onClicked: root.videoPinnedRequested(!root.videoPinned)
+    }
+  }
+
+  Item {
+    width: root.width
+    height: Math.max(transparencyLabel.implicitHeight, transparencyControl.implicitHeight)
+
+    Text {
+      id: transparencyLabel
+      anchors.left: parent.left
+      anchors.right: transparencyControl.left
+      anchors.rightMargin: Style.space(12)
+      anchors.verticalCenter: parent.verticalCenter
+      wrapMode: Text.WordWrap
+      textFormat: Text.PlainText
+      text: "Transparency, to see the desktop through it"
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
+    Row {
+      id: transparencyControl
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      spacing: Style.space(4)
+
+      Button {
+        objectName: "videoTransparencyLess"
+        iconText: "󰍴"
+        tooltipText: "Less"
+        enabled: root.videoTransparency > 0
+        foreground: root.foreground
+        accent: root.accent
+        fontFamily: root.fontFamily
+        onClicked: root.videoTransparencyRequested(Math.max(0, root.videoTransparency - 10))
+      }
+      Text {
+        width: Style.space(40)
+        horizontalAlignment: Text.AlignHCenter
+        anchors.verticalCenter: parent.verticalCenter
+        textFormat: Text.PlainText
+        text: root.videoTransparency > 0 ? root.videoTransparency + "%" : "Off"
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+      }
+      Button {
+        objectName: "videoTransparencyMore"
+        iconText: "󰐕"
+        tooltipText: "More"
+        enabled: root.videoTransparency < 80
+        foreground: root.foreground
+        accent: root.accent
+        fontFamily: root.fontFamily
+        onClicked: root.videoTransparencyRequested(Math.min(80, root.videoTransparency + 10))
+      }
+    }
+  }
+
+  Text {
+    width: parent.width
+    wrapMode: Text.WordWrap
+    textFormat: Text.PlainText
+    text: "Also in the video window's right-click menu."
     color: root.dim
     font.family: root.fontFamily
     font.pixelSize: Style.font.caption

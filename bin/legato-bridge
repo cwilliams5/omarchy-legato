@@ -1579,20 +1579,25 @@ def start_mpv(prefs):
 
 VIDEO_APP_ID = "legato-video"
 GEOMETRY_RE = re.compile(r"^-?\d{1,5}$")
+# How see-through the video window is, in percent. Capped below 100: a
+# window you can't see is one you can't find to right-click.
+TRANSPARENCY_LEVELS = (0, 10, 20, 30, 40, 50, 60, 70, 80)
 
 
 def bind_video_window_keys(player, prefs=None):
     """Closing the video window, or mpv's quit keys inside it, hide the
     video instead of quitting the player (which would stop the episode).
-    Right-click opens Legato's menu instead of pausing."""
+    Right-click opens Legato's menu instead of pausing: mpv's own menu on
+    Linux is its context_menu script (the `context-menu` command only opens
+    the native menus mpv has on Windows and macOS, and does nothing here)."""
     for key, cmd in (("CLOSE_WIN", "set vid no"), ("q", "set vid no"), ("Q", "set vid no"),
-                     ("MBTN_RIGHT", "context-menu")):
+                     ("MBTN_RIGHT", "script-message-to context_menu open")):
         try:
             player.command("keybind", key, cmd)
         except ApiError:
             pass
     try:
-        player.command("set_property", "menu-data", video_menu(video_pinned(prefs or load_prefs())))
+        player.command("set_property", "menu-data", video_menu(prefs or load_prefs()))
     except ApiError:
         pass
 
@@ -1619,7 +1624,7 @@ def hyprctl(*args):
     return done.stdout if done.returncode == 0 else ""
 
 
-def video_rule_lua(geometry, pinned=True):
+def video_rule_lua(geometry, pinned=True, transparency=0):
     """The window rule, as Lua for `hyprctl repl`. Numbers and fixed words
     only: nothing from outside reaches the Lua text. Pinned: on every
     workspace, above the rest; otherwise a floating window on the workspace
@@ -1643,19 +1648,65 @@ def video_rule_lua(geometry, pinned=True):
             'if o and o.window then o.window("^%(id)s$", r) '
             'else r.match = { class = "^%(id)s$" } hl.window_rule(r) end '
             'pcall(hl.window_rule, { name = "%(id)s-nobar", match = { class = "^%(id)s$" }, ["hyprbars:no_bar"] = true }) '
-            'return "ok"' % {"id": VIDEO_APP_ID, "pin": "true" if pinned else "false", "size": size, "move": move})
+            '%(opacity)s'
+            'return "ok"' % {"id": VIDEO_APP_ID, "pin": "true" if pinned else "false", "size": size, "move": move,
+                             "opacity": video_opacity_lua(transparency)})
+
+
+def video_opacity_lua(transparency):
+    """The window's opacity, as Lua for the same `hyprctl repl` call.
+
+    Not a window rule: on Omarchy's floating workspaces a rule (from the
+    tag every window there gets) makes every window fully opaque, and it
+    wins over another rule. A window's own property (`set_prop`) wins over
+    rules, so it is set on the open window now, and on each new one as it
+    opens (mpv may open a fresh window for the next episode) by a
+    `window.open` hook, added once per Hyprland config (a reload drops it,
+    as it drops the rules, and the next `video on` adds both again). The
+    hook reads the level from a global, so a change needs no new hook.
+    Override: the level is the window's whole opacity, not a fraction of
+    the user's own window opacity."""
+    alpha = "%.2f" % ((100 - video_transparency({"videoTransparency": transparency})) / 100.0)
+    return ('legato_video_alpha = "%(alpha)s" '
+            'legato_video_apply = function(w) '
+            'if not (w and w.class == "%(id)s" and w.address) then return end '
+            'local target = "address:" .. w.address '
+            'for _, prop in ipairs({ "opacity", "opacity_inactive" }) do '
+            'hl.dispatch(hl.dsp.window.set_prop({ prop = prop, value = legato_video_alpha, window = target })) end '
+            'for _, prop in ipairs({ "opacity_override", "opacity_inactive_override" }) do '
+            'hl.dispatch(hl.dsp.window.set_prop({ prop = prop, value = "true", window = target })) end '
+            'end '
+            'if not (legato_video_hook and legato_video_hook:is_active()) then '
+            'legato_video_hook = hl.on("window.open", function(w) pcall(legato_video_apply, w) end) end '
+            'for _, w in ipairs(hl.get_windows() or {}) do pcall(legato_video_apply, w) end '
+            % {"id": VIDEO_APP_ID, "alpha": alpha})
 
 
 def video_pinned(prefs):
     return prefs.get("videoPinned") is not False
 
 
-def video_menu(pinned):
+def video_transparency(prefs):
+    level = prefs.get("videoTransparency")
+    return level if isinstance(level, int) and not isinstance(level, bool) and level in TRANSPARENCY_LEVELS else 0
+
+
+def transparency_label(level):
+    return "%d%%" % level if level else "Off"
+
+
+def video_menu(prefs):
     """The video window's right-click menu (mpv's own context menu)."""
-    # Said in words: the menu's font has no check mark glyph.
+    # Said in words: the menu's font has no check mark glyph (it draws a
+    # box), though it has the submenu arrow.
+    level = video_transparency(prefs)
     return [
-        {"title": "Always on top: %s" % ("On" if pinned else "Off"),
+        {"title": "Always on top: %s" % ("On" if video_pinned(prefs) else "Off"),
          "cmd": "script-message legato-video-pin toggle"},
+        {"title": "Transparency: %s" % transparency_label(level), "type": "submenu",
+         "submenu": [{"title": transparency_label(n) + (" (current)" if n == level else ""),
+                      "cmd": "script-message legato-video-transparency %d" % n}
+                     for n in TRANSPARENCY_LEVELS]},
         {"type": "separator"},
         {"title": "Pause / play", "cmd": "cycle pause"},
         {"title": "Hide video", "cmd": "set vid no"},
@@ -1665,7 +1716,7 @@ def video_menu(pinned):
 def place_video_window(prefs):
     """Send the placement rule (again: a Hyprland config reload drops rules
     added at run time)."""
-    hyprctl("repl", video_rule_lua(saved_geometry(prefs), video_pinned(prefs)))
+    hyprctl("repl", video_rule_lua(saved_geometry(prefs), video_pinned(prefs), video_transparency(prefs)))
 
 
 def saved_geometry(prefs):
@@ -1920,6 +1971,8 @@ def player_view(snap, state, prefs, load_failed=False):
         "speed": float(snap.get("speed")) if active and isinstance(snap.get("speed"), (int, float)) else clamp_speed(prefs.get("speed", 1.0)),
         "trim": trim_level(prefs.get("trim")),
         "boost": prefs.get("boost") is True,
+        "videoTransparency": video_transparency(prefs),
+        "videoPinned": video_pinned(prefs),
         "hasVideo": active and has_video(snap),
         "video": active and video_shown(snap),
         "item": episode or None,
@@ -2496,11 +2549,29 @@ def cmd_videopin(args):
     if player:
         with player:
             try:
-                player.command("set_property", "menu-data", video_menu(pinned))
+                player.command("set_property", "menu-data", video_menu(prefs))
                 player.command("show-text", "Always on top: %s" % ("on" if pinned else "off"), 1500)
             except ApiError:
                 pass
     out({"videoPinned": pinned})
+
+
+def cmd_videotransparency(args):
+    """How see-through the video window is (its right-click menu, or the
+    Settings page): the open window changes now, new ones open that way."""
+    prefs = load_prefs()
+    prefs["videoTransparency"] = args.value
+    save_prefs(prefs)
+    place_video_window(prefs)  # the level, to the open window and the hook
+    player = Mpv.connect()
+    if player:
+        with player:
+            try:
+                player.command("set_property", "menu-data", video_menu(prefs))
+                player.command("show-text", "Transparency: %s" % transparency_label(args.value).lower(), 1500)
+            except ApiError:
+                pass
+    out({"videoTransparency": args.value})
 
 
 def cmd_trim(args):
@@ -2676,6 +2747,8 @@ def build_parser():
     p = sub.add_parser("trim"); p.add_argument("value"); p.set_defaults(fn=cmd_trim)
     p = sub.add_parser("video"); p.add_argument("value", choices=("on", "off", "toggle")); p.set_defaults(fn=cmd_video)
     p = sub.add_parser("videopin"); p.add_argument("value", choices=("on", "off", "toggle")); p.set_defaults(fn=cmd_videopin)
+    p = sub.add_parser("videotransparency"); p.add_argument("value", type=int, choices=TRANSPARENCY_LEVELS)
+    p.set_defaults(fn=cmd_videotransparency)
     p = sub.add_parser("boost"); p.add_argument("value", choices=("on", "off", "toggle")); p.set_defaults(fn=cmd_boost)
     sub.add_parser("sleepguard").set_defaults(fn=cmd_sleepguard)
     sub.add_parser("next").set_defaults(fn=cmd_next)

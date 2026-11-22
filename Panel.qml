@@ -534,6 +534,10 @@ Panel {
         schema: root.manifestData && root.manifestData.barWidget ? (root.manifestData.barWidget.schema || []) : []
         defaults: root.manifestData && root.manifestData.barWidget ? (root.manifestData.barWidget.defaults || {}) : ({})
         values: root.settings || ({})
+        videoTransparency: root.service ? root.service.videoTransparency : 0
+        videoPinned: !root.service || root.service.videoPinned
+        onVideoTransparencyRequested: function(level) { if (root.service) root.service.setVideoTransparency(level) }
+        onVideoPinnedRequested: function(pinned) { if (root.service) root.service.setVideoPinned(pinned ? "on" : "off") }
         onBackRequested: root.setSettings(false)
         onChangeRequested: function(key, value) {
           var change = {}

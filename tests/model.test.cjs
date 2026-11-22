@@ -60,7 +60,14 @@ test("the video window is offered only for video episodes, and mpv reports it", 
   assert.match(panel, /t === "o"\) root\.service\.toggleBoost\(\)/)
   assert.match(service, /function toggleBoost\(\): string/)
   assert.match(service, /"idle-active", "vid"\]/)
-  assert.match(service, /message\.args\[0\] === "legato-video-pin"[\s\S]{0,80}call\(\["videopin", "toggle"\]/)
+  assert.match(service, /message\.args\[0\] === "legato-video-pin"[\s\S]{0,40}setVideoPinned\("toggle"\)/)
+  assert.match(service, /function setVideoPinned\(value\) \{\s*call\(\["videopin", value\]/)
+  // The menu's transparency reaches the bridge only as one of its levels.
+  assert.match(service, /message\.args\[0\] === "legato-video-transparency"[\s\S]{0,40}setVideoTransparency\(Number\(message\.args\[1\]\)\)/)
+  assert.match(service, /function setVideoTransparency\(level\) \{\s*if \(!Number\.isInteger\(level\) \|\| level < 0 \|\| level > 80 \|\| level % 10 !== 0\) return/)
+  const settingsView = fs.readFileSync(path.join(ROOT, "SettingsView.qml"), "utf8")
+  assert.match(settingsView, /signal videoTransparencyRequested\(int level\)/)
+  assert.match(panel, /onVideoTransparencyRequested: function\(level\) \{ if \(root\.service\) root\.service\.setVideoTransparency\(level\) \}/)
 })
 
 test("the sleep guard holds a logind delay, dies with its parent, and runs only while an episode is loaded", () => {
