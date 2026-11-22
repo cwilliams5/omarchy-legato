@@ -170,6 +170,15 @@ of its own.
   and mpv's built-in keys are off in it. Speed, Trim, Boost, volume and
   seeks show briefly on the video.
 
+- [x] E14 (Cody, 2026-11-21): an episode's "video" was one still frame.
+  Its MP4 carries the cover as a PNG video stream that mpv doesn't flag as
+  cover art, so Legato offered the video window for it. Still-picture
+  codecs no longer count as video; the video button also shows while the
+  window is open, so a cover left showing can be hidden. (Also that night:
+  a drag near the bar took Legato's chip off it, which disables the plugin;
+  put back with `omarchy plugin enable io.github.cwilliams5.legato
+  --section right --index 9`. Not a Legato bug.)
+
 ### F. Fresh-eyes review (2026-11-21, second session)
 
 Two independent reviews (bridge, QML), each finding checked against the

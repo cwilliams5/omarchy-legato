@@ -54,7 +54,8 @@ test("Trim Silence levels read as Pocket Casts names them", () => {
 test("the video window is offered only for video episodes, and mpv reports it", () => {
   const panel = fs.readFileSync(path.join(ROOT, "Panel.qml"), "utf8")
   const service = fs.readFileSync(path.join(ROOT, "Service.qml"), "utf8")
-  assert.match(panel, /visible: root\.service && root\.service\.hasVideo/)
+  assert.match(panel, /visible: root\.service && \(root\.service\.hasVideo \|\| root\.service\.videoOn\)/)
+  assert.match(service, /function toggleVideo\(\) \{\s*if \(!hasVideo && !videoOn\) return false/)
   assert.match(panel, /t === "v"\) root\.service\.toggleVideo\(\)/)
   assert.match(service, /function toggleVideo\(\): string/)
   assert.match(panel, /t === "o"\) root\.service\.toggleBoost\(\)/)

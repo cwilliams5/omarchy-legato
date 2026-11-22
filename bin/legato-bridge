@@ -1646,10 +1646,18 @@ def osd(player, text):
         pass
 
 
+# Picture formats: a "video" stream in one of these is a single still (a
+# cover packed into the file as a video stream, which mpv doesn't flag as
+# cover art: seen 2026-11-21, a PNG in an episode's MP4), not a video.
+STILL_IMAGE_CODECS = frozenset(("png", "mjpeg", "jpeg", "bmp", "gif", "webp", "tiff", "jpeg2000", "jpegxl", "qoi"))
+
+
 def has_video(snap):
-    """A real video track; an episode's cover art also shows up as one."""
+    """A real video track. An episode's cover art shows up as one too,
+    flagged (albumart, image) or not (a still-picture codec)."""
     tracks = snap.get("track-list") if isinstance(snap.get("track-list"), list) else []
-    return any(isinstance(t, dict) and t.get("type") == "video" and not t.get("albumart") for t in tracks)
+    return any(isinstance(t, dict) and t.get("type") == "video" and not t.get("albumart") and not t.get("image")
+               and str(t.get("codec") or "").lower() not in STILL_IMAGE_CODECS for t in tracks)
 
 
 def video_shown(snap):

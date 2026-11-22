@@ -191,6 +191,10 @@ class Validation(unittest.TestCase):
         self.assertIsNone(bridge.saved_geometry({}))
         self.assertTrue(bridge.has_video({"track-list": [{"type": "video"}, {"type": "audio"}]}))
         self.assertFalse(bridge.has_video({"track-list": [{"type": "video", "albumart": True}, {"type": "audio"}]}))
+        # A cover packed in as a video stream mpv doesn't flag (a PNG in an MP4).
+        self.assertFalse(bridge.has_video({"track-list": [{"type": "video", "codec": "png", "albumart": False, "image": False}]}))
+        self.assertFalse(bridge.has_video({"track-list": [{"type": "video", "codec": "h264", "image": True}]}))
+        self.assertTrue(bridge.has_video({"track-list": [{"type": "video", "codec": "h264", "albumart": False}]}))
         self.assertFalse(bridge.has_video({}))
 
     def test_the_sleep_guards_short_timeout_reaches_requests(self):

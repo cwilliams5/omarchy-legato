@@ -807,7 +807,7 @@ Item {
 
   // The picture-in-picture video window (only for episodes with video).
   function toggleVideo() {
-    if (!hasVideo) return false
+    if (!hasVideo && !videoOn) return false  // an open window can always be hidden
     action(["video", "toggle"])
     return true
   }

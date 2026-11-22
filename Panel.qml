@@ -981,7 +981,9 @@ Panel {
               }
 
               TransportButton {
-                visible: root.service && root.service.hasVideo
+                // Shown for a video, and while the window is open (a cover
+                // still showing from the last episode can be hidden too).
+                visible: root.service && (root.service.hasVideo || root.service.videoOn)
                 iconText: Model.glyph.video
                 tooltipText: root.service && root.service.videoOn ? "Hide the video (v)" : "Show the video in a small window (v)"
                 selected: root.service && root.service.videoOn

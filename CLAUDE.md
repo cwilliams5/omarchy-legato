@@ -290,7 +290,13 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   mpv needs `WAYLAND_DISPLAY` to draw at all: without it, selecting a
   video track silently does nothing. The first video of a session takes
   about 2.5 s (GPU set-up). mpv lists an episode's cover art as a video
-  track too (`albumart: true`).
+  track too (`albumart: true`), and some files carry a cover as a plain
+  video stream in a picture codec (a PNG in an MP4, `albumart` and `image`
+  both false): `has_video` skips picture codecs (`STILL_IMAGE_CODECS`).
+- **Dragging a widget off the Omarchy bar disables its plugin** (Omarchy
+  4.5). The video window can sit right under the bar, so a drag meant for
+  it can take Legato's chip off; `omarchy plugin enable
+  io.github.cwilliams5.legato` with a placement puts it back.
 - **Omarchy's floating workspaces** have an open rule that sizes every new
   window to about two thirds of the screen and centers it, except apps that
   registered a float rule through `o.window` (`o.floating_apps`); the rule
