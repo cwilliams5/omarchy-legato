@@ -5,6 +5,7 @@ import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 import "About.js" as About
@@ -36,9 +37,9 @@ Panel {
   onServiceChanged: pushSettings()
   Component.onCompleted: pushSettings()
 
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
-  readonly property color accent: Color.accent
-  readonly property color urgent: bar ? bar.urgent : Color.urgent
+  readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
+  readonly property color accent: Commons.Color.accent
+  readonly property color urgent: bar ? bar.urgent : Commons.Color.urgent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property color faint: Qt.darker(foreground, 2.1)
@@ -431,12 +432,10 @@ Panel {
 
               Row {
                 spacing: Style.space(6)
-                Text {
-                  textFormat: Text.PlainText
-                  text: Model.glyph.app
+                LegatoMark {
+                  size: Style.font.title * 1.25
                   color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.title
+                  slurColor: root.accent
                   anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
@@ -555,7 +554,7 @@ Panel {
                 text: root.service && root.service.loginRunning ? "Signing in…" : "Sign in"
                 bordered: true
                 foreground: root.foreground
-                background: Color.popups.background
+                background: Commons.Color.popups.background
                 accent: root.accent
                 fontFamily: root.fontFamily
                 fontSize: Style.font.body

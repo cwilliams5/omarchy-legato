@@ -129,7 +129,8 @@ The commands are `playPause`, `next`, `skipBack`, `skipForward`, `stop`,
 
 | Key             | Default  | Meaning                                                   |
 | --------------- | -------- | --------------------------------------------------------- |
-| `showTitle`     | `true`   | Show a scrolling "Episode · Show" label next to the cover |
+| `showTitle`     | `true`   | Show an "Episode · Show" label next to the cover          |
+| `scrollTitle`   | `false`  | Scroll a label that doesn't fit; otherwise it's cut off with "…" (scrolling redraws the bar every frame while playing) |
 | `maxLabelWidth` | `180`    | Maximum label width in px (60–600)                        |
 | `defaultTab`    | `upnext` | Tab the panel opens on: `upnext`, `progress`, `new` or `podcasts` |
 | `skipBack`      | `10`     | Seconds to skip back                                      |

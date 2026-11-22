@@ -766,7 +766,8 @@ class AboutTests(TempHome):
 
     # URLs that appear in shipped code but are never requested by the plugin.
     NOT_CONTACTED = {
-        "github.com": "only part of the User-Agent string",
+        "github.com": "the User-Agent string, and About's Report button (opens the browser; the plugin sends nothing)",
+        "www.w3.org": "the SVG namespace in the logo files; never fetched",
     }
 
     def privacy(self):

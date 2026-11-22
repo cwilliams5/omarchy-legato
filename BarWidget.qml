@@ -3,6 +3,7 @@ import QtQuick.Effects
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -36,12 +37,15 @@ BarWidget {
   readonly property string labelText: title !== "" ? (show !== "" ? title + "  ·  " + show : title) : ""
 
   readonly property bool showTitle: setting("showTitle", true) === true
+  // Scroll a title that doesn't fit (a marquee, redrawn every frame while
+  // playing), or sit still and cut it off with "…" (the default).
+  readonly property bool scrollTitle: setting("scrollTitle", false) === true
   readonly property real maxLabelWidth: Style.space(Number(setting("maxLabelWidth", 180)) || 180)
   readonly property bool labelShown: showTitle && !vertical && playerActive && labelText !== ""
   readonly property bool artShown: chipArt !== "" && artImage.status !== Image.Error
 
   readonly property color chipColor: {
-    if (!bar) return Color.foreground
+    if (!bar) return Commons.Color.foreground
     if (!authenticated && !playerActive) return Qt.darker(bar.barForeground, 1.7)
     if (isPlaying) return bar.barForeground
     return Qt.darker(bar.barForeground, 1.35)
@@ -156,13 +160,14 @@ BarWidget {
         height: size
         anchors.verticalCenter: parent.verticalCenter
 
-        OpticalGlyph {
-          anchors.fill: parent
+        // Legato's mark, until there's a cover: its slur turns the accent
+        // colour while something plays.
+        LegatoMark {
+          anchors.centerIn: parent
           visible: !root.artShown
-          text: Model.glyph.app
-          fontFamily: button.fontFamily
-          fontSize: Style.bar.iconFont
+          size: Style.bar.iconCanvas
           color: root.chipColor
+          slurColor: root.isPlaying ? Commons.Color.accent : root.chipColor
         }
 
         Image {
@@ -216,8 +221,10 @@ BarWidget {
           font.family: button.fontFamily
           font.pixelSize: Style.font.body
           anchors.verticalCenter: parent.verticalCenter
+          width: root.scrollTitle ? implicitWidth : scrollClip.width
+          elide: root.scrollTitle ? Text.ElideNone : Text.ElideRight
 
-          readonly property bool needsScroll: implicitWidth > scrollClip.width + 1
+          readonly property bool needsScroll: root.scrollTitle && implicitWidth > scrollClip.width + 1
 
           // Marquee only while playing and the panel is closed; a paused
           // chip sits still like the rest of the bar.

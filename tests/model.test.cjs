@@ -229,5 +229,23 @@ test("About is reachable from the header, the `i` key and IPC, and resets on clo
 test("install.sh ships the About page and the LICENSE it reads", () => {
   const install = fs.readFileSync(path.join(ROOT, "install.sh"), "utf8")
   const list = install.match(/^for entry in (.*); do$/m)[1].split(/\s+/)
-  for (const file of ["About.js", "AboutView.qml", "LICENSE", "manifest.json", "Panel.qml"]) assert.ok(list.includes(file), file)
+  for (const file of ["About.js", "AboutView.qml", "LICENSE", "manifest.json", "Panel.qml", "LegatoMark.qml"]) assert.ok(list.includes(file), file)
+  // Every QML file the plugin loads is shipped.
+  for (const file of fs.readdirSync(ROOT).filter((f) => f.endsWith(".qml"))) assert.ok(list.includes(file), file)
+})
+
+test("no bare Color. references (Qt 6.12 shadows qs.Commons' Color with its own)", () => {
+  for (const file of fs.readdirSync(ROOT).filter((f) => f.endsWith(".qml"))) {
+    const text = fs.readFileSync(path.join(ROOT, file), "utf8")
+    assert.ok(!/(^|[^.\w])Color\./m.test(text), file)
+  }
+})
+
+test("the chip's title sits still unless scrollTitle is on", () => {
+  const widget = fs.readFileSync(path.join(ROOT, "BarWidget.qml"), "utf8")
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"))
+  assert.equal(manifest.barWidget.defaults.scrollTitle, false)
+  assert.ok(manifest.barWidget.schema.some((s) => s.key === "scrollTitle"))
+  assert.match(widget, /needsScroll: root\.scrollTitle && /)
+  assert.match(widget, /elide: root\.scrollTitle \? Text\.ElideNone : Text\.ElideRight/)
 })

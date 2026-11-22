@@ -31,11 +31,12 @@ of its own.
 
 ### A. After the rename
 
-- [ ] A1 Upstream: three issues and three PRs to Nine Point Labs from
+- [x] A1 Upstream: three issues and three PRs to Nine Point Labs from
   `cwilliams5/omarchy-pocketcasts` (branches `fix/resume-checks-server`,
   `perf/event-driven` on top of it, `fix/report-load-failures` on top of
   that). Draft the text, Cody reviews it, then post. Keep the old fork while
-  they're open.
+  they're open. Posted 2026-11-21: issues #4 #5 #6, PRs #7 #8 #9
+  (Ninepointlabs-Omarchy-Extras/omarchy-pocketcasts).
 - [ ] A2 Qt 6.12 colours: the 7 bare `Color.` references (Panel.qml,
   BarWidget.qml, AboutView.qml) become `Commons.Color` with `import
   qs.Commons as Commons`. Check the accent and the About page render in

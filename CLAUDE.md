@@ -186,6 +186,12 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   Mild trims pauses over 0.416 s down to 0.291 s; Medium over 0.300 s to
   0.225 s; Mad Max over 0.083 s to nothing; silence is below amplitude
   250/32768 (about -42 dBFS); speed applies after trimming.
+- **Speed keeps the voice's pitch:** mpv inserts `scaletempo2` (WSOLA, the
+  algorithm Chromium uses) by itself whenever speed isn't 1
+  (`--audio-pitch-correction`, on by default, `--no-config` included). User
+  filters (`af`) run before it, so trimming happens before speeding up, the
+  order Pocket Casts uses. This mpv also has `rubberband`, a heavier,
+  higher-quality time-stretcher.
 - **mpv 0.41** has `--wayland-app-id`, the `keybind` and `af` commands, and
   FFmpeg's `silenceremove` (with `stop_silence`, `detection` and
   `timestamp`) through `lavfi`: what phases B and C need.
