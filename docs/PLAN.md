@@ -56,23 +56,31 @@ of its own.
   with generated audio that has known silences (tone, gap, tone).
 - [x] B3 Panel control and an IPC command (`cycleTrim`); show the level
   beside the speed.
-- [ ] B4 Follow the phone's effects. **Researched 2026-11-21, needs Cody's
-  call on the behavior** (does a change made in Legato stay local, or does
-  the next episode go back to the phone's settings?). What the web API has:
-  - global, from `POST /user/named_settings/update {"m":"web"}` (the web
-    player's own fetch; read-only with no other fields): `playbackSpeed`
-    (1.5 on Cody's account, synced from the phone), `trimSilence` (0,
-    "changed": false, so the Android app may keep Trim Silence on the
-    device), `volumeBoost`, `skipBack`, `skipForward`;
-  - per show, in `/user/podcast/list` `settings`: `playbackEffects` (the
-    show overrides the global effects; off on all 264 of Cody's shows),
-    `playbackSpeed`, `trimSilence` (0 to 3 = off, mild, medium, mad max),
-    `volumeBoost`, `autoStartFrom` and `autoSkipLast` (skip intro and outro,
-    seconds).
+- [x] B4 Follow the phone's effects: **decided 2026-11-21, not for v1.**
+  Legato keeps one global speed, Trim Silence and Volume Boost of its own,
+  for every show, not synced (option A). Why: Pocket Casts' Android app
+  doesn't upload playback effects. Test: Cody changed his global effects
+  (1.5x Mad Max boost on → 1.3x Mild boost off) and one show's own effects;
+  20+ minutes and a watcher later the server still had the old global speed
+  (last modified 2025-09, probably from another device) and no per-show
+  change. Revisit "Follow phone" (read-only: global, or the show's own
+  effects when `playbackEffects` is on; Legato's buttons as a per-episode
+  override) if that changes. Where the data lives:
+  - global: `POST /user/named_settings/update {"m":"web"}` (the web
+    player's own read): `playbackSpeed`, `trimSilence` (0-3),
+    `volumeBoost`/`volumeBoostGlobal`, `skipBack`, `skipForward`;
+  - per show: `/user/podcast/list` `settings`: `playbackEffects`,
+    `playbackSpeed`, `trimSilence`, `volumeBoost`, `autoStartFrom`,
+    `autoSkipLast`.
+  Per-show settings inside Legato (option D) were ruled out: too much UI
+  for v1.
+- [x] B4v Volume Boost, global like the others (Pocket Casts' +10 dB, into
+  a limiter, after Trim Silence).
 - [ ] B4b Honor each show's `autoStartFrom` (start a new episode N seconds
   in) and `autoSkipLast` (treat N seconds before the end as the end), as the
   apps do. Legato ignores both today (one of Cody's shows skips a 15 s
-  intro).
+  intro). Unlike the effects, these do reach the server ("changed" on all of
+  Cody's shows).
 - [ ] B5 Optional: "time saved", as the Pocket Casts apps show it.
 
 ### C. Video window (picture in picture)

@@ -14,9 +14,9 @@ In development, 0.2.0, private, installed on Cody's laptop and in daily use.
 Done: the sync and performance fixes (also offered upstream as Nine Point
 Labs issues #4-6 and PRs #7-9), Qt 6.12 colours, Legato's mark in the bar,
 a still title by default, Trim Silence, and the picture-in-picture video
-window. Next (docs/PLAN.md): B4, following the phone's speed and trim,
-waits on Cody's call on the behavior; B4b (skip intro and outro per show);
-then D (screenshots) and release prep.
+window. Speed, Trim Silence and Volume Boost are global and Legato's own
+(the Android app doesn't sync effects; PLAN B4). Next (docs/PLAN.md): B4b
+(skip intro and outro per show), then D (screenshots) and release prep.
 
 ## What Legato is
 
@@ -251,8 +251,9 @@ at release. The README's "Built on" section is made from this list.
   (https://github.com/Ninepointlabs-Omarchy-Extras/omarchy-pocketcasts)
 - mpv: playback (https://mpv.io)
 - mpv-mpris: media keys and playerctl (https://github.com/hoyon/mpv-mpris)
-- Pocket Casts: the service, and two ideas taken without code: the web
-  player's resume refresh, and the Android app's Trim Silence values
+- Pocket Casts: the service, and ideas taken without code: the web
+  player's resume refresh, and the Android app's Trim Silence values and
+  Volume Boost gain
   (https://github.com/Automattic/pocket-casts-android)
 - Quickshell and Omarchy's shell: the plugin platform
   (https://quickshell.org, https://omarchy.org)
