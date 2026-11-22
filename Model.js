@@ -328,6 +328,20 @@ function pythonProbeCommand(candidate) {
 
 // Empty (so nothing starts) unless the interpreter is trusted and the script
 // path is absolute.
+// The bridge's sleep guard, holding a logind sleep delay while it waits:
+// systemd-inhibit from a trusted directory, or nothing at all.
+// setpriv --pdeathsig: when the panel stops systemd-inhibit (the episode was
+// unloaded), the guard under it gets TERM too rather than living on.
+function sleepGuardCommand(python, bridgePath, inhibit, setpriv) {
+  var tool = trustedExecutable(inhibit || "/usr/bin/systemd-inhibit")
+  var orphanGuard = trustedExecutable(setpriv || "/usr/bin/setpriv")
+  var bridge = bridgeCommand(python, bridgePath, ["sleepguard"])
+  if (tool === "" || orphanGuard === "" || bridge.length === 0) return []
+  return [tool, "--what=sleep", "--mode=delay", "--who=Legato",
+    "--why=Pause the episode and save your place in Pocket Casts",
+    orphanGuard, "--pdeathsig", "TERM"].concat(bridge)
+}
+
 function bridgeCommand(python, bridgePath, args) {
   var interpreter = trustedExecutable(python)
   var script = typeof bridgePath === "string" ? bridgePath : ""

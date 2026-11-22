@@ -37,7 +37,8 @@
       "skipBack": 10,
       "skipForward": 30,
       "autoplay": true,
-      "unloadAfterMinutes": 15
+      "unloadAfterMinutes": 15,
+      "pauseOnSleep": true
     },
     "schema": [
       {
@@ -105,6 +106,12 @@
         "max": 240,
         "step": 5,
         "defaultValue": 15
+      },
+      {
+        "key": "pauseOnSleep",
+        "type": "boolean",
+        "label": "Pause and save your place before the computer sleeps",
+        "defaultValue": true
       }
     ]
   }

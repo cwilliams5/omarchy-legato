@@ -46,6 +46,7 @@ import pwd
 import re
 import os
 import secrets
+import signal
 import socket
 import ssl
 import stat
@@ -1916,7 +1917,12 @@ def poll(autoplay=True):
     due = False
     if snap.get("pause") is False and now - float(state.get("lastSyncAt") or 0) >= SYNC_INTERVAL:
         due = True
-    elif snap.get("pause") is True and moved_since_push(state):
+    elif (snap.get("pause") is True and moved_since_push(state)
+          and now - float(state.get("lastSyncAt") or 0) < RECHECK_AFTER):
+        # Paused somewhere new (a seek from a media widget): send it. A paused
+        # position left unsent from before an interruption (the machine slept
+        # before the push went out) isn't pushed blind: another device may
+        # have moved on since, and the next resume asks Pocket Casts first.
         due = True
     if video_shown(snap):
         remember_video_geometry(prefs)  # so a window closed with its own X reopens where it was
@@ -2189,6 +2195,66 @@ def cmd_speed(args):
     out({"speed": speed})
 
 
+# ------------------------------------------------------------ before sleep
+#
+# While an episode is loaded, the panel runs `sleepguard` under
+# `systemd-inhibit --what=sleep --mode=delay`: when logind announces a sleep
+# (PrepareForSleep), the episode is paused and its position sent to Pocket
+# Casts, then the guard exits, which releases the delay and lets the sleep go
+# ahead. So a closed lid hands over cleanly to the phone, and nothing plays
+# on behind the lock screen after waking. logind allows a delay of seconds,
+# so the push gets a short deadline of its own.
+
+SLEEP_PUSH_TIMEOUT = 4
+
+
+def wait_for_sleep(lines):
+    """True once dbus-monitor reports PrepareForSleep(true); False if its
+    output ends first."""
+    for line in lines:
+        if line.strip() == "boolean true":
+            return True
+    return False
+
+
+def pause_for_sleep():
+    """Pause a playing episode and push its position, quickly."""
+    global HTTP_TIMEOUT
+    HTTP_TIMEOUT = SLEEP_PUSH_TIMEOUT
+    with StateLock(timeout=2):
+        state = load_playback()
+        player = Mpv.connect(timeout=1.0)
+        if not player:
+            return False
+        with player:
+            if player.get("pause") is not False:
+                return False
+            player.set("pause", True)
+            state["checkServer"] = True
+            sync_now(player, state, force=True)
+        return True
+
+
+def cmd_sleepguard(args):
+    monitor = trusted_tool("dbus-monitor")
+    setpriv = trusted_tool("setpriv")
+    if not monitor or not setpriv:
+        raise ApiError("no_dbus", "dbus-monitor and setpriv are needed to pause before sleep")
+    # Stopped by the panel (the episode was unloaded): close the monitor too.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    # The monitor also ends if this process is killed outright.
+    proc = subprocess.Popen([setpriv, "--pdeathsig", "TERM", monitor, "--system",
+                             "type='signal',sender='org.freedesktop.login1',"
+                             "interface='org.freedesktop.login1.Manager',member='PrepareForSleep'"],
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=child_env(), text=True)
+    try:
+        sleeping = wait_for_sleep(proc.stdout)
+    finally:
+        proc.terminate()
+    paused = pause_for_sleep() if sleeping else False
+    out({"sleeping": sleeping, "paused": paused})
+
+
 def cmd_video(args):
     with StateLock():
         prefs = load_prefs()
@@ -2380,6 +2446,7 @@ def build_parser():
     p = sub.add_parser("trim"); p.add_argument("value"); p.set_defaults(fn=cmd_trim)
     p = sub.add_parser("video"); p.add_argument("value", choices=("on", "off", "toggle")); p.set_defaults(fn=cmd_video)
     p = sub.add_parser("boost"); p.add_argument("value", choices=("on", "off", "toggle")); p.set_defaults(fn=cmd_boost)
+    sub.add_parser("sleepguard").set_defaults(fn=cmd_sleepguard)
     sub.add_parser("next").set_defaults(fn=cmd_next)
     p = sub.add_parser("stop"); p.add_argument("--if-paused", action="store_true"); p.set_defaults(fn=cmd_stop)
 

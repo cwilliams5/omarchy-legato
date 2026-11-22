@@ -178,6 +178,14 @@ class Validation(unittest.TestCase):
         self.assertTrue(chain.startswith("@trim:") and ",@boost:" in chain)
         self.assertEqual(bridge.audio_filters({"boost": True}), "@boost:" + bridge.BOOST_FILTER)
 
+    def test_sleep_is_read_from_dbus_monitor(self):
+        lines = ["signal time=1 sender=:1.2 -> destination=(null destination) serial=9 path=/org/freedesktop/login1; "
+                 "interface=org.freedesktop.login1.Manager; member=PrepareForSleep\n",
+                 "   boolean false\n", "signal ... member=PrepareForSleep\n", "   boolean true\n", "never read\n"]
+        self.assertTrue(bridge.wait_for_sleep(iter(lines)))
+        self.assertFalse(bridge.wait_for_sleep(iter(["   boolean false\n"])))
+        self.assertFalse(bridge.wait_for_sleep(iter([])))
+
     def test_speed_is_clamped(self):
         self.assertEqual(bridge.clamp_speed("9"), 3.0)
         self.assertEqual(bridge.clamp_speed("0.1"), 0.5)
@@ -675,6 +683,19 @@ class EndToEnd(PlayerTestCase):
         # The next poll is quiet: the failure is reported once.
         self.assertFalse(run_bridge("player")["data"]["loadFailed"])
 
+    def test_before_sleep_a_playing_episode_is_paused_and_saved(self):
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.wait_for(lambda: run_bridge("player")["data"]["position"] > 0.5)
+        before = len(self.writes("/sync/update_episode"))
+        self.assertTrue(bridge.pause_for_sleep())
+        self.assertFalse(run_bridge("player")["data"]["playing"])
+        self.assertEqual(len(self.writes("/sync/update_episode")), before + 1)
+        self.assertTrue(bridge.load_playback()["checkServer"])  # the next resume asks first
+        # Already paused: nothing to do, nothing sent.
+        self.assertFalse(bridge.pause_for_sleep())
+        self.assertEqual(len(self.writes("/sync/update_episode")), before + 1)
+
     def test_logout_stops_the_player_and_forgets_tokens(self):
         self.login()
         run_bridge("play", EP_1, "--podcast", PODCAST_A)
@@ -823,6 +844,20 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         self.assertEqual(self.fake["progress"][EP_3], 30)
         run_bridge("stop")
         self.assertEqual(self.fake["progress"][EP_3], 30)
+
+    def test_a_paused_position_unsent_before_sleep_is_not_pushed_blind(self):
+        self.play_then_pause()
+        with bridge.Mpv.connect() as player:
+            player.command("seek", 30, "absolute")  # moved while paused, never sent...
+        state = bridge.load_playback()
+        state["position"] = 30.0
+        bridge.save_playback(state)
+        self.age_last_push(600)                     # ...and then the machine slept
+        self.other_device(EP_1, 60)
+        before = len(self.pushes(EP_1))
+        run_bridge("player")
+        self.assertEqual(self.pushes(EP_1)[before:], [])
+        self.assertEqual(self.fake["progress"][EP_1], 60)
 
     def test_a_stopped_player_skips_an_episode_finished_elsewhere(self):
         self.play_then_pause()

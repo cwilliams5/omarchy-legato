@@ -50,6 +50,7 @@ Item {
   readonly property int skipBackSeconds: Math.max(1, Number(setting("skipBack", 10)) || 10)
   readonly property int skipForwardSeconds: Math.max(1, Number(setting("skipForward", 30)) || 30)
   readonly property bool autoplay: setting("autoplay", true) !== false
+  readonly property bool pauseOnSleep: setting("pauseOnSleep", true) !== false
 
   // ---- Connection state (from `legato-bridge status`)
   property bool probed: false
@@ -564,6 +565,34 @@ Item {
     repeat: false
     running: root.active && root.unloadAfterMinutes > 0 && root.playerActive && !root.isPlaying
     onTriggered: root.unloadPlayer()
+  }
+
+  // ---- Before sleep. While an episode is loaded, a guard holds a short
+  //      logind sleep delay; when the machine is about to sleep it pauses the
+  //      episode and sends the position to Pocket Casts, then lets go. Nothing
+  //      runs while no episode is loaded.
+  readonly property var sleepGuardCommand: python === "" ? [] : Model.sleepGuardCommand(python, bridge)
+  readonly property bool wantSleepGuard: active && pauseOnSleep && playerActive && sleepGuardCommand.length > 0
+
+  Process {
+    id: sleepGuard
+    command: root.sleepGuardCommand
+    clearEnvironment: true
+    environment: root.bridgeEnvironment
+    running: root.wantSleepGuard && !sleepGuardRestart.running
+    stdout: StdioCollector { id: sleepGuardOut; waitForEnd: true }
+    onExited: {
+      // It exits once it has handled a sleep (or if it failed): read the
+      // player again, and start a fresh guard a moment later if still wanted.
+      root.settle()
+      sleepGuardRestart.restart()
+    }
+  }
+
+  Timer {
+    id: sleepGuardRestart
+    interval: 3000
+    repeat: false
   }
 
   function unloadPlayer() {

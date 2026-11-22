@@ -88,6 +88,12 @@ bottom-right corner, without taking focus; move or resize it and it opens
 there next time. Closing it (its ×, or `q` inside it) hides the video and
 the episode plays on. Trim Silence pauses while the video shows.
 
+**Before sleep:** while an episode is loaded, Legato holds a short logind
+sleep delay. When the computer is about to sleep (a closed lid, say) it
+pauses the episode and sends your position to Pocket Casts first, so your
+phone carries on from the right spot and nothing plays on behind the lock
+screen after waking. Turn it off with the `pauseOnSleep` setting.
+
 **Skip intro and outro:** a show's "skip first" and "skip last" times, set
 in any Pocket Casts app, apply here too: a new episode starts past the
 intro, and an episode ends (marked played, on to the next) where its outro
@@ -152,6 +158,7 @@ The commands are `playPause`, `next`, `skipBack`, `skipForward`, `stop`,
 | `skipBack`      | `10`     | Seconds to skip back                                      |
 | `skipForward`   | `30`     | Seconds to skip forward                                   |
 | `autoplay`      | `true`   | Play the next Up Next episode when one finishes           |
+| `pauseOnSleep`  | `true`   | Pause and save your place before the computer sleeps      |
 | `unloadAfterMinutes` | `15` | Close the player after this many minutes paused; `0` keeps it loaded until you stop it |
 
 ## Privacy and security

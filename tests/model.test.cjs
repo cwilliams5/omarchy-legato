@@ -62,6 +62,19 @@ test("the video window is offered only for video episodes, and mpv reports it", 
   assert.match(service, /"idle-active", "vid"\]/)
 })
 
+test("the sleep guard holds a logind delay, dies with its parent, and runs only while an episode is loaded", () => {
+  const cmd = plain(Model.sleepGuardCommand("/usr/bin/python3", "/plugin/bin/legato-bridge"))
+  assert.deepEqual(cmd.slice(0, 3), ["/usr/bin/systemd-inhibit", "--what=sleep", "--mode=delay"])
+  const setpriv = cmd.indexOf("/usr/bin/setpriv")
+  assert.ok(setpriv > 0)
+  assert.deepEqual(cmd.slice(setpriv, setpriv + 3), ["/usr/bin/setpriv", "--pdeathsig", "TERM"])
+  assert.deepEqual(cmd.slice(-5), ["/usr/bin/python3", "-I", "-B", "/plugin/bin/legato-bridge", "sleepguard"])
+  assert.deepEqual(plain(Model.sleepGuardCommand("python3", "/plugin/bin/legato-bridge")), [])
+  assert.deepEqual(plain(Model.sleepGuardCommand("/usr/bin/python3", "/plugin/bin/legato-bridge", "/home/x/systemd-inhibit")), [])
+  const service = fs.readFileSync(path.join(ROOT, "Service.qml"), "utf8")
+  assert.match(service, /wantSleepGuard: active && pauseOnSleep && playerActive/)
+})
+
 test("dates read relative to today", () => {
   const now = new Date(2026, 9, 1, 12, 0, 0)
   assert.equal(Model.fmtDate("2026-10-01T09:00:00Z", now), "Today")

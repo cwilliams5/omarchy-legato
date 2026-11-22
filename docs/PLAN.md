@@ -101,7 +101,10 @@ of its own.
 ### D. Polish
 
 - [ ] D1 Fresh screenshots of Legato's own UI (replace preview*.png).
-- [ ] D2 Open question: pausing before the machine sleeps. Omarchy pauses
+- [x] D2 Pausing before the machine sleeps: a logind delay guard while an
+  episode is loaded (`sleepguard`, `pauseOnSleep`). Built 2026-11-21; the
+  guard's lifecycle checked live, a real lid-close still to confirm.
+  (Was: open question.) Omarchy pauses
   no media on suspend; Legato's gap check already prevents bad pushes, but
   the audio plays on behind the lock screen after waking.
 
