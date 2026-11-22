@@ -71,7 +71,7 @@ HTTP_TIMEOUT = 15
 ART_TIMEOUT = 8
 ART_WORKERS = 8
 ART_SIZE = 200
-ART_MAX_BYTES = 8 * 1024 * 1024
+ART_MAX_BYTES = 1024 * 1024  # covers are tens of KB
 # API replies are JSON well below this; a show's full episode list (served
 # gzipped from a CDN) is the largest thing fetched, and is capped after
 # decompression too.
@@ -945,6 +945,13 @@ def art_dir():
         return _ART_DIR
 
 
+def looks_like_image(blob):
+    """JPEG, PNG or WebP by their first bytes: nothing else is kept as art."""
+    blob = blob or b""
+    return (blob.startswith(b"\xff\xd8\xff") or blob.startswith(b"\x89PNG\r\n\x1a\n")
+            or (blob[:4] == b"RIFF" and blob[8:12] == b"WEBP"))
+
+
 def cache_one(url):
     if not art_url_allowed(url):
         return ""
@@ -963,7 +970,7 @@ def cache_one(url):
             # else's file — is taken out and the cover fetched again.
             unlink_at(held, name)
         status, blob, _ = http_raw("GET", url, timeout=ART_TIMEOUT, limit=ART_MAX_BYTES)
-        if status != 200 or not blob:
+        if status != 200 or not looks_like_image(blob):
             return ""
         write_file_at(held, name, blob, 0o600)
         return held.entry(name)
@@ -1519,7 +1526,7 @@ def start_mpv(prefs):
     except OSError:
         pass
     argv = [mpv, "--no-config", "--idle=yes", "--no-video", "--no-terminal", "--keep-open=yes",
-            "--ytdl=no", "--input-ipc-server=" + path, "--title=Legato",
+            "--ytdl=no", "--tls-verify=yes", "--input-ipc-server=" + path, "--title=Legato",
             # The video window, when shown: its own app id (for its placement
             # rule), decoded on the GPU where that's known to be safe.
             "--wayland-app-id=" + VIDEO_APP_ID, "--hwdec=auto-safe",
@@ -2561,6 +2568,8 @@ def cmd_logout(args):
     clear_auth()
     for name in ("podcasts-cache.json", "playback.json"):
         drop_state(name)
+    if load_auth():
+        raise ApiError("logout", "Couldn't delete the sign-in tokens in ~/.local/state/omarchy-legato")
     out({})
 
 
@@ -2714,9 +2723,23 @@ SLEEP_PUSH_TIMEOUT = 4
 
 def wait_for_sleep(lines):
     """True once dbus-monitor reports PrepareForSleep(true); False if its
-    output ends first."""
+    output ends first.
+
+    Only a broadcast counts: logind's PrepareForSleep has no destination.
+    The match rule's sender filter only applies to broadcasts, so a signal
+    sent straight to the monitor by another local account (it shows a
+    destination) is ignored, as is anything but login1's own signal."""
+    broadcast = False
     for line in lines:
-        if line.strip() == "boolean true":
+        text = line.strip()
+        if text.startswith("signal "):
+            broadcast = ("destination=(null destination)" in text
+                         and "path=/org/freedesktop/login1;" in text
+                         and "interface=org.freedesktop.login1.Manager;" in text
+                         and text.endswith("member=PrepareForSleep"))
+        elif text.startswith(("method ", "error ")):
+            broadcast = False
+        elif broadcast and text == "boolean true":
             return True
     return False
 
@@ -3017,9 +3040,27 @@ def build_parser():
     return parser
 
 
+# Any one call that runs longer than this is stuck (a DNS lookup that never
+# answers, say): it ends with an error instead of holding the state lock.
+BRIDGE_DEADLINE = 120
+
+
+class DeadlinePassed(BaseException):
+    """Not an Exception: the handlers that shrug off a failed push or cover
+    (`except ApiError`, `except Exception`) must not swallow the deadline."""
+
+
+def _deadline_passed(signum, frame):
+    raise DeadlinePassed()
+
+
 def main(argv):
     scrub_environment()
     args = build_parser().parse_args(argv)
+    timed = args.command != "sleepguard" and threading.current_thread() is threading.main_thread()
+    if timed:
+        signal.signal(signal.SIGALRM, _deadline_passed)
+        signal.alarm(BRIDGE_DEADLINE)
     try:
         args.fn(args)
         return 0
@@ -3029,9 +3070,15 @@ def main(argv):
     except KeyboardInterrupt:
         fail("cancelled", "Cancelled")
         return 0
+    except DeadlinePassed:
+        fail("timeout", "Legato's helper took over %d seconds and gave up" % BRIDGE_DEADLINE)
+        return 0
     except Exception as err:  # noqa: BLE001 — surfaced to the panel as text
         fail("internal", "%s: %s" % (type(err).__name__, err))
         return 1
+    finally:
+        if timed:
+            signal.alarm(0)
 
 
 if __name__ == "__main__":

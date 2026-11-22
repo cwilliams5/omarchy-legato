@@ -123,12 +123,12 @@ function fileUrl(path) {
   return "file://" + String(path).split("/").map(encodeURIComponent).join("/")
 }
 
-// Prefer the cached copy on disk; fall back to the CDN URL, which Qt's Image
-// element loads over the network on its own.
+// Only the copy the bridge cached on disk (checked, size-capped): Qt's Image
+// never fetches anything from the network itself. No cached copy yet, the
+// placeholder shows.
 function artSource(item) {
-  if (!item) return ""
-  if (item.artPath) return fileUrl(item.artPath)
-  return item.art || ""
+  if (!item || !item.artPath) return ""
+  return fileUrl(item.artPath)
 }
 
 function joinParts(parts) {

@@ -259,6 +259,34 @@ a test that fails on the old code.
   restarted every 3 s while paused. It fails now, so the back-off applies.
 - [x] G5 About's privacy text still said the last tab was saved.
 
+Then a "the marketplace reviewer will ask" pass (their human reviewer's
+history on other submissions). Fixed, each with a failing-first test:
+
+- [x] G6 mpv's TLS verification was off (mpv's default): `--tls-verify=yes`,
+  tested on public podcast CDNs (NPR via Spotify's redirect chain, Podtrac)
+  and refusing an expired certificate.
+- [x] G7 Covers fell back to the web URL in Qt's Image when the cache
+  missed: now only the cached file, and the cache keeps only JPEG, PNG or
+  WebP up to 1 MiB.
+- [x] G8 The sleep guard accepted any "boolean true" line: now only
+  login1's broadcast PrepareForSleep (a unicast signal from another local
+  account is ignored).
+- [x] G9 No overall deadline on a bridge call: `BRIDGE_DEADLINE` (120 s)
+  through SIGALRM, raising an exception the `except Exception` handlers
+  can't swallow.
+- [x] G10 Sign-out claimed success even if the tokens weren't deleted.
+- [x] G11 README: mpv and mpv-mpris come with Omarchy; uninstall stops the
+  player first; what auth.json keeps; the stock tools it uses.
+- [ ] G12 (Cody's call) The sign-in fields are Qt TextFields, which this
+  reviewer blocks on (clipboard reads; #14630 was the same on a podcast
+  plugin's sign-in). Options: a non-native field with a bounded paste, or
+  sign-in from a terminal. Needs a real sign-in to test.
+- [ ] G13 (Cody's call) Feed URLs can point at local network addresses
+  (the reviewer's SSRF concern, #13789). Refusing them would break feeds
+  served from a local or Tailscale server; arguing it is the alternative.
+- [ ] G14 (later, low) Episode and podcast UUIDs in bridge command lines
+  are visible to other local accounts in /proc.
+
 ### Release prep (go-public)
 
 - [ ] CLAUDE.md current: status, rules, platform facts, Credits

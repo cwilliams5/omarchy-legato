@@ -395,6 +395,7 @@ Item {
 
   function signOut() {
     call(["logout"], function(result) {
+      if (!result.ok) { root.reportError(result.error); root.refresh(); return }
       root.authenticated = false
       root.needsReauth = false
       root.email = ""

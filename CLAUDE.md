@@ -157,8 +157,11 @@ docs/PLAN.md         what's left to build
    through closed-environment `Process` objects (tests enforce it); the
    password travels only on stdin; tokens are 0600; only
    `api.pocketcasts.com` gets the token; mpv runs with `--no-config
-   --ytdl=no` and only ever gets http(s) URLs; every file is opened relative
-   to a checked directory descriptor. The About page's privacy text must stay
+   --ytdl=no --tls-verify=yes` (mpv's default is no verification) and only
+   ever gets http(s) URLs; covers reach Qt only as the bridge's checked,
+   capped cache files (`file://`, never a web URL); every bridge call has an
+   overall deadline (`BRIDGE_DEADLINE`, an exception no handler swallows);
+   every file is opened relative to a checked directory descriptor. The About page's privacy text must stay
    true (tests compare it with the hosts the bridge can reach).
 7. **Every text that comes from outside renders as plain text**
    (`Text.PlainText`): episode titles, error messages, mpv's error strings.
@@ -202,7 +205,9 @@ docs/PLAN.md         what's left to build
 - **Before sleep:** while an episode is loaded, the service runs
   `systemd-inhibit --what=sleep --mode=delay … setpriv --pdeathsig TERM
   legato-bridge sleepguard`. The guard waits on `dbus-monitor` for logind's
-  PrepareForSleep, then pauses a playing episode, pushes its position (4 s
+  PrepareForSleep (a broadcast only: a signal sent straight to the monitor
+  has a destination and is ignored), then pauses a playing episode, pushes
+  its position (4 s
   deadline), sets `checkServer`, and exits, releasing the delay; the
   service starts a fresh guard 3 s later. A guard that fails instead
   waits longer each time (6 s, doubling) and after five failures in a row

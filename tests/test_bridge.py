@@ -250,10 +250,16 @@ class Validation(unittest.TestCase):
         self.assertEqual(result["code"], "sleepguard")
 
     def test_sleep_is_read_from_dbus_monitor(self):
-        lines = ["signal time=1 sender=:1.2 -> destination=(null destination) serial=9 path=/org/freedesktop/login1; "
-                 "interface=org.freedesktop.login1.Manager; member=PrepareForSleep\n",
-                 "   boolean false\n", "signal ... member=PrepareForSleep\n", "   boolean true\n", "never read\n"]
+        header = ("signal time=1 sender=:1.2 -> destination=(null destination) serial=9 path=/org/freedesktop/login1; "
+                  "interface=org.freedesktop.login1.Manager; member=PrepareForSleep\n")
+        lines = [header, "   boolean false\n", header, "   boolean true\n", "never read\n"]
         self.assertTrue(bridge.wait_for_sleep(iter(lines)))
+        # Review finding: a signal another local account sends straight to
+        # the monitor (it has a destination) must not pause anything.
+        unicast = header.replace("destination=(null destination)", "destination=:1.77")
+        self.assertFalse(bridge.wait_for_sleep(iter([unicast, "   boolean true\n"])))
+        other = header.replace("member=PrepareForSleep", "member=PrepareForShutdown")
+        self.assertFalse(bridge.wait_for_sleep(iter([other, "   boolean true\n"])))
         self.assertFalse(bridge.wait_for_sleep(iter(["   boolean false\n"])))
         self.assertFalse(bridge.wait_for_sleep(iter([])))
 
@@ -923,6 +929,22 @@ class EndToEnd(PlayerTestCase):
         self.assertFalse(bridge.end_hung_player(player))  # this test's own process: left alone
         self.assertTrue(os.path.exists(path))
 
+    def test_a_sign_out_that_cant_delete_the_tokens_says_so(self):
+        self.login()
+        with mock.patch.object(bridge, "clear_auth", lambda: None):
+            result = run_bridge("logout")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "logout")
+
+    def test_mpv_checks_tls_certificates(self):
+        # Review finding: mpv's --tls-verify is off by default.
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        with bridge.Mpv.connect() as player:
+            pid, _ = player.peer_pid()
+        with open("/proc/%d/cmdline" % pid, "rb") as fh:
+            self.assertIn(b"--tls-verify=yes", fh.read().split(b"\0"))
+
     def test_logout_stops_the_player_and_forgets_tokens(self):
         self.login()
         run_bridge("play", EP_1, "--podcast", PODCAST_A)
@@ -1496,6 +1518,37 @@ class PrefsLock(TempHome):
         worker.join(5)
         self.assertEqual(done[0]["data"]["trim"], "mild")
         self.assertEqual(bridge.load_prefs()["trim"], "mild")
+
+
+class CoverArt(TempHome):
+    def test_only_real_images_are_cached(self):
+        url = bridge.podcast_art("11111111-1111-1111-1111-111111111111")
+        self.assertTrue(bridge.art_url_allowed(url))
+        with mock.patch.object(bridge, "http_raw", lambda *a, **k: (200, b"<html>not a cover</html>", {})):
+            self.assertEqual(bridge.cache_one(url), "")
+        jpeg = b"\xff\xd8\xff\xe0" + b"\0" * 64
+        with mock.patch.object(bridge, "http_raw", lambda *a, **k: (200, jpeg, {})):
+            path = bridge.cache_one(url)
+        self.assertTrue(path.endswith(".jpg"))
+        with open(path, "rb") as fh:
+            self.assertEqual(fh.read(), jpeg)
+        self.assertLessEqual(bridge.ART_MAX_BYTES, 1024 * 1024)
+
+
+class Deadline(TempHome):
+    def test_a_stuck_call_ends_with_an_error_and_lets_go(self):
+        # Review finding: no overall deadline. A call waiting (here on the
+        # state lock another call holds) gives up after BRIDGE_DEADLINE.
+        with mock.patch.object(bridge, "BRIDGE_DEADLINE", 1), bridge.StateLock():
+            started = time.monotonic()
+            result = run_bridge("seek", "10")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "timeout")
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual(signal.alarm(0), 0)  # nothing left armed
+
+    def test_the_deadline_isnt_swallowed_by_handlers_that_shrug_off_errors(self):
+        self.assertFalse(issubclass(bridge.DeadlinePassed, Exception))
 
 
 class AboutTests(TempHome):

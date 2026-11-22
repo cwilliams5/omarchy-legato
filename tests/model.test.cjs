@@ -159,6 +159,18 @@ test("every key the bridge binds in the video window does something in the servi
   assert.match(service, /message\.args\[0\] === "legato-key"[\s\S]{0,40}videoKey\(String\(message\.args\[1\] \|\| ""\)\)/)
 })
 
+test("covers come only from the bridge's checked cache, never straight from the web", () => {
+  assert.equal(Model.artSource({ art: "https://static.pocketcasts.com/discover/images/480/x.jpg" }), "")
+  assert.equal(Model.artSource({ artPath: "/home/u/.cache/omarchy-legato/art/a b.jpg", art: "https://x" }),
+    "file:///home/u/.cache/omarchy-legato/art/a%20b.jpg")
+  assert.equal(Model.artSource(null), "")
+})
+
+test("a sign-out that fails says so", () => {
+  const service = fs.readFileSync(path.join(ROOT, "Service.qml"), "utf8")
+  assert.match(service, /call\(\["logout"\], function\(result\) \{\s*if \(!result\.ok\) \{ root\.reportError\(result\.error\)/)
+})
+
 test("no Python-style comments slipped into QML", () => {
   for (const name of fs.readdirSync(ROOT).filter((f) => f.endsWith(".qml"))) {
     const text = fs.readFileSync(path.join(ROOT, name), "utf8")
