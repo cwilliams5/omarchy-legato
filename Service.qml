@@ -452,6 +452,7 @@ Item {
       if (panelOpen) loadUpNext()
     }
     if (player.loadFailed === true) loadFailed("")
+    if (player.playerHung === true) reportError("The player stopped responding and was closed. Press play to carry on.")
     syncPlayerEvents()
   }
 

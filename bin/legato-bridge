@@ -51,6 +51,7 @@ import signal
 import socket
 import ssl
 import stat
+import struct
 import subprocess
 import sys
 import threading
@@ -1255,6 +1256,7 @@ class Mpv:
         self.sock = sock
         self.buffer = b""
         self.next_id = 1
+        self.dead = False  # stopped answering: every later command fails at once
 
     @classmethod
     def connect(cls, timeout=2.0):
@@ -1293,6 +1295,8 @@ class Mpv:
 
     def command(self, *args, timeout=3):
         """Run one mpv command; returns its data, or raises ApiError."""
+        if self.dead:
+            raise ApiError("player_hung", "The player isn't answering")
         request_id = self.next_id
         self.next_id += 1
         line = json.dumps({"command": list(args), "request_id": request_id}) + "\n"
@@ -1318,8 +1322,31 @@ class Mpv:
                     raise ApiError("player", "mpv sent too much at once")
                 self.buffer += chunk
         except (OSError, socket.timeout) as err:
+            self.dead = True
             raise ApiError("player", "Lost the connection to mpv (%s)" % err)
-        raise ApiError("player", "mpv did not answer")
+        self.dead = True
+        raise ApiError("player_hung", "mpv did not answer")
+
+    def responsive(self, timeout=2.0):
+        """True when mpv answers a trivial question promptly."""
+        try:
+            self.sock.settimeout(timeout)
+            self.command("get_property", "idle-active", timeout=timeout)
+            return True
+        except ApiError:
+            return False
+        finally:
+            if not self.dead:
+                self.sock.settimeout(2.0)
+
+    def peer_pid(self):
+        """The process at the other end of the socket (the kernel says so)."""
+        try:
+            creds = self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+        except OSError:
+            return 0, -1
+        pid, uid, _ = struct.unpack("3i", creds)
+        return pid, uid
 
     def wait_for_load(self, timeout=20.0):
         """After a loadfile: return once mpv says the file opened, raise if it
@@ -1425,6 +1452,49 @@ def mpv_quote(value):
     return "%%%d%%%s" % (len(value.encode("utf-8")), value)
 
 
+def display_gpus(root="/sys/class/drm"):
+    """PCI vendor ids of the GPUs present and of those driving a connected
+    display, from sysfs: ({all}, {driving a display})."""
+    present, driving = set(), set()
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return present, driving
+    for name in names:
+        card = re.match(r"^(card\d+)(-.+)?$", name)
+        if not card:
+            continue
+        try:
+            with open(os.path.join(root, card.group(1), "device", "vendor")) as fh:
+                vendor = fh.read().strip().lower()
+        except OSError:
+            continue
+        present.add(vendor)
+        if card.group(2):
+            try:
+                with open(os.path.join(root, name, "status")) as fh:
+                    if fh.read().strip() == "connected":
+                        driving.add(vendor)
+            except OSError:
+                pass
+    return present, driving
+
+
+NVIDIA = "0x10de"
+
+
+def mpv_gpu_env(root="/sys/class/drm"):
+    """Extra environment for mpv: when an NVIDIA GPU is present but no display
+    runs on it (a laptop's render-only dGPU), hide it from Vulkan, so the
+    video window renders on the GPU that shows it. On the dGPU it took 1.8 s
+    to start, kept ~450 MB of driver mapped, kept the dGPU awake, and once
+    deadlocked mpv's video output."""
+    present, driving = display_gpus(root)
+    if NVIDIA in present and driving and NVIDIA not in driving:
+        return {"VK_LOADER_DRIVERS_DISABLE": "*nvidia*"}
+    return {}
+
+
 def start_mpv(prefs):
     """Start the player detached (it outlives this script and the shell) and
     wait for its socket. mpv runs with --no-config so nothing from ~/.config/mpv
@@ -1466,9 +1536,15 @@ def start_mpv(prefs):
     # Its own session, so it is nobody's child for long: the bridge exits right
     # after this and mpv is reparented. Standard streams go to /dev/null; every
     # other descriptor here is close-on-exec.
+    env = child_env()
+    gpu_env = mpv_gpu_env()
+    env.update(gpu_env)
+    if gpu_env:
+        # The NVIDIA decoder would wake the dGPU too: decode on the display's GPU.
+        argv = [a for a in argv if not a.startswith("--hwdec=")] + ["--hwdec=vulkan,vaapi"]
     devnull = os.open(os.devnull, os.O_RDWR | os.O_CLOEXEC)
     try:
-        os.posix_spawn(mpv, argv, child_env(), setsid=True,
+        os.posix_spawn(mpv, argv, env, setsid=True,
                        file_actions=[(os.POSIX_SPAWN_DUP2, devnull, 0), (os.POSIX_SPAWN_DUP2, devnull, 1),
                                      (os.POSIX_SPAWN_DUP2, devnull, 2)])
     except OSError as err:
@@ -1578,6 +1654,10 @@ def set_video(player, prefs, show, pinned=True):
         if not has_video(player.snapshot()):
             raise ApiError("no_video", "This episode has no video")
         hyprctl("repl", video_rule_lua(saved_geometry(prefs), pinned))
+        try:  # a player started before --osc=no still has its controls: hide them
+            player.command("script-message", "osc-visibility", "never", "no-osd")
+        except ApiError:
+            pass
         # The first video of a session sets up the GPU: allow it a while.
         player.command("set_property", "vid", "auto", timeout=15)
     else:
@@ -1596,7 +1676,52 @@ def heal_filters(player, snap, prefs):
 
 
 def ensure_mpv(prefs):
-    return Mpv.connect() or start_mpv(prefs)
+    player = Mpv.connect()
+    if player and not player.responsive():
+        end_hung_player(player)
+        player = None
+    return player or start_mpv(prefs)
+
+
+def end_hung_player(player):
+    """A player that stopped answering (seen once: its video output
+    deadlocked on the NVIDIA GPU) is ended, so the next play starts fresh.
+    Only a process proven to be this plugin's own mpv is ever signalled: the
+    kernel's peer credentials for its socket, our uid, a process named mpv,
+    with our socket on its command line."""
+    pid, uid = player.peer_pid()
+    player.close()
+    path = ""
+    try:
+        path = socket_path()
+    except (OSError, ApiError):
+        pass
+    ours = False
+    if pid > 1 and uid == os.geteuid() and path:
+        try:
+            with open("/proc/%d/comm" % pid) as fh:
+                comm = fh.read().strip()
+            with open("/proc/%d/cmdline" % pid, "rb") as fh:
+                argv = fh.read().split(b"\0")
+            ours = comm == "mpv" and ("--input-ipc-server=" + path).encode() in argv
+        except OSError:
+            ours = False
+    if ours:
+        for sig, wait in ((signal.SIGTERM, 1.0), (signal.SIGKILL, 2.0)):
+            try:
+                os.kill(pid, sig)
+            except ProcessLookupError:
+                break
+            deadline = time.monotonic() + wait
+            while time.monotonic() < deadline and os.path.exists("/proc/%d" % pid):
+                time.sleep(0.05)
+            if not os.path.exists("/proc/%d" % pid):
+                break
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    return ours
 
 
 def clamp_speed(value):
@@ -1887,6 +2012,15 @@ def poll(autoplay=True):
     player = Mpv.connect()
     if not player:
         return player_view({}, state, prefs)
+    if not player.responsive():
+        # Nothing is pushed: whatever played last was already sent, and the
+        # next play asks Pocket Casts where to pick up.
+        end_hung_player(player)
+        state["checkServer"] = True
+        save_playback(state)
+        view = player_view({}, state, prefs)
+        view["playerHung"] = True
+        return view
     with player:
         snap = player.snapshot()
     episode = state.get("episode") or {}
@@ -2341,6 +2475,10 @@ def cmd_stop(args):
     with StateLock():
         state = load_playback()
         player = Mpv.connect()
+        if player and not player.responsive():
+            end_hung_player(player)
+            out(player_view({}, load_playback(), load_prefs()))
+            return
         if player and args.if_paused and player.get("pause") is False:
             # The panel's idle unload, but something (a media key) resumed
             # playback since: leave it playing.

@@ -18,6 +18,8 @@ import os
 import pathlib
 import re
 import shutil
+import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -186,6 +188,27 @@ class Validation(unittest.TestCase):
         self.assertTrue(bridge.wait_for_sleep(iter(lines)))
         self.assertFalse(bridge.wait_for_sleep(iter(["   boolean false\n"])))
         self.assertFalse(bridge.wait_for_sleep(iter([])))
+
+    def test_mpv_renders_on_the_gpu_that_drives_the_display(self):
+        def sysfs(cards):
+            root = tempfile.mkdtemp(prefix="drm-")
+            self.addCleanup(shutil.rmtree, root, True)
+            for card, vendor, connectors in cards:
+                os.makedirs(os.path.join(root, card, "device"))
+                with open(os.path.join(root, card, "device", "vendor"), "w") as fh:
+                    fh.write(vendor + "\n")
+                for connector, status in connectors:
+                    os.makedirs(os.path.join(root, "%s-%s" % (card, connector)))
+                    with open(os.path.join(root, "%s-%s" % (card, connector), "status"), "w") as fh:
+                        fh.write(status + "\n")
+            return root
+        laptop = sysfs([("card0", "0x10de", []), ("card1", "0x8086", [("eDP-1", "connected"), ("DP-1", "disconnected")])])
+        self.assertEqual(bridge.mpv_gpu_env(laptop), {"VK_LOADER_DRIVERS_DISABLE": "*nvidia*"})
+        desktop = sysfs([("card0", "0x10de", [("DP-1", "connected")]), ("card1", "0x8086", [])])
+        self.assertEqual(bridge.mpv_gpu_env(desktop), {})
+        intel_only = sysfs([("card0", "0x8086", [("eDP-1", "connected")])])
+        self.assertEqual(bridge.mpv_gpu_env(intel_only), {})
+        self.assertEqual(bridge.mpv_gpu_env("/nonexistent"), {})
 
     def test_speed_is_clamped(self):
         self.assertEqual(bridge.clamp_speed("9"), 3.0)
@@ -696,6 +719,37 @@ class EndToEnd(PlayerTestCase):
         # Already paused: nothing to do, nothing sent.
         self.assertFalse(bridge.pause_for_sleep())
         self.assertEqual(len(self.writes("/sync/update_episode")), before + 1)
+
+    def test_a_hung_player_is_ended_and_replaced(self):
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.wait_for(lambda: run_bridge("player")["data"]["position"] > 0.5)
+        with bridge.Mpv.connect() as player:
+            pid, uid = player.peer_pid()
+        self.assertEqual(uid, os.geteuid())
+        os.kill(pid, signal.SIGSTOP)  # frozen: it no longer answers
+        self.addCleanup(lambda: os.path.exists("/proc/%d" % pid) and os.kill(pid, signal.SIGKILL))
+        started = time.monotonic()
+        view = run_bridge("player")["data"]
+        self.assertTrue(view["playerHung"])
+        self.assertLess(time.monotonic() - started, 8)
+        self.wait_for(lambda: not os.path.exists("/proc/%d" % pid) or open("/proc/%d/stat" % pid).read().split()[2] == "Z")
+        self.assertFalse(self.mpv_running())
+        # And the next play starts a fresh player.
+        self.assertTrue(run_bridge("toggle")["ok"])
+        self.wait_for(lambda: run_bridge("player")["data"]["playing"])
+
+    def test_a_hung_socket_that_is_not_mpv_is_never_signalled(self):
+        path = bridge.socket_path(create=True)
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(path)
+        server.listen(1)
+        self.addCleanup(server.close)
+        player = bridge.Mpv.connect()
+        self.assertIsNotNone(player)
+        self.assertFalse(player.responsive(timeout=0.5))
+        self.assertFalse(bridge.end_hung_player(player))  # this test's own process: left alone
+        self.assertTrue(os.path.exists(path))
 
     def test_logout_stops_the_player_and_forgets_tokens(self):
         self.login()
