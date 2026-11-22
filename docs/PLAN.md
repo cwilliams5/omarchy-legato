@@ -148,7 +148,7 @@ of its own.
 - [x] E10 Up Next right-click menu confirmed by Cody.
 - [x] D2 follow-up: Cody's real lid-close test (play, close the lid, the
   phone shows the position, reopen: paused). Passed 2026-11-21.
-- [ ] E11 Video window transparency (Cody's idea, 2026-11-21), so the
+- [x] E11 Video window transparency (Cody's idea, 2026-11-21), so the
   desktop shows through: Off (default) to 80% in tens, in the window's
   right-click menu (a "Transparency" submenu) and on the Settings page
   (a Video window section, with Always on top). Kept in prefs.json
