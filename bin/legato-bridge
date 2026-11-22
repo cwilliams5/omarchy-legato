@@ -26,9 +26,9 @@ are, so a resume here never rewinds what you heard elsewhere (check_server).
 When mpv-mpris is installed, media keys and playerctl see it too.
 
 Trust boundaries: the bridge runs under an isolated interpreter
-(`/usr/bin/python3 -I`) with a scrubbed environment; mpv is an absolute path
-from root-owned system directories started with a rebuilt environment and
---no-config; it is only ever handed http(s) URLs; every file the bridge reads
+(`/usr/bin/python3 -I`) with a scrubbed environment; mpv (and hyprctl, for
+the video window's placement) is an absolute path from root-owned system
+directories started with a rebuilt environment, mpv with --no-config; it is only ever handed http(s) URLs; every file the bridge reads
 or writes is opened relative to a held, checked directory descriptor without
 following symlinks; and every HTTP body is read against a byte cap and an
 overall deadline.
@@ -49,6 +49,7 @@ import secrets
 import socket
 import ssl
 import stat
+import subprocess
 import sys
 import threading
 import time
@@ -189,7 +190,9 @@ PATH_ENV_NAMES = ("HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME",
                   "XDG_DATA_HOME", "XDG_RUNTIME_DIR")
 # What mpv-mpris needs to publish the player on the session bus.
 BUS_ENV_NAMES = ("USER", "LOGNAME", "LANG", "DBUS_SESSION_BUS_ADDRESS")
-ALLOWED_ENV_NAMES = PATH_ENV_NAMES + BUS_ENV_NAMES
+# What hyprctl needs to find Hyprland's socket (the video window's placement).
+HYPR_ENV_NAMES = ("HYPRLAND_INSTANCE_SIGNATURE",)
+ALLOWED_ENV_NAMES = PATH_ENV_NAMES + BUS_ENV_NAMES + HYPR_ENV_NAMES
 TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
 CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -225,7 +228,7 @@ def child_env():
     session-bus variables, and nothing else (LD_PRELOAD, BASH_ENV, exported
     shell functions, proxies are never carried over)."""
     env = {"PATH": TRUSTED_PATH}
-    for name in PATH_ENV_NAMES + BUS_ENV_NAMES:
+    for name in PATH_ENV_NAMES + BUS_ENV_NAMES + HYPR_ENV_NAMES:
         value = clean_env_value(name, os.environ.get(name))
         if value:
             env[name] = value
@@ -1183,7 +1186,7 @@ def up_next_remove(uuids):
 
 # ---------------------------------------------------------------------- mpv
 
-MPV_PROPERTIES = ("path", "pause", "time-pos", "duration", "volume", "speed", "eof-reached",
+MPV_PROPERTIES = ("path", "pause", "time-pos", "duration", "volume", "speed", "eof-reached", "vid", "track-list",
                   "idle-active", "paused-for-cache", "playlist-count")
 
 
@@ -1262,14 +1265,14 @@ class Mpv:
     def __exit__(self, *exc):
         self.close()
 
-    def command(self, *args):
+    def command(self, *args, timeout=3):
         """Run one mpv command; returns its data, or raises ApiError."""
         request_id = self.next_id
         self.next_id += 1
         line = json.dumps({"command": list(args), "request_id": request_id}) + "\n"
         try:
             self.sock.sendall(line.encode("utf-8"))
-            deadline = time.monotonic() + 3
+            deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 while b"\n" in self.buffer:
                     raw, self.buffer = self.buffer.split(b"\n", 1)
@@ -1355,7 +1358,10 @@ def trim_filter(level):
 
 
 def apply_trim(player, level):
-    """Swap the trim filter on a running player."""
+    """Swap the trim filter on a running player. While the video window
+    shows, trimming stays off (set_video puts it back)."""
+    if level not in (None, "off") and video_shown({"vid": player.get("vid")}):
+        level = "off"
     try:
         player.command("af", "remove", TRIM_LABEL)
     except ApiError:
@@ -1388,6 +1394,12 @@ def start_mpv(prefs):
         pass
     argv = [mpv, "--no-config", "--idle=yes", "--no-video", "--no-terminal", "--keep-open=yes",
             "--ytdl=no", "--input-ipc-server=" + path, "--title=Legato",
+            # The video window, when shown: its own app id (for its placement
+            # rule), decoded on the GPU where that's known to be safe.
+            "--wayland-app-id=" + VIDEO_APP_ID, "--hwdec=auto-safe",
+            # mpv 0.41 reads the clipboard at start-up; a podcast player has
+            # no use for it.
+            "--clipboard-backends-clr",
             "--audio-client-name=legato", "--cache=yes", "--network-timeout=30",
             "--user-agent=" + USER_AGENT,
             "--volume=%d" % max(0, min(100, as_int(prefs.get("volume", 100)) if "volume" in prefs else 100)),
@@ -1415,9 +1427,110 @@ def start_mpv(prefs):
     while time.monotonic() < deadline:
         player = Mpv.connect(timeout=1.0)
         if player:
+            bind_video_window_keys(player)
             return player
         time.sleep(0.1)
     raise ApiError("player", "mpv started but its control socket never appeared")
+
+
+# ------------------------------------------------------------- video window
+#
+# Many podcasts are video. Legato plays audio only, until `video on` shows
+# mpv's own window as a picture in picture: floating, pinned to every
+# workspace, without taking focus, bottom-right above the bars (as Omarchy's
+# webcam overlay does), or wherever it was last moved. The placement is a
+# Hyprland window rule added at run time (`hyprctl repl`), because a plugin
+# can't add config files; on a Hyprland without the Lua config the window
+# opens wherever Hyprland's own rules put it.
+
+VIDEO_APP_ID = "legato-video"
+GEOMETRY_RE = re.compile(r"^-?\d{1,5}$")
+
+
+def bind_video_window_keys(player):
+    """Closing the video window, or mpv's quit keys inside it, hide the
+    video instead of quitting the player (which would stop the episode)."""
+    for key in ("CLOSE_WIN", "q", "Q"):
+        try:
+            player.command("keybind", key, "set vid no")
+        except ApiError:
+            pass
+
+
+def has_video(snap):
+    """A real video track; an episode's cover art also shows up as one."""
+    tracks = snap.get("track-list") if isinstance(snap.get("track-list"), list) else []
+    return any(isinstance(t, dict) and t.get("type") == "video" and not t.get("albumart") for t in tracks)
+
+
+def video_shown(snap):
+    return snap.get("vid") not in (None, False, "no")
+
+
+def hyprctl(*args):
+    """Run hyprctl with the bridge's closed environment; "" on any failure."""
+    tool = trusted_tool("hyprctl")
+    if not tool:
+        return ""
+    try:
+        done = subprocess.run([tool] + list(args), env=child_env(), capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return done.stdout if done.returncode == 0 else ""
+
+
+def video_rule_lua(geometry):
+    """The window rule, as Lua for `hyprctl repl`. Numbers only: nothing
+    from outside reaches the Lua text."""
+    if geometry:
+        x, y, w, h = (int(geometry[k]) for k in ("x", "y", "w", "h"))
+        size = '{ "%d", "%d" }' % (w, h)
+        move = '{ "%d", "%d" }' % (x, y)
+    else:
+        size = '{ "(monitor_w*7/25)", "(monitor_w*63/400)" }'
+        move = '{ "(monitor_w-monitor_w*7/25-24)", "(monitor_h-monitor_w*63/400-60)" }'
+    return ('hl.window_rule({ match = { class = "^%s$" }, float = true, pin = true, '
+            'no_initial_focus = true, size = %s, move = %s }) return "ok"' % (VIDEO_APP_ID, size, move))
+
+
+def saved_geometry(prefs):
+    g = prefs.get("videoGeometry")
+    if isinstance(g, dict) and all(GEOMETRY_RE.match(str(g.get(k, ""))) for k in ("x", "y", "w", "h")):
+        if int(g["w"]) >= 120 and int(g["h"]) >= 68:
+            return g
+    return None
+
+
+def remember_video_geometry(prefs):
+    """Where the video window is now, so it opens there next time."""
+    try:
+        clients = json.loads(hyprctl("clients", "-j") or "[]")
+    except ValueError:
+        return
+    for c in clients if isinstance(clients, list) else []:
+        if isinstance(c, dict) and c.get("class") == VIDEO_APP_ID:
+            (x, y), (w, h) = c.get("at") or (0, 0), c.get("size") or (0, 0)
+            geometry = {"x": int(x), "y": int(y), "w": int(w), "h": int(h)}
+            if saved_geometry({"videoGeometry": geometry}) and geometry != prefs.get("videoGeometry"):
+                prefs["videoGeometry"] = geometry
+                save_prefs(prefs)
+            return
+
+
+def set_video(player, prefs, show):
+    """Show or hide the video window. Trim Silence pauses while it shows:
+    cutting audio under a picture makes the picture jump."""
+    if show:
+        if not has_video(player.snapshot()):
+            raise ApiError("no_video", "This episode has no video")
+        hyprctl("repl", video_rule_lua(saved_geometry(prefs)))
+        apply_trim(player, "off")
+        # The first video of a session sets up the GPU: allow it a while.
+        player.command("set_property", "vid", "auto", timeout=15)
+    else:
+        remember_video_geometry(prefs)
+        player.command("set_property", "vid", "no", timeout=5)
+        apply_trim(player, prefs.get("trim"))
 
 
 def ensure_mpv(prefs):
@@ -1541,6 +1654,8 @@ def player_view(snap, state, prefs, load_failed=False):
         "volume": int(round(snap.get("volume"))) if active and isinstance(snap.get("volume"), (int, float)) else as_int(prefs.get("volume", 100)) if "volume" in prefs else 100,
         "speed": float(snap.get("speed")) if active and isinstance(snap.get("speed"), (int, float)) else clamp_speed(prefs.get("speed", 1.0)),
         "trim": trim_level(prefs.get("trim")),
+        "hasVideo": active and has_video(snap),
+        "video": active and video_shown(snap),
         "item": episode or None,
         "running": bool(snap),
     }
@@ -1731,6 +1846,8 @@ def poll(autoplay=True):
         due = True
     elif snap.get("pause") is True and moved_since_push(state):
         due = True
+    if video_shown(snap):
+        remember_video_geometry(prefs)  # so a window closed with its own X reopens where it was
     if due and isinstance(position, (int, float)):
         try:
             push_position(episode, position)
@@ -2000,6 +2117,16 @@ def cmd_speed(args):
     out({"speed": speed})
 
 
+def cmd_video(args):
+    with StateLock():
+        prefs = load_prefs()
+        with require_player() as player:
+            show = not video_shown(player.snapshot()) if args.value == "toggle" else args.value == "on"
+            set_video(player, prefs, show)
+        view = poll_after_change(load_playback(), prefs)
+    out(view)
+
+
 def cmd_trim(args):
     prefs = load_prefs()
     if args.value == "cycle":
@@ -2167,6 +2294,7 @@ def build_parser():
     p = sub.add_parser("volume"); p.add_argument("percent", type=int); p.set_defaults(fn=cmd_volume)
     p = sub.add_parser("speed"); p.add_argument("value"); p.set_defaults(fn=cmd_speed)
     p = sub.add_parser("trim"); p.add_argument("value"); p.set_defaults(fn=cmd_trim)
+    p = sub.add_parser("video"); p.add_argument("value", choices=("on", "off", "toggle")); p.set_defaults(fn=cmd_video)
     sub.add_parser("next").set_defaults(fn=cmd_next)
     p = sub.add_parser("stop"); p.add_argument("--if-paused", action="store_true"); p.set_defaults(fn=cmd_stop)
 

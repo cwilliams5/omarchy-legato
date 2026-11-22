@@ -51,6 +51,15 @@ test("Trim Silence levels read as Pocket Casts names them", () => {
   assert.match(service, /function cycleTrim\(\): string/)
 })
 
+test("the video window is offered only for video episodes, and mpv reports it", () => {
+  const panel = fs.readFileSync(path.join(ROOT, "Panel.qml"), "utf8")
+  const service = fs.readFileSync(path.join(ROOT, "Service.qml"), "utf8")
+  assert.match(panel, /visible: root\.service && root\.service\.hasVideo/)
+  assert.match(panel, /t === "v"\) root\.service\.toggleVideo\(\)/)
+  assert.match(service, /function toggleVideo\(\): string/)
+  assert.match(service, /"idle-active", "vid"\]/)
+})
+
 test("dates read relative to today", () => {
   const now = new Date(2026, 9, 1, 12, 0, 0)
   assert.equal(Model.fmtDate("2026-10-01T09:00:00Z", now), "Today")

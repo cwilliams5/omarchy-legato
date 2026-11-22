@@ -147,6 +147,21 @@ class Validation(unittest.TestCase):
             self.assertIn("timestamp=copy", spec)
             self.assertIn("stop_threshold=-42dB:detection=peak", spec)
 
+    def test_video_window_rule_and_geometry(self):
+        default = bridge.video_rule_lua(None)
+        self.assertIn('match = { class = "^legato-video$" }', default)
+        self.assertIn("float = true, pin = true, no_initial_focus = true", default)
+        self.assertIn("monitor_w*7/25", default)
+        placed = bridge.video_rule_lua({"x": 800, "y": 500, "w": 400, "h": 225})
+        self.assertIn('size = { "400", "225" }, move = { "800", "500" }', placed)
+        # Only whole numbers, and a sane size, are ever kept.
+        self.assertIsNone(bridge.saved_geometry({"videoGeometry": {"x": "1); os.exit(", "y": 1, "w": 400, "h": 225}}))
+        self.assertIsNone(bridge.saved_geometry({"videoGeometry": {"x": 1, "y": 1, "w": 20, "h": 20}}))
+        self.assertIsNone(bridge.saved_geometry({}))
+        self.assertTrue(bridge.has_video({"track-list": [{"type": "video"}, {"type": "audio"}]}))
+        self.assertFalse(bridge.has_video({"track-list": [{"type": "video", "albumart": True}, {"type": "audio"}]}))
+        self.assertFalse(bridge.has_video({}))
+
     def test_speed_is_clamped(self):
         self.assertEqual(bridge.clamp_speed("9"), 3.0)
         self.assertEqual(bridge.clamp_speed("0.1"), 0.5)
@@ -286,7 +301,7 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
         if path.startswith("/audio/"):
             # Byte ranges, as real podcast hosts serve them, so mpv can start
             # a freshly loaded episode part way through.
-            blob = s["audio"]
+            blob = s.get("media", {}).get(path.rsplit("/", 1)[1].split(".")[0], s["audio"])
             wanted = re.match(r"bytes=(\d+)-(\d*)$", self.headers.get("Range") or "")
             first, last = 0, len(blob) - 1
             if wanted:
@@ -380,6 +395,19 @@ def make_gapped_audio():
     subprocess.run(["/usr/bin/ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", tone + ",apad=pad_dur=2",
                     "-f", "lavfi", "-i", tone + ",apad=pad_dur=2", "-f", "lavfi", "-i", tone,
                     "-filter_complex", "[0][1][2]concat=n=3:v=0:a=1", "-q:a", "2", out], check=True)
+    with open(out, "rb") as fh:
+        blob = fh.read()
+    os.unlink(out)
+    return blob
+
+
+def make_video(seconds):
+    """A small test-pattern video with a tone, as a video podcast would be."""
+    out = tempfile.mktemp(suffix=".mp4")
+    subprocess.run(["/usr/bin/ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i",
+                    "testsrc=size=320x180:rate=15:duration=%d" % seconds, "-f", "lavfi", "-i",
+                    "sine=frequency=330:duration=%d" % seconds, "-shortest", "-c:v", "libx264",
+                    "-preset", "ultrafast", "-c:a", "aac", "-movflags", "+faststart", out], check=True)
     with open(out, "rb") as fh:
         blob = fh.read()
     os.unlink(out)
@@ -836,6 +864,78 @@ class TrimSilence(PlayerTestCase):
         self.assertNotIn("trim", self.af())
         self.assertFalse(run_bridge("trim", "loud")["ok"])
         self.assertEqual(bridge.load_prefs()["trim"], "off")
+
+
+@NEEDS_PLAYER
+class VideoWindow(PlayerTestCase):
+    """The picture in picture, against mpv's null video output; the
+    Hyprland calls are recorded, never sent."""
+
+    AUDIO_SECONDS = 30
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.video = make_video(30)
+
+    def setUp(self):
+        super().setUp()
+        self.fake["media"] = {EP_3: self.video}
+        for episode in self.fake["episodes"].values():
+            episode["duration"] = 30
+        self.hypr = []
+        for name, value in (("MPV_EXTRA_ARGS", ("--ao=null", "--vo=null")),
+                            ("hyprctl", lambda *args: self.hypr.append(args) or "")):
+            patcher = mock.patch.object(bridge, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def af(self):
+        with bridge.Mpv.connect() as player:
+            return [f.get("label") for f in (player.get("af") or [])]
+
+    def play(self, uuid, podcast):
+        self.login()
+        run_bridge("play", uuid, "--podcast", podcast)
+        return self.wait_for(lambda: (lambda v: v if v["position"] > 0.3 else None)(run_bridge("player")["data"]))
+
+    def test_show_and_hide_the_video_of_a_video_episode(self):
+        run_bridge("trim", "mild")
+        view = self.play(EP_3, PODCAST_B)
+        self.assertTrue(view["hasVideo"])
+        self.assertFalse(view["video"])
+        self.assertIn("trim", self.af())
+
+        shown = run_bridge("video", "on")
+        self.assertTrue(shown["ok"], shown)
+        self.assertTrue(shown["data"]["video"])
+        self.assertTrue(shown["data"]["playing"])
+        self.assertNotIn("trim", self.af())  # paused while the picture shows
+        rule = [a for a in self.hypr if a[0] == "repl"]
+        self.assertTrue(rule and 'class = "^legato-video$"' in rule[-1][1])
+        self.assertFalse(run_bridge("trim", "medium")["data"]["trim"] == "off")
+        self.assertNotIn("trim", self.af())  # a trim change waits for the video to close
+
+        hidden = run_bridge("video", "toggle")["data"]
+        self.assertFalse(hidden["video"])
+        self.assertTrue(hidden["playing"])
+        self.assertIn("trim", self.af())  # back
+        self.assertIn(("clients", "-j"), self.hypr)  # where it was, for next time
+
+    def test_closing_the_video_window_never_quits_the_player(self):
+        self.play(EP_3, PODCAST_B)
+        with bridge.Mpv.connect() as player:
+            bindings = {b.get("key"): b.get("cmd") for b in (player.get("input-bindings") or [])
+                        if b.get("section") == "default" and b.get("priority", 0) >= 0}
+        for key in ("CLOSE_WIN", "q", "Q"):
+            self.assertEqual(bindings.get(key), "set vid no", key)
+
+    def test_an_audio_episode_has_no_video_to_show(self):
+        view = self.play(EP_1, PODCAST_A)
+        self.assertFalse(view["hasVideo"])
+        result = run_bridge("video", "on")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "no_video")
 
 
 class AboutTests(TempHome):

@@ -381,6 +381,7 @@ Panel {
         else if (t === "f" || t === ".") root.service.skipForward()
         else if (t === "x") root.service.cycleSpeed()
         else if (t === "t") root.service.cycleTrim()
+        else if (t === "v") root.service.toggleVideo()
         else if (t === "q") root.queueCursor()
         else if (t === "m") root.markCursor()
         else if (t === "r") root.refresh()
@@ -763,6 +764,14 @@ Panel {
                   selected: root.service && root.service.speed !== 1
                   fontSize: Style.font.caption
                   onClicked: if (root.service) root.service.cycleSpeed()
+                }
+
+                TransportButton {
+                  visible: root.service && root.service.hasVideo
+                  iconText: Model.glyph.video
+                  tooltipText: root.service && root.service.videoOn ? "Hide the video (v)" : "Show the video in a small window (v)"
+                  selected: root.service && root.service.videoOn
+                  onClicked: if (root.service) root.service.toggleVideo()
                 }
 
                 TransportButton {

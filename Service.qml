@@ -85,6 +85,8 @@ Item {
   readonly property int volume: player && player.volume !== undefined ? Number(player.volume) : 100
   readonly property real speed: player && player.speed ? Number(player.speed) : 1
   readonly property string trim: player && player.trim ? String(player.trim) : "off"
+  readonly property bool hasVideo: playerActive && player.hasVideo === true
+  readonly property bool videoOn: playerActive && player.video === true
 
   // ---- Lists
   property var upNext: []
@@ -502,7 +504,7 @@ Item {
   }
 
   function observePlayer() {
-    var names = ["pause", "eof-reached", "path", "idle-active"]
+    var names = ["pause", "eof-reached", "path", "idle-active", "vid"]
     for (var i = 0; i < names.length; i++)
       playerEvents.write(JSON.stringify({ command: ["observe_property", i + 1, names[i]] }) + "\n")
     playerEvents.flush()
@@ -675,6 +677,13 @@ Item {
     })
   }
 
+  // The picture-in-picture video window (only for episodes with video).
+  function toggleVideo() {
+    if (!hasVideo) return false
+    action(["video", "toggle"])
+    return true
+  }
+
   function cycleTrim() {
     call(["trim", "cycle"], function(result) {
       if (!result.ok) { root.reportError(result.error); return }
@@ -827,6 +836,7 @@ Item {
     function volumeDown(): string { root.nudgeVolume(-5); return "ok" }
     function cycleSpeed(): string { root.cycleSpeed(); return "ok" }
     function cycleTrim(): string { root.cycleTrim(); return "ok" }
+    function toggleVideo(): string { return root.toggleVideo() ? "ok" : "unhandled" }
     function refresh(): string { root.refresh(); return "ok" }
     function status(): string {
       return JSON.stringify({
