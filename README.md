@@ -85,6 +85,9 @@ by Nine Point Labs (MIT). What's new compared to the original:
   and how much time speed, Trim Silence, skipping forward and the shows'
   intro and outro skips saved you (the chart button in the panel's header,
   or `a`). Counted on this computer only and never sent anywhere.
+
+  <img src="media/stats.png" width="470" alt="The Listening stats page: 1 d 14 h listened on this computer, 1 d 3 h saved, split into playback speed, Trim Silence, skipping forward and skipped intros and outros, and 63 episodes finished">
+
 - **Keyboard-friendly,** in the panel and in the video window (see
   [Keys](#keys)), and scriptable through `omarchy-shell` for your own
   keybindings.

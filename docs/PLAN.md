@@ -372,6 +372,20 @@ history on other submissions). Fixed, each with a failing-first test:
   Cody's home server sends Content-Range with the full size and serves MP4,
   so his episodes' ends are judged by the file. The prediction's Low on
   G14 (UUIDs in argv) is left as decided.
+- [x] H8 Media for 1.1.0 (Cody: no re-shoot, edit the button in). The
+  header's Stats button was composited into media/hero.png, pages.png
+  (three headers), themes.gif (six themes), social-preview.png and
+  preview.png (the hero at 1400 px): the chart glyph rendered from the
+  panel's own font (JetBrainsMono Nerd Font), sized so the rendered gear
+  matches each image's gear (best at no offset), one button pitch to its
+  left, in each theme's own ink. The GIF was rebuilt on its own palette
+  (`+dither -remap`, `-layers OptimizeFrame`; `-layers Optimize` re-quantizes),
+  so every pixel outside the icon is unchanged. media/stats.png was shot
+  live with illustrative numbers (stats.json swapped in for the shot and
+  removed after: 1 d 14 h listened, 1 d 3 h saved, 63 finished), on an
+  empty workspace: a window with no_screen_share (Bitwarden) blacks out
+  screenshots of its whole workspace, panels on top included. GitHub's
+  social card is uploaded by hand from media/social-preview.png.
 - [ ] H6 Ship 1.1.0 (a minor version: the stats are a feature) with the `ship-update` skill (marketplace verification
   request, Cody approves the filing).
 
