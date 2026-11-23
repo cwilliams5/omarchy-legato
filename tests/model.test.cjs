@@ -68,6 +68,8 @@ test("the stats page opens from the header, `a` and closes like the others; it r
   // A poll after mpv reports a seek tells the bridge, so the jump isn't time saved.
   assert.match(service, /message\.event === "playback-restart"\) _seekedSincePoll = true/)
   assert.match(service, /if \(_seekedSincePoll\) \{ args\.push\("--seeked"\); _seekedSincePoll = false \}/)
+  // A poll that fails gives the flag back, so the next one still knows.
+  assert.match(service, /if \(!result\.ok && seeked\) root\._seekedSincePoll = true/)
 })
 
 test("Trim Silence levels read as Pocket Casts names them", () => {

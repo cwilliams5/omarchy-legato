@@ -467,9 +467,11 @@ Item {
     var serial = _changeSerial
     var args = ["player"]
     if (!autoplay) args.push("--no-autoplay")
+    var seeked = _seekedSincePoll
     if (_seekedSincePoll) { args.push("--seeked"); _seekedSincePoll = false }
     call(args, function(result) {
       root.playerLoading = false
+      if (!result.ok && seeked) root._seekedSincePoll = true  // the next poll still knows
       var stale = serial !== root._changeSerial
       if (root._pollAgain || (stale && result.ok)) { root._pollAgain = false; root.settle() }
       if (!result.ok) {

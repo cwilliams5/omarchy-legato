@@ -2198,6 +2198,9 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
              # Episodes that ended here while Pocket Casts couldn't be told.
              "pendingFinish": [p for p in previous.get("pendingFinish") or []
                                if isinstance(p, dict) and p.get("uuid") != item.get("uuid")]}
+    broke = previous.get("brokeAt")
+    if isinstance(broke, dict) and broke.get("uuid") == item.get("uuid"):
+        state["brokeAt"] = broke  # where this episode's stream broke before (stream_broke)
     save_playback(state)
     if queue:
         try:
@@ -2400,15 +2403,16 @@ def stream_broke(snap, state):
     up; mpv retries for a while first). Only the first finishes the episode.
     True when it stopped well short of the end: over BROKE_SLACK seconds (or
     1%) before it, the skip-outro included, without having read nearly all of
-    the file (mpv forgets the file's size once its stream fails). When that
-    can't be told (no duration), it's the end, as it always was."""
+    the file (mpv forgets the file's size once its stream fails). Only mpv's
+    own duration counts (the feed's is often off: ads inserted on the fly);
+    without one, it's the end, as it always was. And a second stop where
+    this episode stopped before (`brokeAt`) is the end too: a file cut short
+    on its server, or a real end misjudged, isn't replayed forever."""
     if snap.get("eof-reached") is not True:
         return False
     position = snap.get("time-pos")
     duration = snap.get("duration")
-    if not isinstance(duration, (int, float)) or duration <= 0:
-        duration = as_int((state.get("episode") or {}).get("duration"))
-    if not isinstance(position, (int, float)) or not duration:
+    if not isinstance(position, (int, float)) or not isinstance(duration, (int, float)) or duration <= 0:
         return False
     end = duration - skip_last_of(snap.get("file-local-options/end"))
     if position >= end - max(BROKE_SLACK, duration / 100):
@@ -2417,19 +2421,31 @@ def stream_broke(snap, state):
     if (isinstance(read, int) and isinstance(size, int) and size > 0
             and size - read <= max(BROKE_UNREAD_BYTES, size // 100)):
         return False
+    before = state.get("brokeAt")
+    if (isinstance(before, dict) and before.get("uuid") == (state.get("episode") or {}).get("uuid")
+            and isinstance(before.get("position"), (int, float))
+            and abs(position - before["position"]) <= BROKE_SLACK):
+        return False
     return True
 
 
 def stream_stopped(state, prefs, position):
     """The episode's stream broke off part way (stream_broke): it's not
     finished. Where it got to is pushed (it was playing here, so this machine
-    produced it) unless its resume is still unconfirmed or unchecked, and the
-    player is closed: the next play loads it again from where Pocket Casts
-    has it, like any play after the idle unload."""
+    produced it) unless its resume is still unconfirmed or unchecked, or the
+    last push is over RECHECK_AFTER old (the shell was down, the machine
+    slept: another device may have carried on since, so rule 2 asks first).
+    The player is closed: the next play loads it again from where Pocket
+    Casts has it, like any play after the idle unload. Where it broke is
+    remembered (`brokeAt`) for stream_broke."""
     episode = state.get("episode") or {}
     if isinstance(position, (int, float)):
         state["position"] = float(position)
-        if episode.get("uuid") and not state.get("unconfirmed") and not state.get("checkServer"):
+        state["brokeAt"] = {"uuid": episode.get("uuid", ""), "position": float(position)}
+        recent = time.time() - float(state.get("lastSyncAt") or 0) < RECHECK_AFTER
+        if not recent:
+            state["checkServer"] = True
+        elif episode.get("uuid") and not state.get("unconfirmed") and not state.get("checkServer"):
             try:
                 push_position(episode, position)
                 state["lastSyncAt"] = time.time()
@@ -2453,7 +2469,21 @@ def stream_stopped(state, prefs, position):
 # (play that), or nothing left (stop). Without this, the next position push
 # rewinds the phone to where this machine paused.
 
-def check_server(state, prefs, player=None):
+def prime_token():
+    """Refresh the sign-in now if it's due, at the usual timeout, so a request
+    made under a short one (the resume check) never cuts a refresh short
+    after Pocket Casts has already answered it (a rotated refresh token would
+    be lost)."""
+    global _AUTH
+    if _AUTH is None:
+        _AUTH = load_auth()
+    try:
+        access_token(_AUTH)
+    except ApiError:
+        pass  # the check's own request reports it
+
+
+def check_server(state, prefs, player=None, quick=False):
     """Bring the loaded episode in line with Pocket Casts before it plays on.
 
     Returns (outcome, state) with outcome one of:
@@ -2469,8 +2499,13 @@ def check_server(state, prefs, player=None):
     uuid = episode.get("uuid")
     if not uuid:
         return "same", state
+    if quick:
+        prime_token()
     try:
-        with http_timeout(RESUME_CHECK_TIMEOUT):
+        # `quick`: a press of Play waits RESUME_CHECK_TIMEOUT at most; a poll's
+        # check (playing on its own already) takes the usual time, so a slow
+        # link still gets its answer and its pushes.
+        with http_timeout(RESUME_CHECK_TIMEOUT) if quick else contextlib.nullcontext():
             top = up_next_top()
             record = user_episode(uuid)
     except ApiError:
@@ -2549,7 +2584,7 @@ def resume_loaded(player, state, prefs):
                 return
         play_again(player, state, from_start=at_end)
         return
-    outcome, state = check_server(state, prefs, player)
+    outcome, state = check_server(state, prefs, player, quick=True)
     if outcome == "switched":
         return
     if outcome == "finished":
@@ -3286,7 +3321,8 @@ def cmd_seek(args):
             if (args.relative and float(args.seconds) > 0 and isinstance(before, (int, float))
                     and isinstance(after, (int, float)) and after > before):
                 add_stats(skipping=after - before)  # the skip-forward button's time saved
-            count_listening(state, listen_snap(player), prefs)  # from here on
+            state["listening"] = {}  # a new count from here: the jump itself isn't listening
+            count_listening(state, listen_snap(player), prefs)
             playing = player.get("pause") is False and player.get("eof-reached") is not True
             if playing and ended_here(state):
                 # Dragged back from the end of an episode that ended here: mpv
@@ -3535,9 +3571,10 @@ def cmd_stop(args):
 
 
 def cmd_stats(args):
-    """The listening stats counted on this computer (stats.json)."""
-    with StateLock():
-        stats = load_stats()
+    """The listening stats counted on this computer (stats.json). No lock:
+    writes replace the file whole (rename), so a read sees one or the other,
+    and the page isn't kept waiting behind a slow poll."""
+    stats = load_stats()
     number = lambda value: float(value) if isinstance(value, (int, float)) else 0.0
     view = {key: number(stats.get(key)) for key in STATS_KEYS}
     view["finished"] = int(number(stats.get("finished")))

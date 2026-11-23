@@ -67,7 +67,7 @@ by Nine Point Labs (MIT). What's new compared to the original:
   in other windows (it turns solid while you use it). Legato's keys work in
   the window; mpv's own are off there. While it's on top, it's tagged
   `skip-taskbar`, so taskbars and window switchers that honor the tag
-  (Transom, Latch) leave it out.
+  (Transom, for one) leave it out.
 
   <img src="media/video-menu.png" width="400" alt="The video window's right-click menu: Always on top, Transparency with its levels from Off to 80%, Pause / play, Hide video">
 

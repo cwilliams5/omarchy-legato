@@ -99,7 +99,7 @@ what the API lists, or touch the user's Hyprland config.
     globals in Hyprland `legato_video_alpha`, `legato_video_apply`,
     `legato_video_hook` (the opacity hook)
   - User-Agent `legato/1.0 (+https://github.com/cwilliams5/omarchy-legato)`
-- Version: 1.0.1 (the sign-in field and the feed proxy, PLAN G12-G13); 1.0.0 was the first public release (2026-11-22).
+- Version: 1.1.0 (listening stats, the broken-stream fix, the shorter resume check, the video window's skip-taskbar tag; PLAN H1-H5); 1.0.2 was the version first listed on the marketplace, 1.0.0 the first public release (2026-11-22).
 - Branding: `branding/` (`python3 branding/build.py` regenerates it). See
   BRANDING.md for words to avoid in later renames.
 
@@ -225,10 +225,18 @@ docs/PLAN.md         what's left to build
   sits at `eof-reached` where it got to, just as at a real end. An end over
   10 s (or 1%) before the episode's end (its skip-outro, read back from
   mpv's `file-local-options/end`, included) without nearly all of the file
-  read is a broken stream: `stream_stopped` pushes the position, closes the
-  player and says so; Play loads it again. Never marked played.
-- **The resume check** waits `RESUME_CHECK_TIMEOUT` (5 s) per request, not
-  `HTTP_TIMEOUT`: unanswered, the episode plays anyway (`unconfirmed`).
+  read is a broken stream: `stream_stopped` pushes the position (only if
+  the last push is under `RECHECK_AFTER` old; otherwise it sets
+  `checkServer`, rule 2), closes the player and says so; Play loads it
+  again. Never marked played, unless it stops again where it broke before
+  (`brokeAt`, kept across the reload): then it's the end (a file cut short
+  on its server, or a real end misjudged). Only mpv's own duration counts.
+- **The resume check on a press of Play** (`check_server(quick=True)`, from
+  `resume_loaded`) waits `RESUME_CHECK_TIMEOUT` (5 s) per request, not
+  `HTTP_TIMEOUT`: unanswered, the episode plays anyway (`unconfirmed`). A
+  due token refresh runs first at the usual timeout (`prime_token`: a
+  refresh cut short could lose a rotated refresh token). A poll's check
+  takes the usual time, so a slow link still confirms and pushes.
 - **Listening stats** (`stats.json`, the Stats page): `count_listening` runs
   in each poll and before a seek, stop, next or switch, comparing wall time
   (`time.monotonic`) with how far the episode moved since the last count

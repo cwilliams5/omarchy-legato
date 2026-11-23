@@ -1310,6 +1310,33 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         self.assertTrue(bridge.load_playback().get("unconfirmed"))  # and nothing is pushed until it answers
         self.assertEqual(bridge.HTTP_TIMEOUT, usual)  # back to normal for everything else
 
+    def test_the_check_during_playback_waits_the_full_timeout(self):
+        # Review finding: the short limit is for a press of Play only. A poll's
+        # check (a media key resumed it) on a slow link must still get its
+        # answer, or nothing is pushed for the whole session.
+        self.play_then_pause()
+        self.fake["slow"] = {"/up_next/list": 2}
+        with mock.patch.object(bridge, "RESUME_CHECK_TIMEOUT", 1):
+            self.mpv_set_pause(False)  # a media key
+            run_bridge("player")
+        state = bridge.load_playback()
+        self.assertFalse(state.get("unconfirmed"))
+        self.assertFalse(state.get("checkServer"))
+
+    def test_a_sign_in_refresh_isnt_cut_short_by_the_quick_check(self):
+        # Prediction of the marketplace reviewer: a token refresh inside the
+        # short limit could be dropped after Pocket Casts already rotated the
+        # refresh token. It runs first, at the usual timeout.
+        self.play_then_pause()
+        auth = bridge.load_auth()
+        auth["expires_at"] = time.time() - 10  # due for a refresh
+        bridge.save_auth(auth)
+        self.fake["slow"] = {"/user/token": 2}
+        with mock.patch.object(bridge, "RESUME_CHECK_TIMEOUT", 1):
+            self.assertTrue(run_bridge("resume")["data"]["playing"])
+        self.assertEqual(bridge.load_auth()["access_token"], "t2")
+        self.assertFalse(bridge.load_playback().get("unconfirmed"))  # and the check got its answer
+
     def test_once_pocket_casts_answers_pushes_resume(self):
         self.play_then_pause()
         self.fake["fail"] = {"/up_next/list": 1}
@@ -1703,6 +1730,36 @@ class BrokenStream(PlayerTestCase):
         self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
         self.assertNotIn(0, [b["position"] for b in self.writes("/sync/update_episode") if b["uuid"] == EP_1][1:])
 
+    def test_a_break_after_a_long_gap_pushes_nothing(self):
+        # Review finding: the shell was down (or the machine slept unguarded)
+        # while you carried on with the phone; the first poll afterwards sees
+        # the break. Its position is old news: the next resume asks first.
+        self.fake["cut"] = {EP_1: len(self.audio) // 5}
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        with bridge.Mpv.connect() as player:
+            self.wait_for(lambda: player.get("eof-reached") is True, timeout=30)
+        state = bridge.load_playback()
+        state["lastSyncAt"] = time.time() - 200
+        bridge.save_playback(state)
+        self.fake["progress"][EP_1] = 25  # the phone carried on
+        before = len([b for b in self.writes("/sync/update_episode") if b["uuid"] == EP_1])
+        self.assertTrue(run_bridge("player")["data"].get("streamBroke"))
+        self.assertEqual(len([b for b in self.writes("/sync/update_episode") if b["uuid"] == EP_1]), before)
+        self.assertEqual(self.fake["progress"][EP_1], 25)
+        self.assertTrue(bridge.load_playback().get("checkServer"))
+
+    def test_breaking_again_at_the_same_spot_is_the_end(self):
+        # A file that's cut short on its server, or a real end misjudged
+        # (no file size, a long duration estimate): the second stop at the
+        # same place counts as the end, rather than replaying the tail forever.
+        self.break_stream_and_wait()
+        self.fake["cutServed"] = {}  # the same cut, again
+        self.assertEqual(run_bridge("toggle")["data"]["item"]["uuid"], EP_1)
+        self.wait_for(lambda: run_bridge("player") and self.fake["status"].get(EP_1) == bridge.STATUS_PLAYED or None,
+                      timeout=30)
+        self.assertNotIn(EP_1, self.fake["upnext"])
+
     def test_a_real_end_is_still_the_end(self):
         self.fake["progress"][EP_1] = 25  # the last 5 s of 30
         self.fake["status"][EP_1] = bridge.STATUS_IN_PROGRESS
@@ -1720,6 +1777,9 @@ class BrokenStream(PlayerTestCase):
         snap["file-local-options/end"] = "-105"  # the show's skip-outro: that's where it ends
         self.assertFalse(bridge.stream_broke(snap, {}))
         self.assertFalse(bridge.stream_broke({"eof-reached": True, "time-pos": 50.0}, {}))  # no duration: the end
+        # Only mpv's own duration: the feed's is often off (ads inserted on the fly).
+        self.assertFalse(bridge.stream_broke({"eof-reached": True, "time-pos": 50.0},
+                                             {"episode": {"uuid": EP_1, "duration": 3600}}))
 
 
 class ListeningCount(TempHome):
@@ -1789,6 +1849,14 @@ class ListeningCount(TempHome):
         self.count(state, 910.0, 615.0)               # another episode: a new count, nothing added
         self.assertEqual(bridge.load_stats(), {})
 
+    def test_stats_read_while_a_poll_holds_the_lock(self):
+        # Review finding: behind a slow poll the page failed with "busy".
+        bridge.add_stats(listened=60)
+        with bridge.StateLock():
+            started = time.monotonic()
+            self.assertEqual(run_bridge("stats")["data"]["listened"], 60.0)
+            self.assertLess(time.monotonic() - started, 2)
+
     def test_the_stats_command_reads_them_back(self):
         self.assertEqual(run_bridge("stats")["data"], {"listened": 0.0, "speed": 0.0, "trim": 0.0, "skipping": 0.0,
                                                        "intro": 0.0, "outro": 0.0, "finished": 0, "since": 0})
@@ -1852,6 +1920,19 @@ class ListeningStats(PlayerTestCase):
         stats = self.stats()
         self.assertAlmostEqual(stats["skipping"], 10, delta=0.3)
         self.assertLess(stats["speed"], 1)  # the jumps aren't time saved by the speed
+
+    def test_with_trim_on_a_skip_isnt_counted_as_trimmed_too(self):
+        # Review finding: the jump right after a skip passed as Trim
+        # Silence (up to 30 s in a moment), on top of the skip itself.
+        self.login()
+        run_bridge("trim", "madmax")
+        self.start()
+        self.play_for(1)
+        run_bridge("seek", "10", "--relative", "--episode", EP_1)
+        self.play_for(1)
+        stats = self.stats()
+        self.assertAlmostEqual(stats["skipping"], 10, delta=0.3)
+        self.assertLess(stats["trim"], 1)  # a plain tone: nothing to trim
 
     def test_a_seek_from_a_media_widget_isnt_time_saved(self):
         self.start()

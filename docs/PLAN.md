@@ -358,7 +358,21 @@ history on other submissions). Fixed, each with a failing-first test:
   (cd5ee47, plus a refresh on Hyprland's `pin` event) and Latch (586a6bb)
   leave tagged windows out unless minimized, each with tests that fail
   without the check. Checked live on a stand-in `legato-video` window.
-- [ ] H6 Ship 1.0.3 with the `ship-update` skill (marketplace verification
+- [x] H7 The release review (go-public's updates.md: a correctness
+  reviewer on the diff since ce22e65, and a "predict the marketplace
+  reviewer" pass), each finding checked against the code, each fix with a
+  test that fails on the old code: a broken stream after a long gap pushed
+  without asking (now the 90 s rule, else `checkServer`); with Trim on, a
+  skip was counted as trimmed too (the count restarts after a seek); the
+  5 s limit also cut short a poll's check on a slow link (now only a press
+  of Play) and could cut a token refresh short (`prime_token` first); a
+  real end without a file size and a long duration could replay forever
+  (only mpv's duration; a second stop at the same spot is the end); a
+  failed poll lost the seek flag; the Stats page waited on the state lock.
+  Cody's home server sends Content-Range with the full size and serves MP4,
+  so his episodes' ends are judged by the file. The prediction's Low on
+  G14 (UUIDs in argv) is left as decided.
+- [ ] H6 Ship 1.1.0 (a minor version: the stats are a feature) with the `ship-update` skill (marketplace verification
   request, Cody approves the filing).
 
 ## Testing
