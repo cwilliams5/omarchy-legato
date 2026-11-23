@@ -165,6 +165,13 @@ class Validation(unittest.TestCase):
         self.assertIn('match = { class = "^legato-video$" }', default)  # without Omarchy
         self.assertIn('name = "legato-video", float = true, pin = true, no_initial_focus = true', default)
         self.assertIn('["hyprbars:no_bar"] = true', default)
+        # Pinned (Always on top), taskbars and window switchers that honor
+        # the tag leave it out; not pinned, other windows can cover it, so the
+        # same rule takes the tag away and it keeps its button.
+        self.assertIn('pcall(hl.window_rule, { name = "legato-video-tags", match = { class = "^legato-video$" }, '
+                      'tag = "+skip-taskbar" })', default)
+        self.assertIn('pcall(hl.window_rule, { name = "legato-video-tags", match = { class = "^legato-video$" }, '
+                      'tag = "-skip-taskbar" })', bridge.video_rule_lua(None, pinned=False))
         self.assertIn("monitor_w*7/25", default)
         self.assertIn("pin = false", bridge.video_rule_lua(None, pinned=False))
         # Opacity is the window's own property (a rule loses to Omarchy's
@@ -1482,6 +1489,12 @@ class VideoWindow(PlayerTestCase):
         dispatch = [a for a in self.hypr if a[0] == "dispatch"][-1][1]
         self.assertEqual(dispatch, 'hl.dsp.window.pin({ action = "off", window = "class:^legato-video$" })')
         self.assertIn("pin = false", [a for a in self.hypr if a[0] == "repl"][-1][1])
+        # Not on top, it keeps its taskbar button: the rule takes the tag away,
+        # and goes out before the pin, so a taskbar re-reading windows on the
+        # pin event sees the new tag.
+        self.assertIn('tag = "-skip-taskbar"', [a for a in self.hypr if a[0] == "repl"][-1][1])
+        order = [a[0] for a in self.hypr if a[0] in ("repl", "dispatch")]
+        self.assertEqual(order[-2:], ["repl", "dispatch"])
         with bridge.Mpv.connect() as player:
             self.assertEqual(player.get("menu-data")[0]["title"], "Always on top: Off")
         run_bridge("video", "on")

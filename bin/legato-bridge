@@ -1680,6 +1680,10 @@ def start_mpv(prefs):
 # opens wherever Hyprland's own rules put it.
 
 VIDEO_APP_ID = "legato-video"
+# The Hyprland tag on the video window, while it's pinned (Always on top),
+# that asks taskbars and window switchers to leave it out (Transom and Latch
+# honor it).
+SKIP_TASKBAR_TAG = "skip-taskbar"
 GEOMETRY_RE = re.compile(r"^-?\d{1,5}$")
 # How see-through the video window is, in percent. Capped below 100: a
 # window you can't see is one you can't find to right-click.
@@ -1780,7 +1784,15 @@ def video_rule_lua(geometry, pinned=True, transparency=0):
     a floating workspace's open rule (which sizes every other new window to
     two thirds of the screen, centered) leaves it alone. Named, so adding it
     again replaces it. A second rule turns off the floating workspace's title
-    bar for it (its buttons can't minimize or maximize a pinned window)."""
+    bar for it (its buttons can't minimize or maximize a pinned window). A
+    third tags it `skip-taskbar` while it's pinned (Always on top), a
+    convention of Legato's own (Hyprland has none): a taskbar or window
+    switcher that honors it leaves the picture-in-picture window out. Not
+    pinned, it's an ordinary window other windows can cover, so it keeps its
+    taskbar button and its Alt+Tab entry: the rule takes the tag away (sent
+    again under the same name, it re-tags an open window too). Its own rule,
+    not part of o.window's, which records every tag it's given as a floating
+    app."""
     if geometry:
         x, y, w, h = (int(geometry[k]) for k in ("x", "y", "w", "h"))
         size = '{ "%d", "%d" }' % (w, h)
@@ -1793,8 +1805,11 @@ def video_rule_lua(geometry, pinned=True, transparency=0):
             'if o and o.window then o.window("^%(id)s$", r) '
             'else r.match = { class = "^%(id)s$" } hl.window_rule(r) end '
             'pcall(hl.window_rule, { name = "%(id)s-nobar", match = { class = "^%(id)s$" }, ["hyprbars:no_bar"] = true }) '
+            'pcall(hl.window_rule, { name = "%(id)s-tags", match = { class = "^%(id)s$" }, tag = "%(skip)s" }) '
             '%(opacity)s'
-            'return "ok"' % {"id": VIDEO_APP_ID, "pin": "true" if pinned else "false", "size": size, "move": move,
+            'return "ok"' % {"id": VIDEO_APP_ID, "skip": ("+" if pinned else "-") + SKIP_TASKBAR_TAG,
+                             "pin": "true" if pinned else "false",
+                             "size": size, "move": move,
                              "opacity": video_opacity_lua(transparency)})
 
 
@@ -3420,9 +3435,11 @@ def cmd_videopin(args):
     with prefs_update() as prefs:
         pinned = not video_pinned(prefs) if args.value == "toggle" else args.value == "on"
         prefs["videoPinned"] = pinned
+        # The rule first: it tags the open window skip-taskbar (or not), so a
+        # taskbar that re-reads windows on the pin event sees the new tag.
+        place_video_window(prefs)
         hyprctl("dispatch", 'hl.dsp.window.pin({ action = "%s", window = "class:^%s$" })'
                 % ("on" if pinned else "off", VIDEO_APP_ID))
-        place_video_window(prefs)
         player = Mpv.connect()
         if player:
             with player:

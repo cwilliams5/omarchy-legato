@@ -317,7 +317,17 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   (`video_rule_lua`): Omarchy's `o.window("^legato-video$", { name =
   "legato-video", float, pin, no_initial_focus, size, move })` when it
   exists (as Omarchy's webcam overlay does; see floating workspaces below),
-  plain `hl.window_rule` otherwise, plus a `hyprbars:no_bar` rule. Runtime
+  plain `hl.window_rule` otherwise, plus a `hyprbars:no_bar` rule and a
+  `skip-taskbar` tag rule (`legato-video-tags`; a convention of Cody's
+  projects, not Hyprland's: Transom and Latch leave tagged windows out
+  unless minimized; a tag set by a rule reads back as `skip-taskbar*`).
+  Tagged only while pinned (Always on top; Cody, 2026-11-23): unpinned,
+  other windows can cover it, so it keeps its button and Alt+Tab entry. The
+  rule sent again under its name re-tags an open window (tested both ways),
+  and `videopin` sends it before the pin dispatch, so Transom, which
+  re-reads windows on the `pin` event, sees the new tag. The tag isn't in
+  the o.window rule: o.window records every tag it's given in Omarchy's
+  floating-app lists. Runtime
   rules last until Hyprland reloads its config, so the bridge sends them
   each time the video opens and before each episode load while the video
   is on (mpv opens the next episode's video by itself). Size and position

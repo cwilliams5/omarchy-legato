@@ -316,9 +316,9 @@ history on other submissions). Fixed, each with a failing-first test:
     auth lock for sign-in, sign-out and token writes; writes re-read the
     session first; concurrent refreshes share one; the panel drops lists
     from an earlier session. Three tests fail on 49b51fa. Replied on the issue.
-- [ ] After the listing: tag the video window `skip-taskbar` (a Hyprland
+- [x] After the listing: tag the video window `skip-taskbar` (a Hyprland
   tag), and have Transom and Latch skip windows with it (Cody's call,
-  2026-11-22: not during the review). Now H5.
+  2026-11-22: not during the review). Done as H5.
 
 ### H. After the listing (2026-11-23, toward 1.0.3)
 
@@ -352,8 +352,12 @@ history on other submissions). Fixed, each with a failing-first test:
   by the service (`--seeked`) so it isn't counted as time saved. The page
   (`StatsView.qml`, `a`, IPC `stats`) reads them when it opens. Checked
   live: the page and the header button render in Cody's theme.
-- [ ] H5 The video window tagged `skip-taskbar`; Transom and Latch skip
-  tagged windows (each its own release).
+- [x] H5 The video window tagged `skip-taskbar` (its own runtime rule)
+  while it's pinned (Always on top; Cody: unpinned, other windows can cover
+  it, and without a button or Alt+Tab entry it would be lost); Transom
+  (cd5ee47, plus a refresh on Hyprland's `pin` event) and Latch (586a6bb)
+  leave tagged windows out unless minimized, each with tests that fail
+  without the check. Checked live on a stand-in `legato-video` window.
 - [ ] H6 Ship 1.0.3 with the `ship-update` skill (marketplace verification
   request, Cody approves the filing).
 
