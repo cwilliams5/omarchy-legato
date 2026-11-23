@@ -10,19 +10,24 @@ If a `handoff.md` sits in the repo root, read it first: a local-only note
 This file becomes public with the repo: no personal details, nothing about
 Cody's work setup.
 
-## Status (2026-11-22)
+## Status (2026-11-23)
 
-Released: 1.0.2 is the latest (1.0.0 and 1.0.1 the same day). Submitted to
-the Omarchy plugin marketplace as issue #15655
-(omacom/omarchy-plugin-marketplace). The review's first finding (a Medium:
-a token refresh in flight could undo a sign-out) is fixed in 1.0.2 (ce22e65,
-the auth lock) and answered on the issue; its human reviewer
-blocks on Medium findings and closes issues after 7 days without a reply
-(the go-public skill's omarchy.md, sections 3 and 4). While the review is
-open, push only fixes for it and edit the issue to re-run the checks.
-Cody's laptop runs 1.0.1 from GitHub with local network feeds on (his
-episodes come from a home server). Upstream, Nine Point Labs issues #4-6
-and PRs #7-9 are still open; the old fork's README points here.
+Released and listed. 1.0.2 is the latest release (1.0.0, 1.0.1 and 1.0.2 all
+on 2026-11-22). Listed on the Omarchy plugin marketplace on 2026-11-23
+(omarchyplugins.com, id io.github.cwilliams5.legato; issue #15655,
+approved-and-verified at ce22e65, "maintainer-reviewed"; the reviewer
+accepted the `package-manager` and `installer` capabilities as printed advice
+and an optional helper). A newer commit shows as "Update unverified" in the
+marketplace until it's verified: ship updates through their "Plugin
+verification" issue form (the go-public skill's omarchy.md, section 5).
+Cody's laptop runs it from GitHub with local network feeds on (his episodes
+come from a home server).
+
+Next (docs/PLAN.md): the `skip-taskbar` tag on the video window, with Transom
+and Latch skipping tagged windows. Upstream, Nine Point Labs reviewed PRs
+#7-9 on 2026-11-23: #7 and #9 approved, #8 asks for `unloadAfterMinutes` to
+default to 0 there; Cody decides and approves any reply (the old fork
+`cwilliams5/omarchy-pocketcasts` carries them).
 
 ## What Legato is
 

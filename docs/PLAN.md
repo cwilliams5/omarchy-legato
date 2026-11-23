@@ -301,8 +301,8 @@ history on other submissions). Fixed, each with a failing-first test:
   URL passes; the marketplace baseline has no findings.
 - [x] 1.0.1 released with G12 and G13 (Cody tested sign-in and his
   home-server episodes); submitted to the marketplace, issue #15655.
-- [ ] The marketplace review: answer findings (fix, test, push, edit the
-  issue; Cody approves every reply) until it's listed.
+- [x] The marketplace review: listed 2026-11-23 (approved-and-verified at
+  ce22e65, after one finding, R1).
   - [x] R1 (Medium, 2026-11-22): a token refresh in flight could undo a
     sign-out (it saved the old session again). Fixed in 1.0.2 (ce22e65): one
     auth lock for sign-in, sign-out and token writes; writes re-read the
