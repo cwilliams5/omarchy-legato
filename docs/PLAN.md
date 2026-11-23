@@ -299,8 +299,18 @@ history on other submissions). Fixed, each with a failing-first test:
 - [x] The `go-public` skill: D1 screenshots, README, reviews (phase G),
   1.0.0 public and released 2026-11-22; the install test from the public
   URL passes; the marketplace baseline has no findings.
-- [ ] 1.0.1: G12 and G13, then the marketplace submission (the issue text
-  is drafted, with Cody's edit).
+- [x] 1.0.1 released with G12 and G13 (Cody tested sign-in and his
+  home-server episodes); submitted to the marketplace, issue #15655.
+- [ ] The marketplace review: answer findings (fix, test, push, edit the
+  issue; Cody approves every reply) until it's listed.
+  - [x] R1 (Medium, 2026-11-22): a token refresh in flight could undo a
+    sign-out (it saved the old session again). Fixed in 1.0.2 (ce22e65): one
+    auth lock for sign-in, sign-out and token writes; writes re-read the
+    session first; concurrent refreshes share one; the panel drops lists
+    from an earlier session. Three tests fail on 49b51fa. Replied on the issue.
+- [ ] After the listing: tag the video window `skip-taskbar` (a Hyprland
+  tag), and have Transom and Latch skip windows with it (Cody's call,
+  2026-11-22: not during the review).
 
 ## Testing
 

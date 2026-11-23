@@ -12,14 +12,17 @@ Cody's work setup.
 
 ## Status (2026-11-22)
 
-Released: 1.0.0 is public (github.com/cwilliams5/omarchy-legato, release
-v1.0.0), installed from it on Cody's laptop. The marketplace's automated
-baseline gives "review-required" with no findings (capabilities: installer,
-package-manager). Not submitted yet: 1.0.1 comes first with what its human
-reviewer would block on (docs/PLAN.md G12, a sign-in field that isn't a
-native Qt text input; G13, a check that refuses feeds on the local network
-unless allowed). Upstream, Nine Point Labs issues #4-6 and PRs #7-9 are
-still open; the old fork's README points here.
+Released: 1.0.2 is the latest (1.0.0 and 1.0.1 the same day). Submitted to
+the Omarchy plugin marketplace as issue #15655
+(omacom/omarchy-plugin-marketplace). The review's first finding (a Medium:
+a token refresh in flight could undo a sign-out) is fixed in 1.0.2 (ce22e65,
+the auth lock) and answered on the issue; its human reviewer
+blocks on Medium findings and closes issues after 7 days without a reply
+(the go-public skill's omarchy.md, sections 3 and 4). While the review is
+open, push only fixes for it and edit the issue to re-run the checks.
+Cody's laptop runs 1.0.1 from GitHub with local network feeds on (his
+episodes come from a home server). Upstream, Nine Point Labs issues #4-6
+and PRs #7-9 are still open; the old fork's README points here.
 
 ## What Legato is
 
@@ -164,7 +167,10 @@ docs/PLAN.md         what's left to build
    overall deadline (`BRIDGE_DEADLINE`, an exception no handler swallows);
    mpv fetches only through the feed proxy (`bridge proxy`, below), which
    never connects to this computer and to the local network only with
-   `localFeeds`; no QML file has a native text input (`TextField`,
+   `localFeeds`; sign-in, sign-out and every token write hold the auth lock
+   (`auth_lock`, innermost of the three locks) and re-read auth.json before
+   writing to a session, so nothing writes back a signed-out session; no QML
+   file has a native text input (`TextField`,
    `TextInput`, `TextEdit`, `TextArea`: Qt 6.12 reads the clipboard into
    them by itself), the sign-in fields paste only through `bridge paste`
    (4 KiB, 2 s, wl-paste's whole process group killed after); every file is
