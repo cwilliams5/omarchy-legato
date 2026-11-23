@@ -234,11 +234,13 @@ first. Cody picked all of these. Each has a test.
 - [x] F13 The sleep guard backs off when it can't stay up (6 s doubling,
   gives up after five and says so), and polls only after a real sleep.
 - Not taken (lower value, noted for later): concurrent token refreshes
-  could sign you out if Pocket Casts rotates refresh tokens (unconfirmed);
-  keyboard focus after signing in; the hero hidden while signed out with
-  audio playing; `cmd_next` removing the current episode before finding
-  nothing next; a broken stream's EOF counted as finished; the wall clock
-  for `lastSyncAt`; About's `Qt.openUrlExternally` outside rule 6's letter.
+  could sign you out if Pocket Casts rotates refresh tokens (unconfirmed;
+  fixed anyway in 1.0.2, R1: refreshes share one); keyboard focus after
+  signing in; the hero hidden while signed out with audio playing;
+  `cmd_next` removing the current episode before finding nothing next; a
+  broken stream's EOF counted as finished (taken 2026-11-23: H1); the wall
+  clock for `lastSyncAt`; About's `Qt.openUrlExternally` outside rule 6's
+  letter. Cody, 2026-11-23: only the broken stream is worth doing.
 
 ### G. Release review (2026-11-22, go-public stage 3)
 
@@ -290,8 +292,13 @@ history on other submissions). Fixed, each with a failing-first test:
   network with the new `localFeeds` setting (off by default; on for Cody's
   Tailscale server), never this computer. Tested on public redirect chains
   (https) and Cody's home server (refused off, plays on).
-- [ ] G14 (later, low) Episode and podcast UUIDs in bridge command lines
-  are visible to other local accounts in /proc.
+- [x] G14 Episode and podcast UUIDs in bridge command lines are visible to
+  other local accounts in /proc. **Won't fix** (Cody, 2026-11-23): only
+  another account on the same computer could see them, for the tenth of a
+  second a bridge call lasts, and they're the same for every Pocket Casts
+  listener (no account secrets: passwords and tokens never go on a command
+  line). The fix, if it's ever wanted: `call()` in Service.qml sends the
+  arguments as JSON on stdin, as the password already goes.
 
 ### Release prep (go-public)
 
@@ -310,7 +317,38 @@ history on other submissions). Fixed, each with a failing-first test:
     from an earlier session. Three tests fail on 49b51fa. Replied on the issue.
 - [ ] After the listing: tag the video window `skip-taskbar` (a Hyprland
   tag), and have Transom and Latch skip windows with it (Cody's call,
-  2026-11-22: not during the review).
+  2026-11-22: not during the review). Now H5.
+
+### H. After the listing (2026-11-23, toward 1.0.3)
+
+- [x] H1 **A stream that broke off part way was marked played.** mpv
+  (keep-open) retries a dead stream, gives up, and sits with `eof-reached`
+  on where it got to, exactly as at a real end; the poll marked the episode
+  played, took it off Up Next and autoplayed the next one. Reproduced with
+  the fake server cutting the stream at a fifth. Now `stream_broke`: an end
+  over 10 s (or 1%) before the episode's end, the show's skip-outro
+  included (read back from mpv's `file-local-options/end`, so a player
+  started by an older Legato is judged right too), without nearly all of
+  the file read (mpv forgets the size once the stream fails, so a long
+  duration estimate on a complete file still ends). Then `stream_stopped`:
+  the position is pushed (it was playing here), the player closed, the
+  panel and OSD say so, and Play loads it again from Pocket Casts'
+  position. A Play that gets there before any poll is caught too (it used
+  to replay from the top, pushing 0). Four tests fail on the old bridge.
+- [x] H2 The resume check waits 5 s per request (`RESUME_CHECK_TIMEOUT`),
+  not 15: unanswered, the episode plays anyway and nothing is pushed until
+  Pocket Casts answers. Two hanging requests used to keep Play silent for
+  up to 30 s. (Nine Point Labs' review of the same check upstream, PR #7.)
+- [x] H3 A test for a stream host that accepts the connection and never
+  answers (Nine Point Labs' review of PR #9; the behavior was already right).
+- [ ] H4 Listening stats (B5; Cody, 2026-11-23: local only, "amusing"):
+  listened time and time saved by speed, Trim Silence, skipping and the
+  shows' intro/outro skips, kept in the state folder (survives disabling
+  the plugin, which deletes its bar entry and with it the widget settings).
+- [ ] H5 The video window tagged `skip-taskbar`; Transom and Latch skip
+  tagged windows (each its own release).
+- [ ] H6 Ship 1.0.3 with the `ship-update` skill (marketplace verification
+  request, Cody approves the filing).
 
 ## Testing
 

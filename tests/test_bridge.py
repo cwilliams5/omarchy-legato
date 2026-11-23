@@ -424,7 +424,14 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
         if path.startswith("/audio/"):
             # Byte ranges, as real podcast hosts serve them, so mpv can start
             # a freshly loaded episode part way through.
-            blob = s.get("media", {}).get(path.rsplit("/", 1)[1].split(".")[0], s["audio"])
+            name = path.rsplit("/", 1)[1].split(".")[0]
+            blob = s.get("media", {}).get(name, s["audio"])
+            cut = s.get("cut", {}).get(name)
+            if cut is not None and s.setdefault("cutServed", {}).get(name):
+                # The network is gone: later requests (mpv reconnecting) get
+                # nothing at all.
+                self.close_connection = True
+                return
             wanted = re.match(r"bytes=(\d+)-(\d*)$", self.headers.get("Range") or "")
             first, last = 0, len(blob) - 1
             if wanted:
@@ -437,6 +444,13 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
                 self.send_header("Content-Range", "bytes %d-%d/%d" % (first, last, len(blob)))
             self.send_header("Content-Length", str(last - first + 1))
             self.end_headers()
+            if cut is not None:
+                # The stream breaks part way: the first `cut` bytes, then the
+                # connection drops.
+                s["cutServed"][name] = True
+                self.wfile.write(blob[first:min(cut, last + 1)])
+                self.close_connection = True
+                return
             self.wfile.write(blob[first:last + 1])
             return
         if path.startswith("/podcast/full/"):
@@ -457,6 +471,8 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(length) or b"{}")
         path = urllib.parse.urlsplit(self.path).path
         s["log"].append((path, body))
+        if s.get("slow", {}).get(path):  # a network that hangs
+            time.sleep(s["slow"][path])
         fails = s.setdefault("fail", {})
         if fails.get(path, 0) > 0:  # a dropped request, as when the network goes
             fails[path] -= 1
@@ -906,6 +922,27 @@ class EndToEnd(PlayerTestCase):
         # The next poll is quiet: the failure is reported once.
         self.assertFalse(run_bridge("player")["data"]["loadFailed"])
 
+    def test_audio_from_a_host_that_hangs_is_reported_and_the_player_closed(self):
+        # The host accepts the connection and then sends nothing (a listening
+        # socket nobody accepts on: the kernel completes the handshake).
+        # mpv's network timeout is cut from 30 s to 1 s on this player so the
+        # test doesn't wait half a minute.
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.wait_for(lambda: run_bridge("player")["data"]["position"] > 0.5)
+        silent = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.addCleanup(silent.close)
+        silent.bind(("127.0.0.1", 0))
+        silent.listen(1)
+        before = len(self.fake["log"])
+        with bridge.Mpv.connect() as player:
+            player.command("set_property", "network-timeout", 1)
+            player.command("loadfile", "http://127.0.0.1:%d/hangs.mp3" % silent.getsockname()[1], "replace")
+        view = self.wait_for(lambda: (lambda v: v if v.get("loadFailed") else None)(run_bridge("player")["data"]), timeout=15)
+        self.assertFalse(view["active"])
+        self.assertFalse(self.mpv_running())
+        self.assertEqual(self.fake["log"][before:], [])  # nothing pushed, queued or played
+
     def test_before_sleep_a_playing_episode_is_paused_and_saved(self):
         self.login()
         run_bridge("play", EP_1, "--podcast", PODCAST_A)
@@ -1252,6 +1289,20 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         self.assertEqual([b for b in self.pushes(EP_1)[before:] if b["uuid"] == EP_1], [])
         self.assertEqual(self.fake["progress"][EP_1], 60)
 
+    def test_a_hanging_network_holds_up_play_only_briefly(self):
+        # Nine Point Labs' review of the same check upstream: two requests at
+        # the full HTTP timeout could keep Play silent for 30 s. The check
+        # gets its own short limit (cut to 1 s here; the answer takes 4).
+        self.play_then_pause()
+        self.fake["slow"] = {"/up_next/list": 4}
+        usual = bridge.HTTP_TIMEOUT
+        with mock.patch.object(bridge, "RESUME_CHECK_TIMEOUT", 1):
+            started = time.monotonic()
+            self.assertTrue(run_bridge("resume")["data"]["playing"])
+            self.assertLess(time.monotonic() - started, 3)
+        self.assertTrue(bridge.load_playback().get("unconfirmed"))  # and nothing is pushed until it answers
+        self.assertEqual(bridge.HTTP_TIMEOUT, usual)  # back to normal for everything else
+
     def test_once_pocket_casts_answers_pushes_resume(self):
         self.play_then_pause()
         self.fake["fail"] = {"/up_next/list": 1}
@@ -1575,6 +1626,82 @@ class ShowSkips(PlayerTestCase):
         self.assertLess(time.monotonic() - started, 9)
         self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
         self.assertEqual(view["item"]["uuid"], EP_2)
+
+
+@NEEDS_PLAYER
+class BrokenStream(PlayerTestCase):
+    """The stream stops part way through an episode (the network went, the
+    host hung up). mpv retries, gives up, and sits where it got to with
+    `eof-reached` on, just as at a real end. That's not finishing it: it
+    stays in progress and on Up Next, and the next play carries on."""
+
+    AUDIO_SECONDS = 30
+
+    def setUp(self):
+        super().setUp()
+        for episode in self.fake["episodes"].values():
+            episode["duration"] = self.AUDIO_SECONDS
+
+    def break_stream_and_wait(self):
+        self.fake["cut"] = {EP_1: len(self.audio) // 5}  # about 6 s of 30
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        return self.wait_for(lambda: (lambda v: v if v.get("streamBroke") or v.get("ended")
+                                      or (v["item"] or {}).get("uuid") != EP_1 else None)(run_bridge("player")["data"]),
+                             timeout=30)
+
+    def test_a_stream_that_breaks_part_way_is_not_finished(self):
+        view = self.break_stream_and_wait()
+        self.assertTrue(view.get("streamBroke"))
+        self.assertFalse(view["active"])
+        self.assertFalse(self.mpv_running())
+        self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+        self.assertEqual(self.fake["upnext"][0], EP_1)  # still on Up Next, and nothing else started
+        pushed = [b for b in self.writes("/sync/update_episode") if b["uuid"] == EP_1]
+        self.assertTrue(3 < pushed[-1]["position"] < 9)  # where it stopped, in progress
+        self.assertEqual(pushed[-1]["status"], bridge.STATUS_IN_PROGRESS)
+        # Reported once; the next poll is quiet.
+        self.assertFalse(run_bridge("player")["data"].get("streamBroke"))
+
+    def test_play_after_a_broken_stream_carries_on_from_there(self):
+        self.break_stream_and_wait()
+        self.fake["cut"] = {}  # the network is back
+        view = run_bridge("toggle")["data"]
+        self.assertEqual(view["item"]["uuid"], EP_1)
+        self.assertGreater(self.wait_for(lambda: (lambda p: p if p > 2 else None)(run_bridge("player")["data"]["position"])), 2)
+
+    def test_play_pressed_before_a_poll_saw_the_break_carries_on_too(self):
+        # Play arrives while mpv sits at the break and no poll has run: it
+        # must not be taken for an end and replayed from the top.
+        self.fake["cut"] = {EP_1: len(self.audio) // 5}
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        with bridge.Mpv.connect() as player:
+            self.wait_for(lambda: player.get("eof-reached") is True, timeout=30)
+        self.fake["cut"] = {}
+        view = run_bridge("toggle")["data"]
+        self.assertEqual(view["item"]["uuid"], EP_1)
+        self.assertGreater(self.wait_for(lambda: (lambda p: p if p > 2 else None)(run_bridge("player")["data"]["position"])), 2)
+        self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+        self.assertNotIn(0, [b["position"] for b in self.writes("/sync/update_episode") if b["uuid"] == EP_1][1:])
+
+    def test_a_real_end_is_still_the_end(self):
+        self.fake["progress"][EP_1] = 25  # the last 5 s of 30
+        self.fake["status"][EP_1] = bridge.STATUS_IN_PROGRESS
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.wait_for(lambda: (lambda v: v if (v["item"] or {}).get("uuid") == EP_2 else None)(run_bridge("player")["data"]), timeout=20)
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
+
+    def test_a_long_duration_estimate_with_the_whole_file_read_is_the_end(self):
+        snap = {"eof-reached": True, "time-pos": 3500.0, "duration": 3600.0,
+                "stream-pos": 99_900_000, "stream-end": 100_000_000, "file-local-options/end": "none"}
+        self.assertFalse(bridge.stream_broke(snap, {}))
+        snap["stream-pos"] = 40_000_000
+        self.assertTrue(bridge.stream_broke(snap, {}))
+        snap["file-local-options/end"] = "-105"  # the show's skip-outro: that's where it ends
+        self.assertFalse(bridge.stream_broke(snap, {}))
+        self.assertFalse(bridge.stream_broke({"eof-reached": True, "time-pos": 50.0}, {}))  # no duration: the end
 
 
 class PrefsLock(TempHome):

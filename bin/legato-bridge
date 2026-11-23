@@ -111,6 +111,18 @@ DRIFT_SLACK = 3
 RECHECK_AFTER = 90
 # Within this many seconds of the end counts as finished.
 FINISH_SLACK = 3
+# The resume check's two requests wait this long (not HTTP_TIMEOUT): when
+# Pocket Casts can't answer, the episode plays anyway and nothing is pushed
+# until it does, so a hanging network shouldn't hold up Play for 30 s.
+RESUME_CHECK_TIMEOUT = 5
+# mpv sits at "end of file" both at an episode's real end and where its stream
+# broke off for good. Stopping more than this many seconds (or 1% of the
+# episode, if that's more) before the end, the show's skip-outro included, is
+# a broken stream, not the end...
+BROKE_SLACK = 10
+# ...unless mpv had read all but this much of the file (1% of it if that's
+# more): then the duration it estimated was a little long.
+BROKE_UNREAD_BYTES = 64 * 1024
 # Extra mpv arguments; the test suite sets --ao=null here.
 MPV_EXTRA_ARGS = ()
 SPEEDS = (0.8, 1.0, 1.1, 1.2, 1.3, 1.5, 1.7, 2.0, 2.5, 3.0)
@@ -661,6 +673,19 @@ def http_raw(method, url, headers=None, data=None, timeout=None, limit=API_MAX_B
         raise ApiError("network", "Pocket Casts is unreachable: %s" % getattr(err, "reason", err))
     except (TimeoutError, OSError, http_client.HTTPException) as err:
         raise ApiError("network", "Pocket Casts request failed (%s)" % err)
+
+
+@contextlib.contextmanager
+def http_timeout(seconds):
+    """Requests made inside wait at most `seconds` (HTTP_TIMEOUT, lowered for
+    the moment; http_raw reads it when called)."""
+    global HTTP_TIMEOUT
+    saved = HTTP_TIMEOUT
+    HTTP_TIMEOUT = min(saved, seconds)
+    try:
+        yield
+    finally:
+        HTTP_TIMEOUT = saved
 
 
 def http(method, url, headers=None, data=None, timeout=None, limit=API_MAX_BYTES):
@@ -1277,6 +1302,7 @@ def up_next_remove(uuids):
 
 MPV_PROPERTIES = ("path", "pause", "time-pos", "duration", "volume", "speed", "eof-reached", "vid", "track-list", "af",
                   "idle-active", "paused-for-cache", "playlist-count")
+END_PROPERTIES = ("stream-pos", "stream-end", "file-local-options/end")
 
 
 def runtime_dir(create=False):
@@ -1455,7 +1481,12 @@ class Mpv:
         return self.command("set_property", name, value)
 
     def snapshot(self):
-        return {name: self.get(name) for name in MPV_PROPERTIES}
+        snap = {name: self.get(name) for name in MPV_PROPERTIES}
+        if snap.get("eof-reached") is True:
+            # At an end: what stream_broke needs to tell a real end from a
+            # broken stream.
+            snap.update({name: self.get(name) for name in END_PROPERTIES})
+        return snap
 
 
 def trim_level(value):
@@ -2258,6 +2289,70 @@ def ended_here(state):
     return bool(episode.get("uuid")) and state.get("handledEnd") == episode.get("uuid")
 
 
+def skip_last_of(value):
+    """The seconds a loadfile's `end=-N` (the show's skip-outro) cuts off, as
+    mpv reports the option back ("-26"; "none" without one)."""
+    value = str(value or "")
+    if not value.startswith("-"):
+        return 0.0
+    try:
+        return max(0.0, float(value[1:]))
+    except ValueError:
+        return 0.0
+
+
+def stream_broke(snap, state):
+    """mpv (keep-open) sits with `eof-reached` on both at an episode's real end
+    and where its stream broke off for good (the network went, the host hung
+    up; mpv retries for a while first). Only the first finishes the episode.
+    True when it stopped well short of the end: over BROKE_SLACK seconds (or
+    1%) before it, the skip-outro included, without having read nearly all of
+    the file (mpv forgets the file's size once its stream fails). When that
+    can't be told (no duration), it's the end, as it always was."""
+    if snap.get("eof-reached") is not True:
+        return False
+    position = snap.get("time-pos")
+    duration = snap.get("duration")
+    if not isinstance(duration, (int, float)) or duration <= 0:
+        duration = as_int((state.get("episode") or {}).get("duration"))
+    if not isinstance(position, (int, float)) or not duration:
+        return False
+    end = duration - skip_last_of(snap.get("file-local-options/end"))
+    if position >= end - max(BROKE_SLACK, duration / 100):
+        return False
+    read, size = snap.get("stream-pos"), snap.get("stream-end")
+    if (isinstance(read, int) and isinstance(size, int) and size > 0
+            and size - read <= max(BROKE_UNREAD_BYTES, size // 100)):
+        return False
+    return True
+
+
+def stream_stopped(state, prefs, position):
+    """The episode's stream broke off part way (stream_broke): it's not
+    finished. Where it got to is pushed (it was playing here, so this machine
+    produced it) unless its resume is still unconfirmed or unchecked, and the
+    player is closed: the next play loads it again from where Pocket Casts
+    has it, like any play after the idle unload."""
+    episode = state.get("episode") or {}
+    if isinstance(position, (int, float)):
+        state["position"] = float(position)
+        if episode.get("uuid") and not state.get("unconfirmed") and not state.get("checkServer"):
+            try:
+                push_position(episode, position)
+                state["lastSyncAt"] = time.time()
+                state["lastSyncPos"] = float(position)
+                episode["playedUpTo"] = int(position)
+            except ApiError:
+                pass  # the next play reads Pocket Casts' older position: a little earlier, never later
+    save_playback(state)
+    player = Mpv.connect()
+    if player:
+        quit_mpv(player)
+    view = player_view({}, state, prefs)
+    view["streamBroke"] = True
+    return view
+
+
 # Resuming is where devices meet: this machine paused an episode, you carried
 # on listening on your phone, and now this machine is about to play again from
 # where *it* stopped. Pocket Casts is asked first, every time, and its answer
@@ -2282,8 +2377,9 @@ def check_server(state, prefs, player=None):
     if not uuid:
         return "same", state
     try:
-        top = up_next_top()
-        record = user_episode(uuid)
+        with http_timeout(RESUME_CHECK_TIMEOUT):
+            top = up_next_top()
+            record = user_episode(uuid)
     except ApiError:
         return "unverified", state
     finished = as_int(record.get("playingStatus")) == STATUS_PLAYED
@@ -2340,6 +2436,14 @@ def resume_loaded(player, state, prefs):
     at_end = player.get("eof-reached") is True
     if player.get("pause") is False and not at_end:
         return  # already playing (a media key got there first)
+    if at_end:
+        snap = {name: player.get(name) for name in ("eof-reached", "time-pos", "duration") + END_PROPERTIES}
+        if stream_broke(snap, state):
+            # Its stream broke off before a poll saw it: not the end (playing it
+            # again from the top would push 0). Load it again from where it got to.
+            stream_stopped(state, prefs, snap.get("time-pos"))
+            resume_last(prefs)
+            return
     if at_end or ended_here(state):
         # It played to its end here and is still loaded. With autoplay on,
         # nothing followed it (Up Next was empty, or Pocket Casts didn't
@@ -2403,6 +2507,9 @@ def poll(autoplay=True):
     position = snap.get("time-pos")
     if isinstance(position, (int, float)):
         state["position"] = float(position)
+    if state.get("handledEnd") != episode.get("uuid") and stream_broke(snap, state):
+        # Not the end: the stream broke off. Say so; nothing is marked played.
+        return stream_stopped(state, prefs, position)
     if snap.get("eof-reached") is True and state.get("handledEnd") != episode.get("uuid"):
         state = finish_current(state, prefs, autoplay)
         return poll_after_change(state, prefs)

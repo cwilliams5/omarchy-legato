@@ -491,6 +491,9 @@ Item {
     if (!view) return
     if (view.loadFailed === true) loadFailed("")
     if (view.playerHung === true) reportError("The player stopped responding and was closed. Press play to carry on.")
+    // The stream broke off part way (the network or the episode's server
+    // went): not finished, the player is closed, play loads it again.
+    if (view.streamBroke === true) reportError("The episode's audio stopped arriving, so it wasn't marked played. Press play to carry on.")
   }
 
   // Where playback is now: the last read from mpv, carried forward by the
