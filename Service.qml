@@ -68,6 +68,9 @@ Item {
   property string pythonVersion: ""  // the bridge's interpreter, for the About page
 
   // ---- Sign-in
+  // Bumped by every sign-in and sign-out: a list call that began in another
+  // session answers into nothing (an old account's lists never come back).
+  property int _session: 0
   property bool loginRunning: false
   property string loginError: ""
 
@@ -385,6 +388,7 @@ Item {
         return
       }
       root.loginError = ""
+      root._session++
       root.needsReauth = false
       root.authenticated = true
       root.email = result.data.email || address
@@ -407,6 +411,7 @@ Item {
   }
 
   function signOut() {
+    _session++
     call(["logout"], function(result) {
       if (!result.ok) { root.reportError(result.error); root.refresh(); return }
       root.authenticated = false
@@ -996,8 +1001,10 @@ Item {
     if (!force && loadedAt > 0 && Date.now() - loadedAt < staleMs) return
     root[kind + "Loading"] = true
     root[kind + "Error"] = ""
+    var session = _session
     call(args, function(result) {
       root[kind + "Loading"] = false
+      if (session !== root._session) return  // began before a sign-in or sign-out
       var rerun = root._listAgain[kind] === true
       if (rerun) { var again = root._listAgain; delete again[kind]; root._listAgain = again }
       if (!result.ok) {

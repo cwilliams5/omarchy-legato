@@ -724,6 +724,35 @@ def clear_auth():
     drop_state("auth.json")
 
 
+# Sign-in, sign-out and every token write hold the auth lock, and a write to
+# an existing session first checks the session on disk is still that one
+# (the same refresh token): an older call's refresh or "expired" flag never
+# writes back an account you've signed out of (or out of and into again),
+# and two calls refreshing at once share one refresh. Innermost: taken
+# inside the state or prefs lock, never around them. (Marketplace review,
+# #15655.)
+AUTH_LOCK_TIMEOUT = 40  # a refresh holds it across one token request
+
+
+def auth_lock():
+    return StateLock(timeout=AUTH_LOCK_TIMEOUT, name="auth.lock")
+
+
+def same_session(a, b):
+    return bool(a) and bool(b) and a.get("refresh_token") == b.get("refresh_token")
+
+
+def mark_needs_reauth(auth):
+    """Flag the session expired, if it's still the one on disk; then raise."""
+    with auth_lock():
+        current = load_auth()
+        if same_session(current, auth):
+            current["needs_reauth"] = True
+            save_auth(current)
+    auth["needs_reauth"] = True
+    raise ApiError("reauth", "Pocket Casts session expired — sign in again")
+
+
 class StateLock:
     """An exclusive flock on the state directory's lock file, so a player poll
     and a click never both decide what plays next. `name` picks another lock
@@ -837,15 +866,36 @@ def store_tokens(auth, payload):
 
 
 def refresh_tokens(auth):
-    status, payload = post_json("/user/token", {"grantType": "refresh_token",
-                                                "refreshToken": auth.get("refresh_token", "")})
-    if status == 200 and payload.get("accessToken"):
-        store_tokens(auth, payload)
-        return auth["access_token"]
-    if status in (400, 401, 403):
-        auth["needs_reauth"] = True
-        save_auth(auth)
-        raise ApiError("reauth", "Pocket Casts session expired — sign in again")
+    """New tokens for `auth`'s session, under the auth lock and from what's on
+    disk now. Signed out meanwhile: nothing is written. Signed into another
+    account meanwhile: this call stops. Refreshed by another call meanwhile:
+    its tokens are used, with no second refresh."""
+    with auth_lock():
+        current = load_auth()
+        if not current:
+            raise ApiError("signed_out", "Not signed in to Pocket Casts")
+        if auth.get("uuid") and current.get("uuid") and current["uuid"] != auth["uuid"]:
+            raise ApiError("signed_out", "Signed in to another Pocket Casts account meanwhile")
+        if current.get("needs_reauth"):
+            auth.clear()
+            auth.update(current)
+            raise ApiError("reauth", "Pocket Casts session expired — sign in again")
+        if current.get("access_token") != auth.get("access_token") \
+                and time.time() < float(current.get("expires_at", 0)) - 60:
+            auth.clear()
+            auth.update(current)
+            return current["access_token"]  # another call refreshed it
+        auth.clear()
+        auth.update(current)  # refresh the session as it is on disk now
+        status, payload = post_json("/user/token", {"grantType": "refresh_token",
+                                                    "refreshToken": auth.get("refresh_token", "")})
+        if status == 200 and payload.get("accessToken"):
+            store_tokens(auth, payload)  # still the session on disk: checked above, under the lock
+            return auth["access_token"]
+        if status in (400, 401, 403):
+            auth["needs_reauth"] = True
+            save_auth(auth)
+            raise ApiError("reauth", "Pocket Casts session expired — sign in again")
     raise ApiError("network", error_text(payload, status), status)
 
 
@@ -857,9 +907,7 @@ def access_token(auth, force_refresh=False):
     if not force_refresh and auth.get("access_token") and time.time() < float(auth.get("expires_at", 0)) - 60:
         return auth["access_token"]
     if not auth.get("refresh_token"):
-        auth["needs_reauth"] = True
-        save_auth(auth)
-        raise ApiError("reauth", "Pocket Casts session expired — sign in again")
+        mark_needs_reauth(auth)
     return refresh_tokens(auth)
 
 
@@ -877,9 +925,7 @@ def api(path, body=None):
         token = access_token(_AUTH, force_refresh=True)
         status, payload = post_json(path, body, token)
         if status == 401:
-            _AUTH["needs_reauth"] = True
-            save_auth(_AUTH)
-            raise ApiError("reauth", "Pocket Casts session expired — sign in again")
+            mark_needs_reauth(_AUTH)
     if status == 429:
         raise ApiError("rate_limited", "Pocket Casts asked us to slow down", status, 30)
     if status >= 400:
@@ -2562,7 +2608,8 @@ def cmd_login(args):
             raise ApiError("login_failed", message, status)
         raise ApiError("network", message, status)
     auth = {}
-    store_tokens(auth, payload)
+    with auth_lock():
+        store_tokens(auth, payload)  # a new session: replaces whatever was there
     for name in ("podcasts-cache.json",):
         drop_state(name)
     out({"email": auth.get("email", email)})
@@ -2923,7 +2970,10 @@ def cmd_logout(args):
     player = Mpv.connect()
     if player:
         quit_mpv(player)
-    clear_auth()
+    with auth_lock():
+        # A refresh under way finishes first (it holds this lock); one that
+        # starts later finds no session and writes nothing.
+        clear_auth()
     for name in ("podcasts-cache.json", "playback.json"):
         drop_state(name)
     if load_auth():

@@ -950,6 +950,59 @@ class EndToEnd(PlayerTestCase):
         self.assertFalse(bridge.end_hung_player(player))  # this test's own process: left alone
         self.assertTrue(os.path.exists(path))
 
+    def expire_tokens(self):
+        auth = bridge.load_auth()
+        auth["expires_at"] = time.time() - 10
+        bridge.save_auth(auth)
+
+    def test_a_sign_out_during_a_token_refresh_stays_signed_out(self):
+        # Marketplace review (#15655): a list call refreshing an expired token
+        # while you sign out used to save the old account's tokens again.
+        self.login()
+        self.expire_tokens()
+        real_post = bridge.post_json
+        logout = {}
+
+        def post_json(path, body, token=""):
+            if path == "/user/token" and not logout:
+                # Sign out from another process while the refresh is in flight.
+                logout["proc"] = subprocess.Popen([sys.executable, "-I", "-B", str(BRIDGE), "logout"],
+                                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                try:
+                    logout["proc"].wait(timeout=1.5)  # done at once, unless it waits for this refresh
+                except subprocess.TimeoutExpired:
+                    pass
+            return real_post(path, body, token)
+
+        with mock.patch.object(bridge, "post_json", post_json):
+            run_bridge("up-next")
+        out, _ = logout["proc"].communicate(timeout=20)
+        self.assertTrue(json.loads(out)["ok"])
+        self.assertEqual(bridge.load_auth(), {})  # the sign-out won: no tokens written back
+        self.assertFalse(run_bridge("status")["data"]["authenticated"])
+
+    def test_an_expired_flag_is_never_written_over_a_sign_out(self):
+        self.login()
+        bridge._AUTH = bridge.load_auth()
+        bridge._AUTH["expires_at"] = time.time() - 10
+        bridge.clear_auth()  # signed out in another process meanwhile
+        with mock.patch.object(bridge, "post_json", lambda path, body, token="": (401, {})):
+            with self.assertRaises(bridge.ApiError):
+                bridge.api("/up_next/list", {})
+        self.assertEqual(bridge.load_auth(), {})
+
+    def test_two_calls_refreshing_at_once_share_one_refresh(self):
+        self.login()
+        stale = bridge.load_auth()
+        stale["expires_at"] = time.time() - 10  # this call's copy: expired
+        fresh = dict(stale, access_token="t2", expires_at=time.time() + 3600)
+        bridge.save_auth(fresh)  # another call refreshed it meanwhile
+        bridge._AUTH = stale
+        before = len(self.writes("/user/token"))
+        bridge.api("/up_next/list", {"version": 2})
+        self.assertEqual(len(self.writes("/user/token")), before)  # no second refresh
+        self.assertEqual(bridge._AUTH["access_token"], "t2")
+
     def test_a_sign_out_that_cant_delete_the_tokens_says_so(self):
         self.login()
         with mock.patch.object(bridge, "clear_auth", lambda: None):

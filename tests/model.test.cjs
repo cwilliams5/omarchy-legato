@@ -166,6 +166,13 @@ test("covers come only from the bridge's checked cache, never straight from the 
   assert.equal(Model.artSource(null), "")
 })
 
+test("a list call from before a sign-in or sign-out answers into nothing", () => {
+  const service = fs.readFileSync(path.join(ROOT, "Service.qml"), "utf8")
+  assert.match(service, /function signOut\(\) \{\s*_session\+\+/)
+  assert.match(service, /root\.loginError = ""\s*root\._session\+\+/)
+  assert.match(service, /var session = _session\s*call\(args, function\(result\) \{\s*root\[kind \+ "Loading"\] = false\s*if \(session !== root\._session\) return/)
+})
+
 test("a sign-out that fails says so", () => {
   const service = fs.readFileSync(path.join(ROOT, "Service.qml"), "utf8")
   assert.match(service, /call\(\["logout"\], function\(result\) \{\s*if \(!result\.ok\) \{ root\.reportError\(result\.error\)/)
