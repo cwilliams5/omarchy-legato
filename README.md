@@ -79,6 +79,10 @@ by Nine Point Labs (MIT). What's new compared to the original:
 - **Pauses before your computer sleeps.** Close the lid and Legato pauses
   the episode and saves your place in Pocket Casts first, so nothing plays
   on behind the lock screen and your phone knows where you are.
+- **Listening stats,** for fun: how long you've listened on this computer,
+  and how much time speed, Trim Silence, skipping forward and the shows'
+  intro and outro skips saved you (the chart button in the panel's header,
+  or `a`). Counted on this computer only and never sent anywhere.
 - **Keyboard-friendly,** in the panel and in the video window (see
   [Keys](#keys)), and scriptable through `omarchy-shell` for your own
   keybindings.
@@ -123,7 +127,7 @@ as it has saved your place.
 ```bash
 omarchy-shell legato stop          # mpv runs on its own: stop it first
 omarchy plugin remove io.github.cwilliams5.legato
-rm -rf ~/.local/state/omarchy-legato ~/.cache/omarchy-legato   # sign-in tokens, playback state, cover art
+rm -rf ~/.local/state/omarchy-legato ~/.cache/omarchy-legato   # sign-in tokens, playback state, stats, cover art
 ```
 
 If you showed a video, the window rules Legato added to the running
@@ -240,6 +244,7 @@ In the panel:
 | `m` | Mark the highlighted episode played or unplayed |
 | `r` | Refresh |
 | `g` | Settings |
+| `a` | Listening stats |
 | `i` | About |
 | Esc | Back, or close the panel |
 
@@ -256,6 +261,7 @@ omarchy-shell legato playPause
 omarchy-shell legato status                        # JSON: playing, title, show, position, speed
 omarchy-shell io.github.cwilliams5.legato toggle   # open or close the panel
 omarchy-shell io.github.cwilliams5.legato about    # the panel's About page
+omarchy-shell io.github.cwilliams5.legato stats    # the listening stats
 ```
 
 The `legato` commands are `playPause`, `next`, `skipBack`, `skipForward`,
@@ -292,6 +298,10 @@ whether episodes from your local network may play) in
 `~/.local/state/omarchy-legato/prefs.json`. Change them from the panel, the
 video window's menu or the Settings page.
 
+Disabling the plugin (or dragging its chip off the bar, which disables it)
+removes its entry from the bar, and the settings in the table above go with
+it. The player's own choices, your sign-in and your listening stats stay.
+
 ## How it works
 
 - **The service** (`Service.qml`, one per shell) holds the state every bar
@@ -318,6 +328,9 @@ video window's menu or the Settings page.
 - Your sign-in tokens, email and account ID are kept in
   `~/.local/state/omarchy-legato/auth.json` (readable only by you); the
   password never is. Signing out deletes them.
+- Your listening stats are counted on this computer only, in
+  `~/.local/state/omarchy-legato/stats.json` (readable only by you), and
+  never sent anywhere.
 - Only `api.pocketcasts.com` gets your token. Episode lists and artwork come
   from Pocket Casts' public hosts without it, and audio streams through mpv
   from each show's own server.

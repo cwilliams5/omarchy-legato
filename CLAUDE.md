@@ -83,13 +83,13 @@ what the API lists, or touch the user's Hyprland config.
     `boost`, `videoGeometry`, `videoPinned`, `videoTransparency`,
     `localFeeds`)
   - state `$XDG_STATE_HOME/omarchy-legato/` (auth.json, playback.json,
-    prefs.json, podcasts-cache.json, lock, prefs.lock; all 0600, folder
-    0700)
+    prefs.json, podcasts-cache.json, stats.json, lock, prefs.lock,
+    auth.lock; all 0600, folder 0700)
   - cache `$XDG_CACHE_HOME/omarchy-legato/art/`
   - runtime `$XDG_RUNTIME_DIR/omarchy-legato/mpv.sock`
   - IPC targets `legato` (playPause, next, skipBack, skipForward, stop,
     volumeUp, volumeDown, cycleSpeed, cycleTrim, toggleBoost, toggleVideo,
-    refresh, status) and the plugin id (`toggle`, `about`)
+    refresh, status) and the plugin id (`toggle`, `about`, `stats`)
   - mpv window title `Legato`, Wayland app id (Hyprland class)
     `legato-video`, audio client name `legato`; mpv script-messages
     `legato-video-pin` and `legato-video-transparency <n>` (video window
@@ -111,6 +111,7 @@ Service.qml          the data layer, one per shell: bridge calls, mpv events, ti
 BarWidget.qml        the bar chip (cover, scrolling title), clicks and scroll
 Panel.qml            the panel: player, effects row, tabs, show pages, right-click menu, sign-in
 SettingsView.qml     the panel's Settings page (gear), built from manifest.json's schema
+StatsView.qml        the panel's listening stats page (chart button, `a`)
 SignInField.qml      the sign-in fields: not native text inputs; pastes go through `bridge paste`
 AboutView.qml        the panel's About page
 LegatoMark.qml       the logo, drawn with QtQuick.Shapes (bar chip, panel)
@@ -220,6 +221,23 @@ docs/PLAN.md         what's left to build
   Pocket Casts what to play.
 - **Load failures:** while the stream opens, the view reads as buffering; if
   mpv gives up, the panel and the OSD say so once.
+- **A stream that breaks off part way** (`stream_broke`): mpv retries, then
+  sits at `eof-reached` where it got to, just as at a real end. An end over
+  10 s (or 1%) before the episode's end (its skip-outro, read back from
+  mpv's `file-local-options/end`, included) without nearly all of the file
+  read is a broken stream: `stream_stopped` pushes the position, closes the
+  player and says so; Play loads it again. Never marked played.
+- **The resume check** waits `RESUME_CHECK_TIMEOUT` (5 s) per request, not
+  `HTTP_TIMEOUT`: unanswered, the episode plays anyway (`unconfirmed`).
+- **Listening stats** (`stats.json`, the Stats page): `count_listening` runs
+  in each poll and before a seek, stop, next or switch, comparing wall time
+  (`time.monotonic`) with how far the episode moved since the last count
+  (kept in playback.json's `listening`). Trim Silence's share is the motion
+  beyond the speed; a stretch that moved implausibly (a stall, a jump) isn't
+  counted, and a poll after mpv's `playback-restart` (`--seeked`, from the
+  service) counts only the time and the speed's share. Skip-forward, intro
+  and outro skips and finished episodes are added where they happen. Never
+  sent anywhere; no timer of its own.
 - **Before sleep:** while an episode is loaded, the service runs
   `systemd-inhibit --what=sleep --mode=delay … setpriv --pdeathsig TERM
   legato-bridge sleepguard`. The guard waits on `dbus-monitor` for logind's
@@ -321,6 +339,15 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   track too (`albumart: true`), and some files carry a cover as a plain
   video stream in a picture codec (a PNG in an MP4, `albumart` and `image`
   both false): `has_video` skips picture codecs (`STILL_IMAGE_CODECS`).
+- **Disabling a plugin deletes its bar entry** (Omarchy 4.5,
+  `PluginRegistry.setEnabled`), and the widget's settings with it; enabling
+  adds a fresh `{ id }`. Legato's state folder (prefs, sign-in, stats) is
+  untouched, even by `omarchy plugin remove`.
+- **mpv when a stream breaks** (tested 2026-11-23, mpv 0.41): it stalls
+  (`paused-for-cache`), retries for a few seconds, then sets `eof-reached`
+  at the break with `pause` still off; `stream-end` (the file size) reads
+  None from then on. At a real end it's known, and `stream-pos` stops about
+  100 bytes short of it (a trailing tag).
 - **Dragging a widget off the Omarchy bar disables its plugin** (Omarchy
   4.5). The video window can sit right under the bar, so a drag meant for
   it can take Legato's chip off; `omarchy plugin enable

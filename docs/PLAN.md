@@ -81,7 +81,8 @@ of its own.
   apps do. Legato ignores both today (one of Cody's shows skips a 15 s
   intro). Unlike the effects, these do reach the server ("changed" on all of
   Cody's shows).
-- [ ] B5 Optional: "time saved", as the Pocket Casts apps show it.
+- [x] B5 Optional: "time saved", as the Pocket Casts apps show it. Done as
+  H4 (local only).
 
 ### C. Video window (picture in picture)
 
@@ -341,10 +342,16 @@ history on other submissions). Fixed, each with a failing-first test:
   up to 30 s. (Nine Point Labs' review of the same check upstream, PR #7.)
 - [x] H3 A test for a stream host that accepts the connection and never
   answers (Nine Point Labs' review of PR #9; the behavior was already right).
-- [ ] H4 Listening stats (B5; Cody, 2026-11-23: local only, "amusing"):
-  listened time and time saved by speed, Trim Silence, skipping and the
-  shows' intro/outro skips, kept in the state folder (survives disabling
-  the plugin, which deletes its bar entry and with it the widget settings).
+- [x] H4 Listening stats (B5; Cody, 2026-11-23: local only, "amusing";
+  where: a chart button in the header beside Settings and About, his
+  idea). Listened time, time saved by speed, Trim Silence, skipping forward
+  and the shows' intro/outro skips, and episodes finished, in `stats.json`
+  in the state folder (survives disabling the plugin, which deletes its bar
+  entry and with it the widget settings). Counted in the polls that already
+  run while playing (rule 4 holds); a seek from a media widget is flagged
+  by the service (`--seeked`) so it isn't counted as time saved. The page
+  (`StatsView.qml`, `a`, IPC `stats`) reads them when it opens. Checked
+  live: the page and the header button render in Cody's theme.
 - [ ] H5 The video window tagged `skip-taskbar`; Transom and Latch skip
   tagged windows (each its own release).
 - [ ] H6 Ship 1.0.3 with the `ship-update` skill (marketplace verification

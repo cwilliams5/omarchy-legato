@@ -115,6 +115,11 @@ FINISH_SLACK = 3
 # Pocket Casts can't answer, the episode plays anyway and nothing is pushed
 # until it does, so a hanging network shouldn't hold up Play for 30 s.
 RESUME_CHECK_TIMEOUT = 5
+# Listening stats (stats.json): a stretch between two counts longer than this
+# isn't counted (the shell was down, say), nor one where the episode moved
+# implausibly for its speed (a seek from a media widget, a stall).
+LISTEN_GAP_MAX = 300
+STATS_KEYS = ("listened", "speed", "trim", "skipping", "intro", "outro")
 # mpv sits at "end of file" both at an episode's real end and where its stream
 # broke off for good. Stopping more than this many seconds (or 1% of the
 # episode, if that's more) before the end, the show's skip-outro included, is
@@ -1999,6 +2004,75 @@ def load_prefs():
     return load_state("prefs.json")
 
 
+def load_stats():
+    return load_state("stats.json")
+
+
+def add_stats(**seconds):
+    """Add to the listening stats, kept only here (stats.json, 0600; nothing
+    is sent anywhere). Callers hold the state lock. A stats file that can't be
+    read or written is left alone: stats never get in the way of playback."""
+    try:
+        stats = load_stats()
+        if not isinstance(stats.get("since"), (int, float)):
+            stats["since"] = int(time.time())
+        for key, value in seconds.items():
+            if isinstance(value, (int, float)) and value > 0:
+                before = stats.get(key)
+                stats[key] = round((float(before) if isinstance(before, (int, float)) else 0.0) + float(value), 3)
+        save_state("stats.json", stats)
+    except (OSError, ApiError):
+        pass
+
+
+def listen_snap(player):
+    """What count_listening reads, for commands that don't take a snapshot."""
+    return {name: player.get(name) for name in ("path", "pause", "time-pos", "speed", "eof-reached", "paused-for-cache")}
+
+
+def count_listening(state, snap, prefs, seeked=False):
+    """Count the listening since the last count (stats.json) and start a new
+    one from here. Runs from the poll (every 32 s while playing, and on each
+    mpv event) and before a command seeks, stops or switches, under the state
+    lock; no timer of its own. Listened is wall-clock time; the time saved is
+    how much further the episode moved: Trim Silence's share is what moved
+    beyond the speed (in the episode's own time), the rest is the speed's.
+
+    `seeked`: mpv reported a seek since the last poll that this bridge didn't
+    make (a media widget's; Legato's own seeks count before and after
+    themselves). How far the episode moved means nothing then, so only the
+    time listened and what the speed alone saved are counted."""
+    episode = state.get("episode") or {}
+    now = time.monotonic()
+    position = snap.get("time-pos")
+    speed = float(snap["speed"]) if isinstance(snap.get("speed"), (int, float)) and snap["speed"] > 0 else 1.0
+    trim = trim_level(prefs.get("trim"))
+    ours = bool(episode.get("uuid")) and snap.get("path") == episode.get("url") and isinstance(position, (int, float))
+    last = state.get("listening")
+    last = last if isinstance(last, dict) else {}
+    if (ours and last.get("uuid") == episode.get("uuid") and last.get("speed") == speed
+            and last.get("trim") == trim and isinstance(last.get("pos"), (int, float))
+            and isinstance(last.get("at"), (int, float))):
+        wall = now - last["at"]
+        moved = position - last["pos"]
+        # Played on at about its speed (a second's grace for the time a poll
+        # takes to arrive). Trim Silence cuts a pause in an instant, so two
+        # polls close together can see the episode jump: with it on, up to
+        # three times further plus a 30 s pause.
+        furthest = 3 * speed * wall + 30 if trim != "off" else speed * wall + 1
+        if not 0 < wall <= LISTEN_GAP_MAX:
+            pass
+        elif seeked:
+            add_stats(listened=wall, speed=max(0.0, (speed - 1) * wall))
+        elif speed * (wall - 1) <= moved <= furthest:
+            trimmed = max(0.0, moved - speed * wall) if trim != "off" else 0.0
+            add_stats(listened=wall, trim=trimmed, speed=max(0.0, moved - wall - trimmed))
+    playing = (ours and snap.get("pause") is False and snap.get("eof-reached") is not True
+               and snap.get("paused-for-cache") is not True)
+    state["listening"] = ({"uuid": episode["uuid"], "pos": float(position), "at": now, "speed": speed, "trim": trim}
+                          if playing else {})
+
+
 def save_prefs(prefs):
     save_state("prefs.json", prefs)
 
@@ -2084,11 +2158,12 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
     position = start_position(item, from_start)
     start_from, skip_last = show_skips(item.get("podcast", ""))
     duration = as_int(item.get("duration"))
+    intro = 0
     if (position == 0 and not from_start and start_from
             and (not duration or start_from < duration - FINISH_SLACK)):
         # The show's skip-intro, for an episode starting from the top (as the
         # Pocket Casts apps do it; "play from the start" means the start).
-        position = start_from
+        position = intro = start_from
     previous = load_playback()
     current = previous.get("episode") or {}
     # Switching away mid-episode: save where you were in the old one (unless
@@ -2097,6 +2172,8 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
             and previous.get("handledEnd") != current.get("uuid")):
         save_outgoing(previous)
     load_into_mpv(item, prefs, position, skip_last)
+    if intro:
+        add_stats(intro=intro)
     cache_art([item])
     # atTop: whether this episode is the top of Up Next, i.e. what Pocket
     # Casts considers playing. If the top later changes, another device has
@@ -2183,6 +2260,7 @@ def finish_current(state, prefs, autoplay):
     polls (`pendingFinish`), while the next episode plays too."""
     episode = state.get("episode") or {}
     uuid = episode.get("uuid", "")
+    add_stats(finished=1)
     state["handledEnd"] = uuid
     state["endedAutoplay"] = bool(autoplay)
     state["lastSyncAt"] = time.time()
@@ -2469,7 +2547,7 @@ def resume_loaded(player, state, prefs):
     player.set("pause", False)
 
 
-def poll(autoplay=True):
+def poll(autoplay=True, seeked=False):
     """Read mpv, sync the position to Pocket Casts when it's due, and handle an
     episode that just ended. Runs under the state lock."""
     state = load_playback()
@@ -2504,6 +2582,7 @@ def poll(autoplay=True):
     if not episode.get("uuid") or snap.get("path") != url:
         # mpv is playing something this plugin did not load.
         return player_view(snap, state, prefs)
+    count_listening(state, snap, prefs, seeked)
     position = snap.get("time-pos")
     if isinstance(position, (int, float)):
         state["position"] = float(position)
@@ -2511,6 +2590,9 @@ def poll(autoplay=True):
         # Not the end: the stream broke off. Say so; nothing is marked played.
         return stream_stopped(state, prefs, position)
     if snap.get("eof-reached") is True and state.get("handledEnd") != episode.get("uuid"):
+        outro = skip_last_of(snap.get("file-local-options/end"))
+        if outro:
+            add_stats(outro=outro)
         state = finish_current(state, prefs, autoplay)
         return poll_after_change(state, prefs)
     retry_pending_finish(state)
@@ -2637,6 +2719,7 @@ def save_outgoing(state):
         return
     with player:
         if url and player.get("path") == url:
+            count_listening(state, listen_snap(player), load_prefs())
             sync_now(player, state)
 
 
@@ -3090,7 +3173,7 @@ def cmd_logout(args):
 
 def cmd_player(args):
     with StateLock():
-        view = poll(autoplay=not args.no_autoplay)
+        view = poll(autoplay=not args.no_autoplay, seeked=args.seeked)
     if view.get("item") and view["item"].get("art") and not view["item"].get("artPath"):
         cache_art([view["item"]])
     out(view)
@@ -3175,12 +3258,20 @@ def cmd_seek(args):
             out(poll_after_change(state, load_prefs()))
             return
         with require_player() as player:
+            prefs = load_prefs()
+            count_listening(state, listen_snap(player), prefs)
+            before = player.get("time-pos")
             # osd-msg-bar: the video window (if shown) shows where it went.
             if args.relative:
                 player.command("osd-msg-bar", "seek", float(args.seconds), "relative")
             else:
                 player.command("osd-msg-bar", "seek", max(0.0, float(args.seconds)), "absolute")
             time.sleep(0.05)
+            after = player.get("time-pos")
+            if (args.relative and float(args.seconds) > 0 and isinstance(before, (int, float))
+                    and isinstance(after, (int, float)) and after > before):
+                add_stats(skipping=after - before)  # the skip-forward button's time saved
+            count_listening(state, listen_snap(player), prefs)  # from here on
             playing = player.get("pause") is False and player.get("eof-reached") is not True
             if playing and ended_here(state):
                 # Dragged back from the end of an episode that ended here: mpv
@@ -3388,6 +3479,7 @@ def cmd_next(args):
         player = Mpv.connect()
         if player:
             with player:
+                count_listening(state, listen_snap(player), prefs)
                 sync_now(player, state)
         if episode.get("uuid"):
             try:
@@ -3418,9 +3510,21 @@ def cmd_stop(args):
             out(view)
             return
         if player:
+            count_listening(state, listen_snap(player), load_prefs())
             sync_now(player, state)
             quit_mpv(player)
         view = player_view({}, load_playback(), load_prefs())
+    out(view)
+
+
+def cmd_stats(args):
+    """The listening stats counted on this computer (stats.json)."""
+    with StateLock():
+        stats = load_stats()
+    number = lambda value: float(value) if isinstance(value, (int, float)) else 0.0
+    view = {key: number(stats.get(key)) for key in STATS_KEYS}
+    view["finished"] = int(number(stats.get("finished")))
+    view["since"] = int(stats["since"]) if isinstance(stats.get("since"), (int, float)) else 0
     out(view)
 
 
@@ -3525,7 +3629,9 @@ def build_parser():
     p = sub.add_parser("localfeeds"); p.add_argument("value", choices=("on", "off", "toggle")); p.set_defaults(fn=cmd_localfeeds)
     sub.add_parser("logout").set_defaults(fn=cmd_logout)
 
-    p = sub.add_parser("player"); p.add_argument("--no-autoplay", action="store_true"); p.set_defaults(fn=cmd_player)
+    p = sub.add_parser("player"); p.add_argument("--no-autoplay", action="store_true")
+    p.add_argument("--seeked", action="store_true")  # mpv reported a seek since the last poll (listening stats)
+    p.set_defaults(fn=cmd_player)
     p = sub.add_parser("play"); p.add_argument("uuid"); p.add_argument("--podcast", default="")
     p.add_argument("--from-start", action="store_true"); p.set_defaults(fn=cmd_play)
     for action in ("toggle", "pause", "resume"):
@@ -3544,6 +3650,7 @@ def build_parser():
     sub.add_parser("sleepguard").set_defaults(fn=cmd_sleepguard)
     sub.add_parser("next").set_defaults(fn=cmd_next)
     p = sub.add_parser("stop"); p.add_argument("--if-paused", action="store_true"); p.set_defaults(fn=cmd_stop)
+    sub.add_parser("stats").set_defaults(fn=cmd_stats)
 
     p = sub.add_parser("mark"); p.add_argument("state", choices=("played", "unplayed")); p.add_argument("uuid")
     p.add_argument("--podcast", required=True); p.set_defaults(fn=cmd_mark)

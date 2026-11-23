@@ -446,6 +446,19 @@ Item {
   // its answer is dropped for a fresh poll, rather than undoing the change on
   // screen, where no mpv event would put it right.
   property int _changeSerial: 0
+  // mpv reported a seek (playback-restart) since the last poll: the bridge
+  // then doesn't read how far the episode moved as time saved (listening
+  // stats). Set by the event, so whichever poll comes next carries it.
+  property bool _seekedSincePoll: false
+
+  // The listening stats page's numbers (the bridge's `stats`), read when the
+  // page opens; null until then.
+  property var stats: null
+  function loadStats() {
+    call(["stats"], function(result) {
+      if (result.ok) root.stats = result.data
+    })
+  }
 
   function refreshPlayer() {
     if (!active) return
@@ -454,6 +467,7 @@ Item {
     var serial = _changeSerial
     var args = ["player"]
     if (!autoplay) args.push("--no-autoplay")
+    if (_seekedSincePoll) { args.push("--seeked"); _seekedSincePoll = false }
     call(args, function(result) {
       root.playerLoading = false
       var stale = serial !== root._changeSerial
@@ -581,6 +595,7 @@ Item {
       settle()
       return
     }
+    if (message.event === "playback-restart") _seekedSincePoll = true
     if (message.event === "property-change" || message.event === "playback-restart") settle()
   }
 

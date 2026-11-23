@@ -52,6 +52,7 @@ Panel {
   property bool _returnFired: false
   property bool showAbout: false
   property bool showSettings: false
+  property bool showStats: false
   // The episode the right-click menu is open for, or null.
   property var menuItem: null
   property real menuX: 0
@@ -77,17 +78,28 @@ Panel {
 
   function setAbout(on) {
     showAbout = !!on
-    if (showAbout) showSettings = false
+    if (showAbout) { showSettings = false; showStats = false }
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
   function setSettings(on) {
     showSettings = !!on
-    if (showSettings) showAbout = false
+    if (showSettings) { showAbout = false; showStats = false }
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
-  readonly property bool pageOpen: showAbout || showSettings
+  // The listening stats: read from the bridge each time the page opens.
+  function setStats(on) {
+    showStats = !!on
+    if (showStats) {
+      showAbout = false
+      showSettings = false
+      if (service) service.loadStats()
+    }
+    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
+
+  readonly property bool pageOpen: showAbout || showSettings || showStats
 
   // ---- The right-click menu on an episode.
   function openMenu(item, x, y) {
@@ -309,6 +321,7 @@ Panel {
     if (!opened) {
       showAbout = false
       showSettings = false
+      showStats = false
       menuItem = null
       if (service) service.closeDetail()
       passwordField.text = ""
@@ -415,6 +428,7 @@ Panel {
     contentWidth: panel.fittedContentWidth(Style.space(470))
     contentHeight: panel.fittedContentHeight(root.showAbout ? aboutView.implicitHeight :
       root.showSettings ? settingsView.implicitHeight :
+      root.showStats ? statsView.implicitHeight :
       fixedContent.implicitHeight + content.spacing + (root.needsSetup ? 0 : Math.max(Style.space(180), listColumn.implicitHeight + Style.space(6))),
       Style.space(760))
 
@@ -438,6 +452,7 @@ Panel {
         if (root.menuItem) { root.closeMenu(); return }
         if (root.showAbout) { root.setAbout(false); return }
         if (root.showSettings) { root.setSettings(false); return }
+        if (root.showStats) { root.setStats(false); return }
         if (root.goBack()) return
         root.close()
       }
@@ -446,6 +461,7 @@ Panel {
       onTextKey: function(t) {
         if (t === "i") { root.setAbout(!root.showAbout); return }
         if (t === "g") { root.setSettings(!root.showSettings); return }
+        if (t === "a") { root.setStats(!root.showStats); return }
         if (!root.service || !root.authenticated || root.pageOpen) return
         if (t === "1") root.setTab("upnext")
         else if (t === "2") root.setTab("progress")
@@ -483,6 +499,21 @@ Panel {
         licenseText: licenseFile.loaded ? licenseFile.text() : ""
         versions: root.aboutVersions
         onBackRequested: root.setAbout(false)
+      }
+
+      // The header's chart button or `a`: the listening stats.
+      StatsView {
+        id: statsView
+        objectName: "statsView"
+        visible: root.showStats
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        foreground: root.foreground
+        accent: root.accent
+        fontFamily: root.fontFamily
+        stats: root.service ? root.service.stats : null
+        onBackRequested: root.setStats(false)
       }
 
       // Over everything in the panel: the right-click menu, and a catcher
@@ -625,6 +656,15 @@ Panel {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(4)
+
+              PanelActionButton {
+                objectName: "statsButton"
+                iconText: Model.glyph.stats
+                tooltipText: "Listening stats (a)"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.setStats(true)
+              }
 
               PanelActionButton {
                 objectName: "settingsButton"

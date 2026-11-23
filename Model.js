@@ -30,7 +30,8 @@ var glyph = {
   stop: "󰓛",
   close: "󰅖",
   signOut: "󰍃",
-  speed: "󰾆"
+  speed: "󰾆",
+  stats: "󰄨"
 }
 
 var tabs = [
@@ -105,6 +106,40 @@ function fmtDate(iso, now) {
   if (days === 1) return "Yesterday"
   var label = monthNames[Math.max(0, Math.min(11, month - 1))] + " " + day
   return today.getFullYear() === year ? label : label + ", " + year
+}
+
+// A Unix time as "Nov 23, 2026" (when the listening stats began).
+function fmtDay(unixSeconds) {
+  var t = Number(unixSeconds) || 0
+  if (t <= 0) return ""
+  var d = new Date(t * 1000)
+  return monthNames[d.getMonth()] + " " + d.getDate() + ", " + d.getFullYear()
+}
+
+// Listening stats: 45 s, 12 min, 3 h 05 min, 2 d 4 h.
+function fmtTotal(seconds) {
+  var s = Math.max(0, Math.floor(Number(seconds) || 0))
+  if (s < 60) return s + " s"
+  var minutes = Math.floor(s / 60)
+  if (minutes < 60) return minutes + " min"
+  var hours = Math.floor(minutes / 60)
+  if (hours < 24) return minutes % 60 === 0 ? hours + " h" : hours + " h " + pad2(minutes % 60) + " min"
+  var days = Math.floor(hours / 24)
+  return hours % 24 === 0 ? days + " d" : days + " d " + (hours % 24) + " h"
+}
+
+// The time saved, in total and by what saved it, from the bridge's `stats`.
+function statsSaved(stats) {
+  var s = stats || {}
+  var rows = [
+    { label: "Playback speed", seconds: Number(s.speed) || 0 },
+    { label: "Trim Silence", seconds: Number(s.trim) || 0 },
+    { label: "Skipping forward", seconds: Number(s.skipping) || 0 },
+    { label: "Skipped intros and outros", seconds: (Number(s.intro) || 0) + (Number(s.outro) || 0) }
+  ]
+  var total = 0
+  for (var i = 0; i < rows.length; i++) total += rows[i].seconds
+  return { total: total, rows: rows }
 }
 
 function fmtSpeed(speed) {

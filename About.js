@@ -19,7 +19,7 @@ var SUPPORT_URL = "https://github.com/cwilliams5/omarchy-legato/issues"
 // (API, SHOW_HOSTS, ART_HOST_RE), mpv streaming the episode's own audio URL,
 // and the panel showing a cover straight from static.pocketcasts.com when it
 // could not be cached. Files: auth.json, playback.json, prefs.json,
-// podcasts-cache.json (all 0600), the art cache, shell.json.
+// podcasts-cache.json, stats.json (all 0600), the art cache, shell.json.
 var PRIVACY = "No telemetry and no servers of Legato's own: it talks only to Pocket Casts and "
   + "to the podcasts you play. Your email and password go to api.pocketcasts.com once, at sign-in; the "
   + "password is never stored. With your login token, api.pocketcasts.com then serves your Up Next, "
@@ -31,8 +31,8 @@ var PRIVACY = "No telemetry and no servers of Legato's own: it talks only to Poc
   + "podcast's own server (the address in its feed), which sees your IP address as with any podcast "
   + "app; a local check lets mpv reach only public addresses (your local network too, if you allow "
   + "it in Settings) and never this computer. Your login tokens, email and account ID are kept in ~/.local/state/omarchy-legato/auth.json, "
-  + "readable only by you (0600), next to the episode loaded, the player's settings, and a 10-minute "
-  + "list of your shows; signing out deletes the tokens. Cover art is cached in "
+  + "readable only by you (0600), next to the episode loaded, the player's settings, your listening "
+  + "stats (counted here, never sent) and a 10-minute list of your shows; signing out deletes the tokens. Cover art is cached in "
   + "~/.cache/omarchy-legato/art, and the panel's settings in ~/.config/omarchy/shell.json."
 
 // "0.1.0" from manifest.json's text, or "" when it can't be read.

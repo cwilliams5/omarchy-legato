@@ -1374,6 +1374,8 @@ class TrimSilence(PlayerTestCase):
         self.wait_for(lambda: run_bridge("player") and self.fake["status"].get(EP_1) == bridge.STATUS_PLAYED)
         self.assertLess(time.monotonic() - started, 5.5)
         self.assertEqual(run_bridge("player")["data"]["trim"], "madmax")
+        # The two 2 s gaps, cut: counted as Trim Silence's time saved.
+        self.assertGreater(run_bridge("stats")["data"]["trim"], 2.5)
 
     def test_boost_toggles_live_and_stays_after_trim(self):
         self.login()
@@ -1598,6 +1600,7 @@ class ShowSkips(PlayerTestCase):
         run_bridge("play", EP_1, "--podcast", PODCAST_A)
         self.assertGreaterEqual(self.wait_for(lambda: (lambda p: p if p >= 12 else None)(self.position())), 12)
         self.assertEqual(self.writes("/sync/update_episode")[-1]["position"], 12)
+        self.assertEqual(run_bridge("stats")["data"]["intro"], 12)
 
     def test_an_episode_in_progress_resumes_where_it_was(self):
         self.fake["showSettings"] = {PODCAST_A: {"autoStartFrom": 12, "autoSkipLast": 0}}
@@ -1626,6 +1629,8 @@ class ShowSkips(PlayerTestCase):
         self.assertLess(time.monotonic() - started, 9)
         self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
         self.assertEqual(view["item"]["uuid"], EP_2)
+        stats = run_bridge("stats")["data"]
+        self.assertEqual((stats["outro"], stats["finished"]), (26, 1))
 
 
 @NEEDS_PLAYER
@@ -1702,6 +1707,155 @@ class BrokenStream(PlayerTestCase):
         snap["file-local-options/end"] = "-105"  # the show's skip-outro: that's where it ends
         self.assertFalse(bridge.stream_broke(snap, {}))
         self.assertFalse(bridge.stream_broke({"eof-reached": True, "time-pos": 50.0}, {}))  # no duration: the end
+
+
+class ListeningCount(TempHome):
+    """The listening stats' arithmetic, with the clock under the test's control."""
+
+    URL = "http://example.com/a.mp3"
+
+    def count(self, state, at, position, speed=1.5, trim="madmax", seeked=False, pause=False):
+        snap = {"path": self.URL, "pause": pause, "time-pos": position, "speed": speed, "eof-reached": False}
+        with mock.patch.object(bridge.time, "monotonic", return_value=at):
+            bridge.count_listening(state, snap, {"trim": trim}, seeked)
+
+    def fresh(self):
+        return {"episode": {"uuid": EP_1, "url": self.URL}}
+
+    def test_speed_and_trim_split_the_time_saved(self):
+        state = self.fresh()
+        self.count(state, 100.0, 10.0)
+        self.count(state, 130.0, 60.0)
+        stats = bridge.load_stats()
+        # 30 s listened; at 1.5x that's 45 s of episode, and it moved 50:
+        # 15 s saved by the speed, 5 cut by Trim Silence.
+        self.assertAlmostEqual(stats["listened"], 30)
+        self.assertAlmostEqual(stats["speed"], 15)
+        self.assertAlmostEqual(stats["trim"], 5)
+        self.assertGreater(stats["since"], 0)
+
+    def test_without_trim_nothing_is_put_down_to_it(self):
+        state = self.fresh()
+        self.count(state, 100.0, 10.0, trim="off")
+        self.count(state, 130.0, 55.2, trim="off")
+        stats = bridge.load_stats()
+        self.assertNotIn("trim", stats)
+        self.assertAlmostEqual(stats["speed"], 15.2)
+
+    def test_a_jump_or_a_stall_isnt_counted(self):
+        # 30 s at 1.5x: 75 s is a seek without trim, 190 a jump even Mad Max
+        # can't explain, and 5 s a stall.
+        for trim, moved in (("off", 75.0), ("madmax", 190.0), ("off", 5.0), ("madmax", 5.0)):
+            state = self.fresh()
+            self.count(state, 100.0, 10.0, trim=trim)
+            self.count(state, 130.0, 10.0 + moved, trim=trim)
+        self.assertEqual(bridge.load_stats(), {})
+        # The same stretch, played: counted.
+        state = self.fresh()
+        self.count(state, 100.0, 10.0, trim="off")
+        self.count(state, 130.0, 55.0, trim="off")
+        self.assertAlmostEqual(bridge.load_stats()["listened"], 30)
+
+    def test_after_a_seek_from_elsewhere_only_the_speed_counts(self):
+        state = self.fresh()
+        self.count(state, 100.0, 10.0)
+        self.count(state, 130.0, 70.0, seeked=True)  # a media widget skipped 15 s in there
+        stats = bridge.load_stats()
+        self.assertAlmostEqual(stats["listened"], 30)
+        self.assertAlmostEqual(stats["speed"], 15)
+        self.assertNotIn("trim", stats)
+
+    def test_paused_time_and_long_gaps_arent_listening(self):
+        state = self.fresh()
+        self.count(state, 100.0, 10.0, pause=True)   # paused: no count starts
+        self.count(state, 200.0, 10.0)
+        self.assertEqual(bridge.load_stats(), {})
+        self.count(state, 900.0, 600.0)               # 700 s later (the shell was down): not counted
+        self.assertEqual(bridge.load_stats(), {})
+        state["episode"] = {"uuid": EP_2, "url": self.URL}
+        self.count(state, 910.0, 615.0)               # another episode: a new count, nothing added
+        self.assertEqual(bridge.load_stats(), {})
+
+    def test_the_stats_command_reads_them_back(self):
+        self.assertEqual(run_bridge("stats")["data"], {"listened": 0.0, "speed": 0.0, "trim": 0.0, "skipping": 0.0,
+                                                       "intro": 0.0, "outro": 0.0, "finished": 0, "since": 0})
+        bridge.add_stats(listened=60, intro=12)
+        bridge.add_stats(finished=1)
+        data = run_bridge("stats")["data"]
+        self.assertEqual((data["listened"], data["intro"], data["finished"]), (60.0, 12.0, 1))
+        self.assertEqual(mode_of(os.path.join(os.environ["XDG_STATE_HOME"], "omarchy-legato", "stats.json")), 0o600)
+
+
+@NEEDS_PLAYER
+class ListeningStats(PlayerTestCase):
+    """The listening stats from a real (muted) mpv: speed, pauses, skips."""
+
+    AUDIO_SECONDS = 30
+
+    def setUp(self):
+        super().setUp()
+        for episode in self.fake["episodes"].values():
+            episode["duration"] = 30
+
+    def stats(self):
+        return run_bridge("stats")["data"]
+
+    def play_for(self, seconds):
+        until = time.monotonic() + seconds
+        while time.monotonic() < until:
+            time.sleep(0.5)
+            run_bridge("player")
+
+    def start(self, speed=None):
+        self.login()
+        if speed:
+            run_bridge("speed", speed)
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.wait_for(lambda: run_bridge("player")["data"]["position"] > 0.3)
+
+    def test_listening_at_double_speed_saves_a_second_a_second(self):
+        self.start("2.0")
+        self.play_for(3)
+        stats = self.stats()
+        self.assertGreater(stats["listened"], 2.5)
+        self.assertAlmostEqual(stats["speed"], stats["listened"], delta=0.5)
+        self.assertEqual(stats["trim"], 0)
+
+    def test_paused_time_isnt_listening(self):
+        self.start()
+        self.play_for(1.5)
+        run_bridge("pause")
+        run_bridge("player")
+        time.sleep(2)
+        run_bridge("player")
+        self.assertLess(self.stats()["listened"], 2.5)
+
+    def test_skipping_forward_counts_what_it_skipped_and_back_doesnt(self):
+        self.start()
+        self.play_for(1)
+        run_bridge("seek", "10", "--relative", "--episode", EP_1)
+        run_bridge("seek", "-4", "--relative", "--episode", EP_1)
+        self.play_for(1)
+        stats = self.stats()
+        self.assertAlmostEqual(stats["skipping"], 10, delta=0.3)
+        self.assertLess(stats["speed"], 1)  # the jumps aren't time saved by the speed
+
+    def test_a_seek_from_a_media_widget_isnt_time_saved(self):
+        self.start()
+        self.play_for(1)
+        with bridge.Mpv.connect() as player:  # what mpv-mpris does for a widget's seek
+            player.command("seek", 12, "relative")
+        time.sleep(0.5)
+        run_bridge("player", "--seeked")  # the service saw mpv's playback-restart
+        stats = self.stats()
+        self.assertLess(stats["speed"], 1)
+        self.assertEqual(stats["skipping"], 0)
+
+    def test_stopping_counts_up_to_the_stop(self):
+        self.start()
+        time.sleep(2)
+        run_bridge("stop")
+        self.assertGreater(self.stats()["listened"], 1.5)
 
 
 class PrefsLock(TempHome):

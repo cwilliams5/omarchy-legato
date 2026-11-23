@@ -39,6 +39,37 @@ test("time formatting", () => {
   assert.equal(Model.fmtSpeed(1.25), "1.3×")
 })
 
+test("listening stats read as totals, with the time saved split by what saved it", () => {
+  assert.equal(Model.fmtTotal(0), "0 s")
+  assert.equal(Model.fmtTotal(45.7), "45 s")
+  assert.equal(Model.fmtTotal(12 * 60 + 30), "12 min")
+  assert.equal(Model.fmtTotal(3 * 3600), "3 h")
+  assert.equal(Model.fmtTotal(3 * 3600 + 5 * 60), "3 h 05 min")
+  assert.equal(Model.fmtTotal(2 * 86400 + 4 * 3600 + 59), "2 d 4 h")
+  assert.equal(Model.fmtDay(0), "")
+  assert.match(Model.fmtDay(Date.UTC(2026, 10, 23, 12) / 1000), /^Nov 2[34], 2026$/)
+  const saved = Model.statsSaved({ speed: 100, trim: 20, skipping: 30, intro: 12, outro: 26 })
+  assert.equal(saved.total, 188)
+  assert.equal(saved.rows.map((r) => r.seconds).join(","), "100,20,30,38")
+  assert.equal(Model.statsSaved(null).total, 0)
+})
+
+test("the stats page opens from the header, `a` and closes like the others; it runs no timer", () => {
+  const panel = fs.readFileSync(path.join(ROOT, "Panel.qml"), "utf8")
+  const service = fs.readFileSync(path.join(ROOT, "Service.qml"), "utf8")
+  const view = fs.readFileSync(path.join(ROOT, "StatsView.qml"), "utf8")
+  assert.match(panel, /objectName: "statsButton"[\s\S]*?onClicked: root\.setStats\(true\)/)
+  assert.match(panel, /t === "a"\) \{ root\.setStats\(!root\.showStats\)/)
+  assert.match(panel, /if \(root\.showStats\) \{ root\.setStats\(false\); return \}/)
+  assert.match(panel, /if \(!opened\) \{[\s\S]*?showStats = false/)
+  assert.match(panel, /if \(service\) service\.loadStats\(\)/)  // read when the page opens
+  assert.match(service, /call\(\["stats"\]/)
+  assert.doesNotMatch(view, /\bTimer\b/)
+  // A poll after mpv reports a seek tells the bridge, so the jump isn't time saved.
+  assert.match(service, /message\.event === "playback-restart"\) _seekedSincePoll = true/)
+  assert.match(service, /if \(_seekedSincePoll\) \{ args\.push\("--seeked"\); _seekedSincePoll = false \}/)
+})
+
 test("Trim Silence levels read as Pocket Casts names them", () => {
   assert.equal(Model.trimLabel("off"), "Off")
   assert.equal(Model.trimLabel("mild"), "Mild")
