@@ -65,14 +65,26 @@ test("the stats page opens from the header, `a` and closes like the others; it r
   assert.match(panel, /if \(service\) service\.loadStats\(\)/)  // read when the page opens
   assert.match(service, /call\(\["stats"\]/)
   assert.doesNotMatch(view, /\bTimer\b/)
-  // Counting can be turned off and cleared on the Settings page.
+  // The Stats page carries the switch and Clear (the Settings page had no room:
+  // tests/qml/pages.qml lays both out); the panel wires them to the service.
   const settings = fs.readFileSync(path.join(ROOT, "SettingsView.qml"), "utf8")
-  assert.match(settings, /objectName: "statsCounting"[\s\S]*?onClicked: root\.statsCountingRequested\(!root\.statsCounting\)/)
-  assert.match(settings, /objectName: "statsClear"[\s\S]*?if \(!root\.confirmClear\) \{ root\.confirmClear = true; return \}[\s\S]*?root\.statsClearRequested\(\)/)
-  assert.match(panel, /onStatsCountingRequested: function\(on\) \{ if \(root\.service\) root\.service\.setStatsCounting\(on\) \}/)
-  assert.match(panel, /onStatsClearRequested: if \(root\.service\) root\.service\.clearStats\(\)/)
-  assert.match(service, /call\(\["stats", on \? "on" : "off"\]/)
-  assert.match(service, /call\(\["stats", "clear"\]/)
+  assert.doesNotMatch(settings, /stats/i)
+  assert.match(panel, /onCountingRequested: function\(on\) \{ if \(root\.service\) root\.service\.setStatsCounting\(on\) \}/)
+  assert.match(panel, /onClearRequested: if \(root\.service\) root\.service\.clearStats\(\)/)
+  assert.match(panel, /error: root\.service \? root\.service\.statsError : ""/)
+  assert.match(service, /call\(\["stats", on \? "on" : "off"\], function\(result\) \{\s*root\.applyStats\(result\)\s*if \(result\.ok\) root\.optimistic\(\{ statsCounting: result\.data\.counting \}\)/)
+  assert.match(service, /call\(\["stats", "clear"\], function\(result\) \{ root\.applyStats\(result\) \}\)/)
+  // A failure is kept for the page (never a blank page or a silent Clear).
+  assert.match(service, /function applyStats\(result\) \{\s*if \(!result\.ok\) \{ root\.statsError = result\.error \|\| "[^"]+"; return \}\s*root\.statsError = ""\s*root\.stats = result\.data/)
+  // The open page follows what's counted: re-read after each poll while open.
+  assert.match(panel, /onShowStatsChanged: if \(service\) service\.statsPageOpen = showStats/)
+  assert.match(service, /if \(statsPageOpen\) loadStats\(\)/)
+  // One page at a time.
+  assert.match(panel, /if \(showAbout\) \{ showSettings = false; showStats = false \}/)
+  assert.match(panel, /if \(showSettings\) \{ showAbout = false; showStats = false \}/)
+  assert.match(panel, /if \(showStats\) \{\s*showAbout = false\s*showSettings = false/)
+  // A failed poll gives the seek flag back.
+  assert.match(service, /if \(!result\.ok && seeked\) root\._seekedSincePoll = true/)
   // A poll after mpv reports a seek tells the bridge, so the jump isn't time saved.
   assert.match(service, /message\.event === "playback-restart"\) _seekedSincePoll = true/)
   assert.match(service, /if \(_seekedSincePoll\) \{ args\.push\("--seeked"\); _seekedSincePoll = false \}/)

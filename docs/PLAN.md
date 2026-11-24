@@ -320,7 +320,7 @@ history on other submissions). Fixed, each with a failing-first test:
   tag), and have Transom and Latch skip windows with it (Cody's call,
   2026-11-22: not during the review). Done as H5.
 
-### H. After the listing (2026-11-23, toward 1.0.3)
+### H. After the listing (2026-11-23; shipped as 1.1.0)
 
 - [x] H1 **A stream that broke off part way was marked played.** mpv
   (keep-open) retries a dead stream, gives up, and sits with `eof-reached`
@@ -391,12 +391,90 @@ history on other submissions). Fixed, each with a failing-first test:
   survives disabling the plugin, unlike a widget setting), the Settings
   page's Listening stats section (On/Off; Clear asks for a second click),
   `bridge stats on|off|clear`; the Stats page says when counting is off.
+### SR. Strict review round 1 (2026-11-24, the strict-review skill)
+
+Two fresh reviewers against the 2026-11-21 audit and the skill's checklist:
+reports kept outside the repo. Verdict:
+the sync rules and idle cost hold; a new path can mark an unfinished
+episode played; the new Settings rows don't fit; the tests are weak where
+it's new (mutants killed: 8 of 20 and 24 of 44).
+
+- [x] SR1 (high) A second break within 10 s of the first counted as the end
+  (`brokeAt`): on a flaky link an unfinished episode is marked played on
+  every device, and (nothing to autoplay) Play then restarts it from 0:00
+  and pushes 0 (SR2). Fix: drop the second-stop rule; judge a break by the
+  file size and duration mpv knew when the episode loaded.
+  Fixed: `brokeAt` is gone; `stream_broke` judges by `stream` (url, size,
+  duration mpv knew at load). Test: a second break near the first stays a
+  break, never pushes 0.
+- [x] SR3 (medium) A host that sends no file size, serving an MP3 without a
+  duration header: mpv's duration shrinks to what arrived, so a break reads
+  as the end. Fix: use the load-time duration; with neither size nor
+  duration known at load, it's the end as before 1.1 (a stated limit).
+  Fixed as far as can be told: the load-time duration is used; neither size
+  nor duration at load means the end (README's known limit).
+- [x] SR4 (medium) Play's short check still waits a full token refresh
+  (hourly), and a 401 inside it refreshes under the 5 s limit. Fix: the
+  token request gets its own timeout (lowered only by the sleep guard);
+  the claim says "plus a due sign-in refresh".
+  Fixed: `TOKEN_TIMEOUT` (15 s; the sleep guard lowers it with
+  HTTP_TIMEOUT); `prime_token` removed. Tests: an expired token and a 401
+  inside the quick check both refresh in full.
+- [x] SR5 (low) `--seeked` skips every plausibility check: a stall or pause
+  up to 300 s counts as listening. Fix: bound that stretch.
+  Fixed: `SEEKED_STRETCH_MAX` (40 s), and only a stretch that ends playing.
+- [x] SR6 (low) An unexpected error in the stats code fails the whole poll.
+  Fix: stats code can't raise into the poll.
+  Fixed: count_listening and add_stats can't raise into a poll; a
+  stats.json that isn't an object starts over.
+- [x] SR7 (high) The Settings page no longer fits the panel (848 px of 728):
+  the Listening stats rows fall outside the card. Fix: the switch and Clear
+  move to the Stats page; a layout test caps the Settings page.
+  Fixed: the switch and Clear moved to the Stats page; the Settings page is
+  back to 1.0.2's (708 px in the stand-in layout). Test:
+  tests/qml/pages.qml caps both pages (it fails on the 1.1.0 page: 848).
+- [x] SR8 (medium) Errors from those controls are invisible (the status line
+  is hidden behind a page); a failed Clear looks done; an unreadable
+  stats.json leaves "…" with no reason. Fix: the Stats page shows them.
+  Fixed: the Stats page shows `service.statsError`; a failed read shows its
+  reason.
+- [x] SR9 (low) Listening dropped around a pause whose poll lands late, and
+  around every speed or Trim change. Fix: count before those changes.
+  Fixed: Pause from the panel counts first; speed and Trim changes count
+  around themselves (`listening_change`, half a second at most for the
+  lock).
+- [x] SR10 (low) The skip-taskbar tag follows Legato's setting, not the
+  window's pin: Omarchy's Super+O unpins and tiles it, still hidden. Fix:
+  tag by the real pin state if Hyprland's rules can match it.
+  Fixed: two rules match the real pin (`pin = true` adds, `pin = false`
+  removes; a pin change only adds tags by itself, tested live).
+- [x] SR11 (low) The test suite's mpv joins the real session bus (MPRIS
+  players on the desktop while tests run). Fix: tests load no mpv-mpris.
+  Fixed: test players load no mpv-mpris (and a test checks their command
+  line).
+- [x] SR12 (low) The Stats page shows zeros before its first read and goes
+  stale while open. Fix: "…" until read; re-read on each poll while open.
+  Fixed: "…" until the first read; re-read after each poll while the page
+  is open.
+- [x] SR13 Tests that gave false confidence: the broken-stream push's
+  guards (unconfirmed, checkServer) untested; "carries on" tests passed
+  with nothing playing; the `--seeked` and 300 s gap tests passed without
+  their code; next/switch/absolute-seek/clear-lock/trim-change counting
+  untested; QML only regex-checked (7 of 10 QML mutants survived). Fix:
+  behaviour tests for each, an offscreen QML test, `tests/mutations.md`.
+  Fixed: tests for each, the offscreen QML test, tests/mutate.py +
+  tests/mutations.md.
+- [x] SR14 Stale claims: CLAUDE.md status (1.0.2, skip-taskbar next,
+  "private until 1.0.0"), test times (70 s / 20 s; it's ~3 min), PLAN
+  "toward 1.0.3", H2's "5 s" without the refresh caveat.
+  Fixed in CLAUDE.md and this plan.
+
 - [ ] H6 Ship 1.1.0 (a minor version: the stats are a feature) with the `ship-update` skill (marketplace verification
   request, Cody approves the filing).
 
 ## Testing
 
-- `tests/run` before every commit: both suites, about 20 s, nothing on
+- `tests/run` before every commit: all suites, about 3 minutes, nothing on
   screen. Each new behavior gets an end-to-end test against the fake server
   (`tests/test_bridge.py`, `PlayerTestCase`; set `AUDIO_SECONDS` for longer
   audio, and the fake serves byte ranges).

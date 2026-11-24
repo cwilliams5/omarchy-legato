@@ -22,21 +22,14 @@ Column {
   property int videoTransparency: 0  // percent, 0 to 80 in tens
   property bool videoPinned: true
   property bool localFeeds: false
-  property bool statsCounting: true
-  // Clear asks for a second click; leaving the page forgets the first.
-  property bool confirmClear: false
 
   signal backRequested()
   signal changeRequested(string key, var value)
   signal videoTransparencyRequested(int level)
   signal videoPinnedRequested(bool pinned)
   signal localFeedsRequested(bool on)
-  signal statsCountingRequested(bool on)
-  signal statsClearRequested()
 
   readonly property color dim: Qt.darker(foreground, 1.55)
-
-  onVisibleChanged: if (!visible) root.confirmClear = false
 
   // Friendlier names for enum values; anything else is shown as is.
   readonly property var valueNames: ({ upnext: "Up Next", progress: "In Progress", new: "New", podcasts: "Podcasts" })
@@ -345,94 +338,6 @@ Column {
     wrapMode: Text.WordWrap
     textFormat: Text.PlainText
     text: "Off by default: a podcast feed can't point Legato at other machines on your network. This computer itself is never played from."
-    color: root.dim
-    font.family: root.fontFamily
-    font.pixelSize: Style.font.caption
-  }
-
-  Text {
-    width: parent.width
-    topPadding: Style.space(6)
-    text: "LISTENING STATS"
-    color: root.dim
-    font.family: root.fontFamily
-    font.pixelSize: Style.font.caption
-    font.bold: true
-  }
-
-  Item {
-    width: root.width
-    height: Math.max(countLabel.implicitHeight, countButton.implicitHeight)
-
-    Text {
-      id: countLabel
-      anchors.left: parent.left
-      anchors.right: countButton.left
-      anchors.rightMargin: Style.space(12)
-      anchors.verticalCenter: parent.verticalCenter
-      wrapMode: Text.WordWrap
-      textFormat: Text.PlainText
-      text: "Count time listened and time saved on this computer"
-      color: root.foreground
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.bodySmall
-    }
-    Button {
-      id: countButton
-      objectName: "statsCounting"
-      anchors.right: parent.right
-      anchors.verticalCenter: parent.verticalCenter
-      text: root.statsCounting ? "On" : "Off"
-      selected: root.statsCounting
-      foreground: root.foreground
-      accent: root.accent
-      fontFamily: root.fontFamily
-      fontSize: Style.font.caption
-      onClicked: root.statsCountingRequested(!root.statsCounting)
-    }
-  }
-
-  Item {
-    width: root.width
-    height: Math.max(clearLabel.implicitHeight, clearButton.implicitHeight)
-
-    Text {
-      id: clearLabel
-      anchors.left: parent.left
-      anchors.right: clearButton.left
-      anchors.rightMargin: Style.space(12)
-      anchors.verticalCenter: parent.verticalCenter
-      wrapMode: Text.WordWrap
-      textFormat: Text.PlainText
-      text: "Delete the stats counted so far"
-      color: root.foreground
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.bodySmall
-    }
-    Button {
-      id: clearButton
-      objectName: "statsClear"
-      anchors.right: parent.right
-      anchors.verticalCenter: parent.verticalCenter
-      text: root.confirmClear ? "Sure? Clear" : "Clear"
-      selected: root.confirmClear
-      foreground: root.foreground
-      accent: root.accent
-      fontFamily: root.fontFamily
-      fontSize: Style.font.caption
-      onClicked: {
-        if (!root.confirmClear) { root.confirmClear = true; return }
-        root.confirmClear = false
-        root.statsClearRequested()
-      }
-    }
-  }
-
-  Text {
-    width: parent.width
-    wrapMode: Text.WordWrap
-    textFormat: Text.PlainText
-    text: "Kept only on this computer and never sent anywhere. Off, nothing more is counted; Clear deletes what's there."
     color: root.dim
     font.family: root.fontFamily
     font.pixelSize: Style.font.caption

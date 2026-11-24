@@ -72,6 +72,11 @@ ART_BASE = "https://static.pocketcasts.com/discover/images"
 USER_AGENT = "legato/1.0 (+https://github.com/cwilliams5/omarchy-legato)"
 
 HTTP_TIMEOUT = 15
+# A sign-in refresh's own timeout: the resume check's short limit
+# (http_timeout) never applies to it, since a refresh cut short after Pocket
+# Casts answered could lose a rotated refresh token. Only the sleep guard
+# lowers it, with HTTP_TIMEOUT.
+TOKEN_TIMEOUT = 15
 ART_TIMEOUT = 8
 ART_WORKERS = 8
 ART_SIZE = 200
@@ -119,6 +124,9 @@ RESUME_CHECK_TIMEOUT = 5
 # isn't counted (the shell was down, say), nor one where the episode moved
 # implausibly for its speed (a seek from a media widget, a stall).
 LISTEN_GAP_MAX = 300
+# After a seek from elsewhere (count_listening's `seeked`), a stretch is
+# counted only if it's no longer than a poll's (32 s, with grace).
+SEEKED_STRETCH_MAX = 40
 STATS_KEYS = ("listened", "speed", "trim", "skipping", "intro", "outro")
 # mpv sits at "end of file" both at an episode's real end and where its stream
 # broke off for good. Stopping more than this many seconds (or 1% of the
@@ -866,14 +874,14 @@ def error_text(payload, status):
     return "Pocket Casts request failed (HTTP %d)" % status
 
 
-def post_json(path, body, token=""):
+def post_json(path, body, token="", timeout=None):
     """POST a JSON body to the API. Returns (status, payload)."""
     headers = {"Content-Type": "application/json", "Accept": "application/json",
                "Accept-Encoding": "gzip"}
     if token:
         headers["Authorization"] = "Bearer " + token
     data = json.dumps(body if body is not None else {}).encode("utf-8")
-    status, blob, resp_headers = http_raw("POST", API + path, headers, data)
+    status, blob, resp_headers = http_raw("POST", API + path, headers, data, timeout)
     blob = decode_body(blob, resp_headers)
     try:
         payload = json.loads(blob.decode("utf-8")) if blob else {}
@@ -918,7 +926,8 @@ def refresh_tokens(auth):
         auth.clear()
         auth.update(current)  # refresh the session as it is on disk now
         status, payload = post_json("/user/token", {"grantType": "refresh_token",
-                                                    "refreshToken": auth.get("refresh_token", "")})
+                                                    "refreshToken": auth.get("refresh_token", "")},
+                                    timeout=TOKEN_TIMEOUT)
         if status == 200 and payload.get("accessToken"):
             store_tokens(auth, payload)  # still the session on disk: checked above, under the lock
             return auth["access_token"]
@@ -1784,15 +1793,17 @@ def video_rule_lua(geometry, pinned=True, transparency=0):
     a floating workspace's open rule (which sizes every other new window to
     two thirds of the screen, centered) leaves it alone. Named, so adding it
     again replaces it. A second rule turns off the floating workspace's title
-    bar for it (its buttons can't minimize or maximize a pinned window). A
-    third tags it `skip-taskbar` while it's pinned (Always on top), a
-    convention of Legato's own (Hyprland has none): a taskbar or window
-    switcher that honors it leaves the picture-in-picture window out. Not
-    pinned, it's an ordinary window other windows can cover, so it keeps its
-    taskbar button and its Alt+Tab entry: the rule takes the tag away (sent
-    again under the same name, it re-tags an open window too). Its own rule,
-    not part of o.window's, which records every tag it's given as a floating
-    app."""
+    bar for it (its buttons can't minimize or maximize a pinned window). Two
+    more tag it `skip-taskbar` while it's pinned, a convention of Legato's
+    own (Hyprland has none): a taskbar or window switcher that honors it
+    leaves the picture-in-picture window out. Not pinned, it's an ordinary
+    window other windows can cover, so it keeps its taskbar button and its
+    Alt+Tab entry. The rules match the window's real pin state, not
+    Legato's setting, so Omarchy's own unpin (Super+O, pop out) untags it
+    too: Hyprland re-checks rules when a window's pin changes, but only adds
+    tags then, so a second rule takes the tag off an unpinned window (both
+    tested live, Hyprland 0.56). Their own rules, not o.window's, which
+    records every tag it's given as a floating app."""
     if geometry:
         x, y, w, h = (int(geometry[k]) for k in ("x", "y", "w", "h"))
         size = '{ "%d", "%d" }' % (w, h)
@@ -1805,9 +1816,10 @@ def video_rule_lua(geometry, pinned=True, transparency=0):
             'if o and o.window then o.window("^%(id)s$", r) '
             'else r.match = { class = "^%(id)s$" } hl.window_rule(r) end '
             'pcall(hl.window_rule, { name = "%(id)s-nobar", match = { class = "^%(id)s$" }, ["hyprbars:no_bar"] = true }) '
-            'pcall(hl.window_rule, { name = "%(id)s-tags", match = { class = "^%(id)s$" }, tag = "%(skip)s" }) '
+            'pcall(hl.window_rule, { name = "%(id)s-tags", match = { class = "^%(id)s$", pin = true }, tag = "+%(skip)s" }) '
+            'pcall(hl.window_rule, { name = "%(id)s-untag", match = { class = "^%(id)s$", pin = false }, tag = "-%(skip)s" }) '
             '%(opacity)s'
-            'return "ok"' % {"id": VIDEO_APP_ID, "skip": ("+" if pinned else "-") + SKIP_TASKBAR_TAG,
+            'return "ok"' % {"id": VIDEO_APP_ID, "skip": SKIP_TASKBAR_TAG,
                              "pin": "true" if pinned else "false",
                              "size": size, "move": move,
                              "opacity": video_opacity_lua(transparency)})
@@ -2038,7 +2050,7 @@ def add_stats(**seconds):
     try:
         if not stats_counting(load_prefs()):
             return
-        stats = load_stats()
+        stats = load_stats()  # {} for a file that isn't an object (load_json_at)
         if not isinstance(stats.get("since"), (int, float)):
             stats["since"] = int(time.time())
         for key, value in seconds.items():
@@ -2046,7 +2058,7 @@ def add_stats(**seconds):
                 before = stats.get(key)
                 stats[key] = round((float(before) if isinstance(before, (int, float)) else 0.0) + float(value), 3)
         save_state("stats.json", stats)
-    except (OSError, ApiError):
+    except Exception:  # noqa: BLE001 (a DeadlinePassed isn't an Exception and still ends the call)
         pass
 
 
@@ -2056,6 +2068,15 @@ def listen_snap(player):
 
 
 def count_listening(state, snap, prefs, seeked=False):
+    """count_listening_now, which can't raise into the poll or command that
+    called it: stats never get in the way of playback."""
+    try:
+        count_listening_now(state, snap, prefs, seeked)
+    except Exception:  # noqa: BLE001 (a DeadlinePassed isn't an Exception and still ends the call)
+        state["listening"] = {}
+
+
+def count_listening_now(state, snap, prefs, seeked=False):
     """Count the listening since the last count (stats.json) and start a new
     one from here. Runs from the poll (every 32 s while playing, and on each
     mpv event) and before a command seeks, stops or switches, under the state
@@ -2066,7 +2087,9 @@ def count_listening(state, snap, prefs, seeked=False):
     `seeked`: mpv reported a seek since the last poll that this bridge didn't
     make (a media widget's; Legato's own seeks count before and after
     themselves). How far the episode moved means nothing then, so only the
-    time listened and what the speed alone saved are counted."""
+    time listened and what the speed alone saved are counted, and only for a
+    stretch no longer than a poll's (SEEKED_STRETCH_MAX) that ends playing
+    (a stall or a pause can't hide behind the seek)."""
     episode = state.get("episode") or {}
     now = time.monotonic()
     position = snap.get("time-pos")
@@ -2088,7 +2111,9 @@ def count_listening(state, snap, prefs, seeked=False):
         if not 0 < wall <= LISTEN_GAP_MAX:
             pass
         elif seeked:
-            add_stats(listened=wall, speed=max(0.0, (speed - 1) * wall))
+            if (wall <= SEEKED_STRETCH_MAX and snap.get("pause") is False
+                    and snap.get("paused-for-cache") is not True):
+                add_stats(listened=wall, speed=max(0.0, (speed - 1) * wall))
         elif speed * (wall - 1) <= moved <= furthest:
             trimmed = max(0.0, moved - speed * wall) if trim != "off" else 0.0
             add_stats(listened=wall, trim=trimmed, speed=max(0.0, moved - wall - trimmed))
@@ -2170,6 +2195,9 @@ def load_into_mpv(item, prefs, position, skip_last=0):
             options += ",end=-%d" % skip_last
         player.command("loadfile", url, "replace", -1, options)
         player.wait_for_load()
+        size, duration = player.get("stream-end"), player.get("duration")
+        return {"url": url, "size": size if isinstance(size, int) else None,
+                "duration": duration if isinstance(duration, (int, float)) else None}
 
 
 def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_top=False):
@@ -2196,7 +2224,7 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
     if (save_previous and current.get("uuid") and current.get("uuid") != item.get("uuid")
             and previous.get("handledEnd") != current.get("uuid")):
         save_outgoing(previous)
-    load_into_mpv(item, prefs, position, skip_last)
+    stream = load_into_mpv(item, prefs, position, skip_last)
     if intro:
         add_stats(intro=intro)
     cache_art([item])
@@ -2208,9 +2236,9 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
              # Episodes that ended here while Pocket Casts couldn't be told.
              "pendingFinish": [p for p in previous.get("pendingFinish") or []
                                if isinstance(p, dict) and p.get("uuid") != item.get("uuid")]}
-    broke = previous.get("brokeAt")
-    if isinstance(broke, dict) and broke.get("uuid") == item.get("uuid"):
-        state["brokeAt"] = broke  # where this episode's stream broke before (stream_broke)
+    # What mpv knew of the file as it loaded (stream_broke): its size goes
+    # when the stream fails, and a duration it estimated can shrink with it.
+    state["stream"] = stream
     save_playback(state)
     if queue:
         try:
@@ -2411,33 +2439,42 @@ def skip_last_of(value):
 def stream_broke(snap, state):
     """mpv (keep-open) sits with `eof-reached` on both at an episode's real end
     and where its stream broke off for good (the network went, the host hung
-    up; mpv retries for a while first). Only the first finishes the episode.
-    True when it stopped well short of the end: over BROKE_SLACK seconds (or
-    1%) before it, the skip-outro included, without having read nearly all of
-    the file (mpv forgets the file's size once its stream fails). Only mpv's
-    own duration counts (the feed's is often off: ads inserted on the fly);
-    without one, it's the end, as it always was. And a second stop where
-    this episode stopped before (`brokeAt`) is the end too: a file cut short
-    on its server, or a real end misjudged, isn't replayed forever."""
+    up; mpv retries for a while first). Only the first finishes the episode,
+    and calling a break the end is the worse mistake (it marks an unfinished
+    episode played on every device), so a break is recognised by what the
+    file itself says, as mpv knew it when the episode loaded (`stream` in
+    the state, from play_item):
+
+    - within BROKE_SLACK seconds (or 1%) of the end (the load-time duration,
+      less the show's skip-outro), it's the end;
+    - otherwise, with the file's size known now, it broke if much of the
+      file is unread;
+    - with the size unknown now but known at load, it broke: mpv drops the
+      size when the stream fails;
+    - with no size at load either (a host that sends none), it broke if mpv
+      knew the duration at load, since the time is then short of the end;
+    - with neither, it can't be told, and it's the end, as before 1.1."""
     if snap.get("eof-reached") is not True:
         return False
     position = snap.get("time-pos")
-    duration = snap.get("duration")
-    if not isinstance(position, (int, float)) or not isinstance(duration, (int, float)) or duration <= 0:
+    if not isinstance(position, (int, float)):
+        return False
+    loaded = state.get("stream")
+    loaded = loaded if isinstance(loaded, dict) and loaded.get("url") == snap.get("path") else {}
+    known = loaded.get("duration")
+    known = float(known) if isinstance(known, (int, float)) and known > 0 else None
+    duration = known if known is not None else snap.get("duration")
+    if not isinstance(duration, (int, float)) or duration <= 0:
         return False
     end = duration - skip_last_of(snap.get("file-local-options/end"))
     if position >= end - max(BROKE_SLACK, duration / 100):
         return False
     read, size = snap.get("stream-pos"), snap.get("stream-end")
-    if (isinstance(read, int) and isinstance(size, int) and size > 0
-            and size - read <= max(BROKE_UNREAD_BYTES, size // 100)):
-        return False
-    before = state.get("brokeAt")
-    if (isinstance(before, dict) and before.get("uuid") == (state.get("episode") or {}).get("uuid")
-            and isinstance(before.get("position"), (int, float))
-            and abs(position - before["position"]) <= BROKE_SLACK):
-        return False
-    return True
+    if isinstance(size, int) and size > 0:
+        return not isinstance(read, int) or size - read > max(BROKE_UNREAD_BYTES, size // 100)
+    if isinstance(loaded.get("size"), int) and loaded["size"] > 0:
+        return True
+    return known is not None
 
 
 def stream_stopped(state, prefs, position):
@@ -2447,12 +2484,10 @@ def stream_stopped(state, prefs, position):
     last push is over RECHECK_AFTER old (the shell was down, the machine
     slept: another device may have carried on since, so rule 2 asks first).
     The player is closed: the next play loads it again from where Pocket
-    Casts has it, like any play after the idle unload. Where it broke is
-    remembered (`brokeAt`) for stream_broke."""
+    Casts has it, like any play after the idle unload."""
     episode = state.get("episode") or {}
     if isinstance(position, (int, float)):
         state["position"] = float(position)
-        state["brokeAt"] = {"uuid": episode.get("uuid", ""), "position": float(position)}
         recent = time.time() - float(state.get("lastSyncAt") or 0) < RECHECK_AFTER
         if not recent:
             state["checkServer"] = True
@@ -2480,20 +2515,6 @@ def stream_stopped(state, prefs, position):
 # (play that), or nothing left (stop). Without this, the next position push
 # rewinds the phone to where this machine paused.
 
-def prime_token():
-    """Refresh the sign-in now if it's due, at the usual timeout, so a request
-    made under a short one (the resume check) never cuts a refresh short
-    after Pocket Casts has already answered it (a rotated refresh token would
-    be lost)."""
-    global _AUTH
-    if _AUTH is None:
-        _AUTH = load_auth()
-    try:
-        access_token(_AUTH)
-    except ApiError:
-        pass  # the check's own request reports it
-
-
 def check_server(state, prefs, player=None, quick=False):
     """Bring the loaded episode in line with Pocket Casts before it plays on.
 
@@ -2510,12 +2531,11 @@ def check_server(state, prefs, player=None, quick=False):
     uuid = episode.get("uuid")
     if not uuid:
         return "same", state
-    if quick:
-        prime_token()
     try:
-        # `quick`: a press of Play waits RESUME_CHECK_TIMEOUT at most; a poll's
-        # check (playing on its own already) takes the usual time, so a slow
-        # link still gets its answer and its pushes.
+        # `quick`: a press of Play waits RESUME_CHECK_TIMEOUT per request (plus
+        # a sign-in refresh when one is due, at most hourly, at its own
+        # TOKEN_TIMEOUT); a poll's check (playing on its own already) takes
+        # the usual time, so a slow link still gets its answer and its pushes.
         with http_timeout(RESUME_CHECK_TIMEOUT) if quick else contextlib.nullcontext():
             top = up_next_top()
             record = user_episode(uuid)
@@ -2576,7 +2596,7 @@ def resume_loaded(player, state, prefs):
     if player.get("pause") is False and not at_end:
         return  # already playing (a media key got there first)
     if at_end:
-        snap = {name: player.get(name) for name in ("eof-reached", "time-pos", "duration") + END_PROPERTIES}
+        snap = {name: player.get(name) for name in ("eof-reached", "path", "time-pos", "duration") + END_PROPERTIES}
         if stream_broke(snap, state):
             # Its stream broke off before a poll saw it: not the end (playing it
             # again from the top would push 0). Load it again from where it got to.
@@ -3295,7 +3315,11 @@ def cmd_toggle(args):
                     at_end = player.get("eof-reached") is True
                     playing = player.get("pause") is False and not at_end
                     if args.action == "pause" or (args.action == "toggle" and playing):
+                        # The stretch up to now, before the pause (the poll that
+                        # sees it can arrive seconds later, under a slow push).
+                        count_listening(state, listen_snap(player), prefs)
                         player.set("pause", True)
+                        state["listening"] = {}
                         state["checkServer"] = True
                         # Pausing what was already paused sends nothing new;
                         # an unconfirmed resume sends nothing (sync_now).
@@ -3329,7 +3353,7 @@ def cmd_seek(args):
                 player.command("osd-msg-bar", "seek", max(0.0, float(args.seconds)), "absolute")
             time.sleep(0.05)
             after = player.get("time-pos")
-            if (args.relative and float(args.seconds) > 0 and isinstance(before, (int, float))
+            if (args.relative and isinstance(before, (int, float))
                     and isinstance(after, (int, float)) and after > before):
                 add_stats(skipping=after - before)  # the skip-forward button's time saved
             state["listening"] = {}  # a new count from here: the jump itself isn't listening
@@ -3359,8 +3383,38 @@ def cmd_volume(args):
     out({"volume": volume})
 
 
+@contextlib.contextmanager
+def listening_change():
+    """Around a speed or Trim change: count the stretch so far at the old
+    setting, and start a new count at the new one (count_listening drops a
+    stretch whose speed or Trim changed in the middle). Only if the state
+    lock is free within half a second: a speed change never waits behind a
+    slow poll for the sake of the stats."""
+    try:
+        lock = StateLock(timeout=0.5)
+        lock.__enter__()
+    except ApiError:
+        yield
+        return
+    try:
+        state = load_playback()
+        player = Mpv.connect()
+        if player:
+            with player:
+                count_listening(state, listen_snap(player), load_prefs())
+        yield
+        state["listening"] = {}
+        player = Mpv.connect()
+        if player:
+            with player:
+                count_listening(state, listen_snap(player), load_prefs())
+        save_playback(state)
+    finally:
+        lock.__exit__(None, None, None)
+
+
 def cmd_speed(args):
-    with prefs_update() as prefs:
+    with listening_change(), prefs_update() as prefs:
         if args.value == "cycle":
             current = clamp_speed(prefs.get("speed", 1.0))
             later = [s for s in SPEEDS if s > current + 0.001]
@@ -3414,8 +3468,8 @@ def wait_for_sleep(lines):
 
 def pause_for_sleep():
     """Pause a playing episode and push its position, quickly."""
-    global HTTP_TIMEOUT
-    HTTP_TIMEOUT = SLEEP_PUSH_TIMEOUT
+    global HTTP_TIMEOUT, TOKEN_TIMEOUT
+    HTTP_TIMEOUT = TOKEN_TIMEOUT = SLEEP_PUSH_TIMEOUT
     with StateLock(timeout=2):
         state = load_playback()
         player = Mpv.connect(timeout=1.0)
@@ -3482,8 +3536,8 @@ def cmd_videopin(args):
     with prefs_update() as prefs:
         pinned = not video_pinned(prefs) if args.value == "toggle" else args.value == "on"
         prefs["videoPinned"] = pinned
-        # The rule first: it tags the open window skip-taskbar (or not), so a
-        # taskbar that re-reads windows on the pin event sees the new tag.
+        # The rules first (for windows opened later), then the pin: Hyprland
+        # re-tags the open window as its pin changes (video_rule_lua).
         place_video_window(prefs)
         hyprctl("dispatch", 'hl.dsp.window.pin({ action = "%s", window = "class:^%s$" })'
                 % ("on" if pinned else "off", VIDEO_APP_ID))
@@ -3518,7 +3572,7 @@ def cmd_videotransparency(args):
 def cmd_trim(args):
     if args.value != "cycle" and args.value not in TRIM_LEVELS:
         raise ApiError("bad_args", "Trim Silence is off, mild, medium or madmax")
-    with prefs_update() as prefs:
+    with listening_change(), prefs_update() as prefs:
         if args.value == "cycle":
             current = TRIM_ORDER.index(trim_level(prefs.get("trim")))
             level = TRIM_ORDER[(current + 1) % len(TRIM_ORDER)]
@@ -3543,8 +3597,7 @@ def cmd_next(args):
         player = Mpv.connect()
         if player:
             with player:
-                count_listening(state, listen_snap(player), prefs)
-                sync_now(player, state)
+                sync_now(player, state)  # (play_item's save_outgoing counts the listening)
         if episode.get("uuid"):
             try:
                 up_next_remove([episode["uuid"]])

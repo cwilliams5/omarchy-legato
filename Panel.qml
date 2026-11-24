@@ -53,6 +53,8 @@ Panel {
   property bool showAbout: false
   property bool showSettings: false
   property bool showStats: false
+  // The service re-reads the stats after each poll while this page is open.
+  onShowStatsChanged: if (service) service.statsPageOpen = showStats
   // The episode the right-click menu is open for, or null.
   property var menuItem: null
   property real menuX: 0
@@ -513,7 +515,12 @@ Panel {
         accent: root.accent
         fontFamily: root.fontFamily
         stats: root.service ? root.service.stats : null
+        counting: !root.service || root.service.statsCounting
+        error: root.service ? root.service.statsError : ""
+        urgent: root.urgent
         onBackRequested: root.setStats(false)
+        onCountingRequested: function(on) { if (root.service) root.service.setStatsCounting(on) }
+        onClearRequested: if (root.service) root.service.clearStats()
       }
 
       // Over everything in the panel: the right-click menu, and a catcher
@@ -587,9 +594,6 @@ Panel {
         onVideoPinnedRequested: function(pinned) { if (root.service) root.service.setVideoPinned(pinned ? "on" : "off") }
         localFeeds: !!root.service && root.service.localFeeds
         onLocalFeedsRequested: function(on) { if (root.service) root.service.setLocalFeeds(on) }
-        statsCounting: !root.service || root.service.statsCounting
-        onStatsCountingRequested: function(on) { if (root.service) root.service.setStatsCounting(on) }
-        onStatsClearRequested: if (root.service) root.service.clearStats()
         onBackRequested: root.setSettings(false)
         onChangeRequested: function(key, value) {
           var change = {}

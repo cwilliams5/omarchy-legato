@@ -10,10 +10,12 @@ If a `handoff.md` sits in the repo root, read it first: a local-only note
 This file becomes public with the repo: no personal details, nothing about
 Cody's work setup.
 
-## Status (2026-11-23)
+## Status (2026-11-24)
 
-Released and listed. 1.0.2 is the latest release (1.0.0, 1.0.1 and 1.0.2 all
-on 2026-11-22). Listed on the Omarchy plugin marketplace on 2026-11-23
+Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
+1.0.2 all on 2026-11-22); 1.1.0 is built and reviewed (docs/PLAN.md phases
+H and SR), to be pushed and released with the marketplace verification
+request. Listed on the Omarchy plugin marketplace on 2026-11-23
 (omarchyplugins.com, id io.github.cwilliams5.legato; issue #15655,
 approved-and-verified at ce22e65, "maintainer-reviewed"; the reviewer
 accepted the `package-manager` and `installer` capabilities as printed advice
@@ -23,11 +25,11 @@ verification" issue form (the go-public skill's omarchy.md, section 5).
 Cody's laptop runs it from GitHub with local network feeds on (his episodes
 come from a home server).
 
-Next (docs/PLAN.md): the `skip-taskbar` tag on the video window, with Transom
-and Latch skipping tagged windows. Upstream, Nine Point Labs reviewed PRs
-#7-9 on 2026-11-23: #7 and #9 approved, #8 asks for `unloadAfterMinutes` to
-default to 0 there; Cody decides and approves any reply (the old fork
-`cwilliams5/omarchy-pocketcasts` carries them).
+Next (docs/PLAN.md): ship 1.1.0 (H6). Upstream, Nine Point Labs' PRs #7-9
+(the old fork `cwilliams5/omarchy-pocketcasts` carries them): their review
+of 2026-11-23 is answered (#8's default changed); after they merge, two
+follow-ups were offered: the shorter resume-check timeout and the
+broken-stream fix. Cody approves every post.
 
 ## What Legato is
 
@@ -111,7 +113,7 @@ Service.qml          the data layer, one per shell: bridge calls, mpv events, ti
 BarWidget.qml        the bar chip (cover, scrolling title), clicks and scroll
 Panel.qml            the panel: player, effects row, tabs, show pages, right-click menu, sign-in
 SettingsView.qml     the panel's Settings page (gear), built from manifest.json's schema
-StatsView.qml        the panel's listening stats page (chart button, `a`)
+StatsView.qml        the panel's listening stats page (chart button, `a`), with counting On/Off and Clear
 SignInField.qml      the sign-in fields: not native text inputs; pastes go through `bridge paste`
 AboutView.qml        the panel's About page
 LegatoMark.qml       the logo, drawn with QtQuick.Shapes (bar chip, panel)
@@ -119,8 +121,9 @@ Model.js             pure helpers (formatting, rows, trusted executables, closed
 About.js             About facts and text (version and license read from the repo at run time)
 bin/legato-bridge    the Python helper: one subcommand per call, one JSON object out
 install.sh           copy a checkout into the plugin folder and enable it
-tests/run            all tests: tests/test_bridge.py (Python, real mpv vs a fake server)
-                     and tests/model.test.cjs (node: Model.js, About.js, static QML checks)
+tests/run            all tests: tests/test_bridge.py (Python, real mpv vs a fake server,
+                     and the offscreen QML pages in tests/qml/) and tests/model.test.cjs
+                     (node: Model.js, About.js, static QML checks)
 tools/               live-test helpers: sample-bridge.py, other-device.py
 branding/            name, logo, palette (BRANDING.md, build.py)
 docs/PLAN.md         what's left to build
@@ -222,33 +225,46 @@ docs/PLAN.md         what's left to build
 - **Load failures:** while the stream opens, the view reads as buffering; if
   mpv gives up, the panel and the OSD say so once.
 - **A stream that breaks off part way** (`stream_broke`): mpv retries, then
-  sits at `eof-reached` where it got to, just as at a real end. An end over
-  10 s (or 1%) before the episode's end (its skip-outro, read back from
-  mpv's `file-local-options/end`, included) without nearly all of the file
-  read is a broken stream: `stream_stopped` pushes the position (only if
-  the last push is under `RECHECK_AFTER` old; otherwise it sets
-  `checkServer`, rule 2), closes the player and says so; Play loads it
-  again. Never marked played, unless it stops again where it broke before
-  (`brokeAt`, kept across the reload): then it's the end (a file cut short
-  on its server, or a real end misjudged). Only mpv's own duration counts.
+  sits at `eof-reached` where it got to, just as at a real end. Calling a
+  break the end is the worse mistake (it marks an unfinished episode played
+  everywhere), so it's judged by what mpv knew of the file as it loaded
+  (`stream` in playback.json: url, size, duration, from `load_into_mpv`):
+  within 10 s (or 1%) of the load-time duration, less the skip-outro (read
+  back from mpv's `file-local-options/end`), it's the end; otherwise it
+  broke if much of the file is unread, or if the size known at load is gone
+  (mpv drops it when the stream fails), or if the host sent no size but mpv
+  knew the duration. With neither known at load it's the end, as before 1.1
+  (a stated limit). `stream_stopped` pushes the position (only if the last
+  push is under `RECHECK_AFTER` old, and not while `unconfirmed` or
+  `checkServer`; otherwise it sets `checkServer`, rule 2), closes the
+  player and says so; Play loads it again from Pocket Casts' position.
 - **The resume check on a press of Play** (`check_server(quick=True)`, from
   `resume_loaded`) waits `RESUME_CHECK_TIMEOUT` (5 s) per request, not
   `HTTP_TIMEOUT`: unanswered, the episode plays anyway (`unconfirmed`). A
-  due token refresh runs first at the usual timeout (`prime_token`: a
-  refresh cut short could lose a rotated refresh token). A poll's check
-  takes the usual time, so a slow link still confirms and pushes.
+  sign-in refresh due meanwhile (at most hourly) keeps its own
+  `TOKEN_TIMEOUT` (15 s; only the sleep guard lowers it): one cut short
+  after Pocket Casts answered could lose a rotated refresh token. So on a
+  hanging network Play can wait 5 s per request, plus a due refresh. A
+  poll's check takes the usual time, so a slow link still confirms and
+  pushes.
 - **Listening stats** (`stats.json`, the Stats page): `count_listening` runs
   in each poll and before a seek, stop, next or switch, comparing wall time
   (`time.monotonic`) with how far the episode moved since the last count
   (kept in playback.json's `listening`). Trim Silence's share is the motion
   beyond the speed; a stretch that moved implausibly (a stall, a jump) isn't
   counted, and a poll after mpv's `playback-restart` (`--seeked`, from the
-  service) counts only the time and the speed's share. Skip-forward, intro
-  and outro skips and finished episodes are added where they happen. Never
-  sent anywhere; no timer of its own. Counting can be turned off (prefs.json
-  `stats`, the Settings page, `bridge stats on|off`: a player choice, so it
+  service) counts only the time and the speed's share, for a playing
+  stretch no longer than a poll's (`SEEKED_STRETCH_MAX`). A pause from the
+  panel and a speed or Trim change count first (`listening_change`, which
+  waits half a second at most for the state lock and otherwise skips the
+  count). Skip-forward, intro and outro skips and finished episodes are
+  added where they happen. Never sent anywhere; no timer of its own; an
+  error in it can't reach the poll. Counting can be turned off (prefs.json
+  `stats`, the Stats page, `bridge stats on|off`: a player choice, so it
   survives the plugin being disabled) and cleared (`bridge stats clear`,
-  under the state lock so a poll can't write the old numbers back).
+  under the state lock so a poll can't write the old numbers back). The
+  Stats page shows its own errors (the status line is hidden behind a page)
+  and re-reads after each poll while it's open.
 - **Before sleep:** while an episode is loaded, the service runs
   `systemd-inhibit --what=sleep --mode=delay … setpriv --pdeathsig TERM
   legato-bridge sleepguard`. The guard waits on `dbus-monitor` for logind's
@@ -328,15 +344,17 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   (`video_rule_lua`): Omarchy's `o.window("^legato-video$", { name =
   "legato-video", float, pin, no_initial_focus, size, move })` when it
   exists (as Omarchy's webcam overlay does; see floating workspaces below),
-  plain `hl.window_rule` otherwise, plus a `hyprbars:no_bar` rule and a
-  `skip-taskbar` tag rule (`legato-video-tags`; a convention of Cody's
-  projects, not Hyprland's: Transom and Latch leave tagged windows out
-  unless minimized; a tag set by a rule reads back as `skip-taskbar*`).
-  Tagged only while pinned (Always on top; Cody, 2026-11-23): unpinned,
-  other windows can cover it, so it keeps its button and Alt+Tab entry. The
-  rule sent again under its name re-tags an open window (tested both ways),
-  and `videopin` sends it before the pin dispatch, so Transom, which
-  re-reads windows on the `pin` event, sees the new tag. The tag isn't in
+  plain `hl.window_rule` otherwise, plus a `hyprbars:no_bar` rule and two
+  `skip-taskbar` tag rules (a convention of Cody's projects, not
+  Hyprland's: Transom and Latch leave tagged windows out unless minimized;
+  a tag set by a rule reads back as `skip-taskbar*`). Tagged only while
+  pinned (Cody, 2026-11-23): unpinned, other windows can cover it, so it
+  keeps its button and Alt+Tab entry. The rules match the window's real
+  pin state (`match = { class, pin = true }`), not Legato's setting, so
+  Omarchy's own unpin (Super+O, pop out) untags it too. Tested live on
+  Hyprland 0.56: a pin change re-checks rules but only adds tags, so a
+  second rule (`legato-video-untag`, `pin = false`, `-skip-taskbar`) takes
+  it off; Transom re-reads windows on the `pin` event. The tags aren't in
   the o.window rule: o.window records every tag it's given in Omarchy's
   floating-app lists. Runtime
   rules last until Hyprland reloads its config, so the bridge sends them
@@ -454,7 +472,12 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
 - **Tests:** `tests/run` (Python with a real, muted mpv against a fake
   Pocket Casts server, then node, then a QML syntax check with qmllint;
   QML is otherwise only checked when the shell loads it, and a panel's
-  only when it opens). About 70 s; nothing appears on screen.
+  only when it opens), plus `tests/qml/pages.qml`: the Settings and Stats
+  pages laid out offscreen with stand-ins for Omarchy's Commons and Ui (they
+  read about 20 px short of the real pages). About 3 minutes; nothing
+  appears on screen, and the test players load no mpv-mpris (they'd be
+  media players on the desktop). `tests/mutations.md` lists the planted
+  regressions the suite must catch.
   Run before every commit. The fake server can drop requests the way a
   network does: `self.fake["fail"] = {"/sync/update_episode": 1}`.
 - **Live:** push, then `omarchy plugin update io.github.cwilliams5.legato
@@ -509,7 +532,7 @@ at release. The README's "Built on" section is made from this list.
 
 The Omarchy plugin marketplace: Legato is a shell plugin (service + bar
 widget) with nothing to install in Hyprland, so `omarchy plugin add <url>`
-is the whole install. Private until the `go-public` skill releases 1.0.0.
+is the whole install.
 
 ## Releasing
 

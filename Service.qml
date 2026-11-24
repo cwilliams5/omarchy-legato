@@ -453,13 +453,20 @@ Item {
   // stats). Set by the event, so whichever poll comes next carries it.
   property bool _seekedSincePoll: false
 
-  // The listening stats page's numbers (the bridge's `stats`), read when the
-  // page opens; null until then.
+  // The listening stats page's numbers (the bridge's `stats`): read when the
+  // page opens and after each poll while it's open (statsPageOpen, set by
+  // the panel); null until then. A failure is kept for the page to show
+  // (statsError): the panel's status line is hidden behind a page.
   property var stats: null
+  property string statsError: ""
+  property bool statsPageOpen: false
   function loadStats() {
-    call(["stats"], function(result) {
-      if (result.ok) root.stats = result.data
-    })
+    call(["stats"], function(result) { root.applyStats(result) })
+  }
+  function applyStats(result) {
+    if (!result.ok) { root.statsError = result.error || "Couldn't read the listening stats"; return }
+    root.statsError = ""
+    root.stats = result.data
   }
 
   function refreshPlayer() {
@@ -503,6 +510,7 @@ Item {
     }
     reportPlayerProblems(player)
     syncPlayerEvents()
+    if (statsPageOpen) loadStats()  // the open Stats page follows what's counted
   }
 
   function reportPlayerProblems(view) {
@@ -898,17 +906,13 @@ Item {
   // answer with the stats as they now are, for the Stats page.
   function setStatsCounting(on) {
     call(["stats", on ? "on" : "off"], function(result) {
-      if (!result.ok) { root.reportError(result.error); return }
-      root.stats = result.data
-      root.optimistic({ statsCounting: result.data.counting })
+      root.applyStats(result)
+      if (result.ok) root.optimistic({ statsCounting: result.data.counting })
     })
   }
 
   function clearStats() {
-    call(["stats", "clear"], function(result) {
-      if (!result.ok) { root.reportError(result.error); return }
-      root.stats = result.data
-    })
+    call(["stats", "clear"], function(result) { root.applyStats(result) })
   }
 
   function setLocalFeeds(on) {

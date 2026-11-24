@@ -85,7 +85,7 @@ by Nine Point Labs (MIT). What's new compared to the original:
   and how much time speed, Trim Silence, skipping forward and the shows'
   intro and outro skips saved you (the chart button in the panel's header,
   or `a`). Counted on this computer only and never sent anywhere; the
-  Settings page turns counting off and clears what's there.
+  Stats page turns counting off and clears what's there.
 
   <img src="media/stats.png" width="470" alt="The Listening stats page: 1 d 14 h listened on this computer, 1 d 3 h saved, split into playback speed, Trim Silence, skipping forward and skipped intros and outros, and 63 episodes finished">
 
@@ -176,6 +176,11 @@ devices.
   Episodes served from this computer itself never play.
 - **A cover isn't a video:** some feeds pack the episode's cover into the
   file as a video stream. Legato treats those episodes as audio.
+- **A dropped stream on a host that sends no file details:** when the
+  audio stops part way, Legato tells that from the episode's end by the
+  file's size or length. A host that sends neither (rare: podcast hosts
+  send at least one) leaves it unable to tell, and it counts the stop as
+  the end, marking the episode played, as before 1.1.
 
 ## Built on
 
@@ -337,7 +342,7 @@ it. The player's own choices, your sign-in and your listening stats stay.
   password never is. Signing out deletes them.
 - Your listening stats are counted on this computer only, in
   `~/.local/state/omarchy-legato/stats.json` (readable only by you), and
-  never sent anywhere. The Settings page turns counting off and deletes
+  never sent anywhere. The Stats page turns counting off and deletes
   them.
 - Only `api.pocketcasts.com` gets your token. Episode lists and artwork come
   from Pocket Casts' public hosts without it, and audio streams through mpv

@@ -1,0 +1,121 @@
+import QtQuick
+import "../.."
+
+// The panel's Settings and Stats pages, laid out offscreen with stand-ins for
+// Omarchy's Commons and Ui (tests/qml/imports), run by test_bridge.QmlPages:
+//   QT_QPA_PLATFORM=offscreen QML_XHR_ALLOW_FILE_READ=1 qml -I tests/qml/imports tests/qml/pages.qml
+// Prints "ok <check>" or "FAIL <check>: <detail>" per check; exits with the
+// number of failures.
+//
+// The page size: the panel caps a page at Style.space(760) including the
+// card's inset (2 x popupPadding 14 + 2 x border 2 = 32), at 470 wide. The
+// stand-ins read about 20 px shorter than the real Settings page, so the
+// bound leaves that much room.
+Item {
+  id: top
+  width: 438
+  height: 2000
+
+  readonly property int pageMax: 760 - 32 - 20
+  property int failures: 0
+  property var manifest: null
+
+  function check(name, ok, detail) {
+    if (ok) console.warn("ok " + name)
+    else { console.warn("FAIL " + name + ": " + detail); failures++ }
+  }
+
+  function find(item, name) {
+    if (!item) return null
+    if (item.objectName === name) return item
+    for (var i = 0; i < item.children.length; i++) {
+      var hit = find(item.children[i], name)
+      if (hit) return hit
+    }
+    return null
+  }
+
+  function readManifest() {
+    var xhr = new XMLHttpRequest()
+    xhr.open("GET", Qt.resolvedUrl("../../manifest.json"), false)
+    xhr.send()
+    return JSON.parse(xhr.responseText)
+  }
+
+  SettingsView {
+    id: settings
+    width: top.width
+    schema: top.manifest ? top.manifest.barWidget.schema : []
+    defaults: top.manifest ? top.manifest.barWidget.defaults : ({})
+  }
+
+  StatsView {
+    id: stats
+    width: top.width
+    property int clears: 0
+    property var countingAsked: []
+    onClearRequested: clears++
+    onCountingRequested: function(on) { countingAsked = countingAsked.concat([on]) }
+  }
+
+  Timer {
+    interval: 50
+    running: true
+    onTriggered: top.run()
+  }
+
+  function run() {
+    manifest = readManifest()
+    check("the manifest's settings reach the page", settings.schema.length > 5, settings.schema.length)
+
+    // The Settings page fits the panel (it once didn't: a section added
+    // last hung below the card). A Column lays out on the next frame unless
+    // asked now.
+    settings.forceLayout()
+    check("Settings fits the panel", settings.implicitHeight <= pageMax,
+          settings.implicitHeight + " > " + pageMax)
+
+    // Before the bridge answers, every number is "…", never "0 s".
+    stats.stats = null
+    check("no stats yet: listened reads …", find(stats, "statsListened").text === "…", find(stats, "statsListened").text)
+    check("no stats yet: time saved reads …", find(stats, "statsSavedTotal").text === "…", find(stats, "statsSavedTotal").text)
+    check("no stats yet: finished reads …", find(stats, "statsFinished").text === "…", find(stats, "statsFinished").text)
+
+    stats.stats = { listened: 138000, speed: 69000, trim: 24480, skipping: 3090, intro: 540, outro: 735,
+                    finished: 63, since: 1789300000, counting: true }
+    stats.forceLayout()
+    check("Stats fits the panel", stats.implicitHeight <= pageMax, stats.implicitHeight + " > " + pageMax)
+    check("listened", find(stats, "statsListened").text === "1 d 14 h", find(stats, "statsListened").text)
+    check("time saved in total", find(stats, "statsSavedTotal").text === "1 d 3 h", find(stats, "statsSavedTotal").text)
+    check("counting on: the switch says On", find(stats, "statsCounting").text === "On", find(stats, "statsCounting").text)
+
+    // Counting off: the page says so and the switch follows the bridge.
+    stats.stats = Object.assign({}, stats.stats, { counting: false })
+    check("counting off: the switch says Off", find(stats, "statsCounting").text === "Off", find(stats, "statsCounting").text)
+    check("counting off: the page says so", find(stats, "statsSince").text.indexOf("Not counting") >= 0,
+          find(stats, "statsSince").text)
+    find(stats, "statsCounting").clicked()
+    check("the switch asks to turn counting back on", stats.countingAsked.length === 1 && stats.countingAsked[0] === true,
+          JSON.stringify(stats.countingAsked))
+
+    // Clear asks for a second click, and leaving the page forgets the first.
+    var clear = find(stats, "statsClear")
+    clear.clicked()
+    check("one click on Clear only asks", stats.clears === 0 && stats.confirmClear && clear.text === "Sure? Clear",
+          stats.clears + " " + clear.text)
+    stats.visible = false
+    stats.visible = true
+    check("leaving the page disarms Clear", !stats.confirmClear && clear.text === "Clear", clear.text)
+    clear.clicked()
+    clear.clicked()
+    check("the second click clears, and disarms", stats.clears === 1 && !stats.confirmClear, stats.clears)
+
+    // A failure is shown on the page itself (the panel's status line is hidden).
+    var error = find(stats, "statsError")
+    check("no error, no line", !error.visible, error.visible)
+    stats.error = "Another Pocket Casts action is still running"
+    check("an error shows on the page", error.visible && error.text === stats.error, error.text)
+
+    Qt.exit(failures)
+  }
+}
