@@ -44,6 +44,7 @@ import fcntl
 import hashlib
 import hmac
 import http.client as http_client
+import http.server as http_server
 import ipaddress
 import json
 import pwd
@@ -58,6 +59,7 @@ import stat
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -139,6 +141,10 @@ READ_PAST_CUT = 64 * 1024
 # size says: mpv stops this close to it at a real end (about 100 bytes for an
 # MP3's trailing tag, 81 for an M4A) and far short at a break.
 READ_TO_END = 4096
+# The self-check (cmd_watchcheck): its verdict per FFmpeg version, and how
+# long it may take (FFmpeg logs both lines within a second here).
+WATCH_CHECK = "watchcheck.json"
+WATCH_CHECK_TIMEOUT = 12
 # Periodic pushes failing this many times in a row (a minute and more): said.
 PUSH_FAILURES_SAID = 2
 # Stuck this long (mpv buffering, nothing arriving), the stream counts as
@@ -1281,6 +1287,7 @@ def resolve_episode(uuid, podcast_uuid=""):
     if item and item["url"]:
         if not item["show"] and item["podcast"]:
             item["show"] = podcast_titles().get(item["podcast"], "")
+        item["fromRecord"] = True  # your position in it is Pocket Casts' own
         return item
     podcast_uuid = (item or {}).get("podcast") or podcast_uuid
     if not podcast_uuid:
@@ -1294,6 +1301,7 @@ def resolve_episode(uuid, podcast_uuid=""):
                     found["playedUpTo"] = item["playedUpTo"]
                     found["status"] = item["status"]
                     found["duration"] = item["duration"] or found["duration"]
+                    found["fromRecord"] = True
                 return found
     raise ApiError("not_found", "Pocket Casts has no audio for that episode")
 
@@ -1353,7 +1361,7 @@ def up_next_remove(uuids):
 
 MPV_PROPERTIES = ("path", "pause", "time-pos", "duration", "volume", "speed", "eof-reached", "vid", "track-list", "af",
                   "idle-active", "paused-for-cache", "playlist-count", "stream-end", "user-data/legato")
-END_PROPERTIES = ("stream-pos", "stream-end", "file-local-options/end", "seekable", "file-format")
+END_PROPERTIES = ("stream-pos", "stream-end", "file-local-options/end", "seekable", "file-format", "ffmpeg-version")
 
 
 def runtime_dir(create=False):
@@ -1724,6 +1732,9 @@ def start_mpv(prefs):
         player = Mpv.connect(timeout=1.0)
         if player:
             bind_video_window_keys(player, prefs)
+            version = player.get("ffmpeg-version")
+            if watch_script() and watch_check_due(version):
+                start_watch_check(version)  # a new FFmpeg: does it still log what the watcher reads?
             return player
         time.sleep(0.1)
     raise ApiError("player", "mpv started but its control socket never appeared")
@@ -2303,10 +2314,14 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
     # Casts considers playing. If the top later changes, another device has
     # moved on to something else (see check_server).
     state = {"episode": chip_item(item), "lastSyncAt": time.time(), "lastSyncPos": position,
+             "recordSeen": bool(item.get("fromRecord")),
              "position": position, "handledEnd": "", "atTop": bool(at_top),
              # Episodes that ended here while Pocket Casts couldn't be told.
              "pendingFinish": [p for p in previous.get("pendingFinish") or []
                                if isinstance(p, dict) and p.get("uuid") != item.get("uuid")]}
+    strike = previous.get("breakStrike")
+    if isinstance(strike, dict) and strike.get("uuid") == item.get("uuid"):
+        state["breakStrike"] = strike  # a reload of the episode that just broke (stream_stopped)
     # What mpv knew of the file as it loaded (stream_broke): its size goes
     # when the stream fails, and a duration it estimated can shrink with it.
     state["stream"] = stream
@@ -2522,12 +2537,17 @@ def stream_broke(snap, state):
        prematurely at N" for a clean close short of the size), which the
        watcher (bin/legato-watch.lua) records for the file playing. Recorded,
        and mpv read no further (a reconnect that worked reads on, to the
-       end): a break. Nothing recorded: the end.
+       end): a break. So is any other error from FFmpeg's network layers
+       since the last seek (`failed`: a seek's new request refused logs only
+       "HTTP error 403"), unless mpv read to the size. Nothing recorded: the end, unless this FFmpeg failed
+       the self-check (cmd_watchcheck: its lines may read differently now),
+       when the length rule (3) judges instead.
     2. A host that gives a size but no ranges: the stream is read straight
        through and FFmpeg can't reconnect (an https drop or a timeout logs no
-       such line). The end only if mpv read to the size (READ_TO_END); short
-       of it, or nothing read at all (an M4A whose index is at the back
-       can't play there), a break.
+       such line). The end only if mpv read to the size (READ_TO_END) or
+       stopped where the show's skip-outro has it stop; short of it, or
+       nothing read at all (an M4A whose index is at the back can't play
+       there), a break.
     3. A host that gives no size (FFmpeg can't tell a cut from the end, and
        may log a reconnect at a real end too), an HLS playlist, or a player
        without the watcher (started by an older Legato, or refused by
@@ -2563,7 +2583,19 @@ def stream_broke(snap, state):
         cut = watch.get("cut")
         if number(cut) and not to_end and not (number(read) and read > cut + READ_PAST_CUT):
             return True
-        return False if snap.get("seekable") is True else not to_end
+        if watch.get("failed") is True and not to_end:
+            return True  # an error from the network since the last seek (a seek's request refused)
+        if snap.get("seekable") is not True:
+            # Read straight through: the end only if mpv read to the size, or
+            # stopped where the show's skip-outro has it stop.
+            duration = snap.get("duration")
+            skip = skip_last_of(snap.get("file-local-options/end"))
+            outro_stop = skip > 0 and number(duration) and position >= duration - skip - BROKE_SLACK / 5
+            return not (to_end or outro_stop)
+        if ffmpeg_lines_trusted(snap.get("ffmpeg-version")):
+            return False
+        # This FFmpeg failed the self-check: its silence proves nothing, so
+        # the length rule judges (below).
     skip = skip_last_of(snap.get("file-local-options/end"))
     durations = [d for d in (snap.get("duration"), loaded.get("duration"), (state.get("episode") or {}).get("duration"))
                  if number(d) and d > 0]
@@ -2571,6 +2603,130 @@ def stream_broke(snap, state):
         return False
     longest = max(durations)
     return position < longest - skip - max(BROKE_SLACK, longest * NO_SIZE_MARGIN)
+
+
+def ffmpeg_lines_trusted(version):
+    """Whether FFmpeg's silence can be taken as the end: not when the
+    self-check ran with this FFmpeg and didn't see its lines (an update may
+    have reworded them). Not checked yet: trusted (the check runs within
+    seconds of the first player on a new version)."""
+    try:
+        check = load_state(WATCH_CHECK)
+    except ApiError:
+        return False  # a verdict file that can't be trusted: judge by length
+    return not (isinstance(check, dict) and check.get("ffmpeg") == version and check.get("ok") is False)
+
+
+def watch_check_due(version):
+    """A new FFmpeg (or a check that never finished, after ten minutes)."""
+    if not version:
+        return False
+    try:
+        check = load_state(WATCH_CHECK)
+    except ApiError:
+        return False
+    if not isinstance(check, dict) or check.get("ffmpeg") != version:
+        return True
+    return check.get("ok") is None and time.time() - float(check.get("at") or 0) > 600
+
+
+def start_watch_check(version):
+    """Run the self-check in its own process, detached: Play doesn't wait."""
+    save_state(WATCH_CHECK, {"ffmpeg": version, "ok": None, "at": int(time.time())})
+    devnull = os.open(os.devnull, os.O_RDWR | os.O_CLOEXEC)
+    try:
+        subprocess.Popen([sys.executable, "-I", "-B", os.path.realpath(__file__), "watchcheck"],
+                         stdin=devnull, stdout=devnull, stderr=devnull, env=child_env(), start_new_session=True)
+    except OSError:
+        pass
+    finally:
+        os.close(devnull)
+
+
+def make_check_wav(seconds=10, rate=16000):
+    """A silent WAV (16-bit mono), for the self-check's stream."""
+    frames = seconds * rate
+    header = (b"RIFF" + struct.pack("<I", 36 + frames * 2) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+              + b"data" + struct.pack("<I", frames * 2))
+    return header + b"\0" * (frames * 2)
+
+
+def cmd_watchcheck(args):
+    """The self-check behind stream_broke's trust in FFmpeg's silence: does
+    the FFmpeg in this mpv still log the two lines legato-watch.lua reads?
+    A local server (127.0.0.1, nothing leaves this computer) sends a short
+    silent file with its size and ranges and hangs up a third of the way in;
+    a private, muted mpv with the watcher plays it; both lines must be seen
+    within WATCH_CHECK_TIMEOUT. The verdict is kept per FFmpeg version
+    (watchcheck.json). If they aren't seen, ranged hosts fall back to the
+    length rule, and a notification says so once."""
+    mpv, script = trusted_tool("mpv"), watch_script()
+    if not mpv or not script:
+        out({"ok": None})
+        return
+    blob = make_check_wav()
+    served = {"first": True}
+
+    class Host(http_server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            if not served["first"]:
+                self.close_connection = True  # the reconnect gets nothing
+                return
+            served["first"] = False
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(len(blob)))
+            self.end_headers()
+            self.wfile.write(blob[:len(blob) // 3])
+            self.close_connection = True
+
+    server = http_server.ThreadingHTTPServer(("127.0.0.1", 0), Host)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    seen, version = {}, ""
+    with tempfile.TemporaryDirectory(prefix="legato-check-") as folder:
+        path = os.path.join(folder, "mpv.sock")
+        proc = subprocess.Popen([mpv, "--no-config", "--idle=yes", "--no-video", "--no-terminal", "--ao=null",
+                                 "--network-timeout=5", "--input-ipc-server=" + path, "--script=" + script],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                env=child_env(), start_new_session=True)
+        try:
+            deadline = time.monotonic() + WATCH_CHECK_TIMEOUT
+            player = None
+            while player is None and time.monotonic() < deadline:
+                try:
+                    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    sock.settimeout(2)
+                    sock.connect(path)
+                    player = Mpv(sock)
+                except OSError:
+                    time.sleep(0.1)
+            if player:
+                with player:
+                    version = str(player.get("ffmpeg-version") or "")
+                    player.command("loadfile", "http://127.0.0.1:%d/check.wav" % server.server_address[1], "replace")
+                    while time.monotonic() < deadline:
+                        record = player.get("user-data/legato")
+                        seen = (record or {}).get("seen") or {} if isinstance(record, dict) else {}
+                        if seen.get("reconnect") and seen.get("short"):
+                            break
+                        time.sleep(0.2)
+        finally:
+            proc.kill()
+            proc.wait()
+            server.shutdown()
+            server.server_close()
+    ok = bool(seen.get("reconnect") and seen.get("short"))
+    if version:
+        save_state(WATCH_CHECK, {"ffmpeg": version, "ok": ok, "at": int(time.time()),
+                                 "seen": sorted(k for k, v in seen.items() if v)})
+    if version and not ok:
+        send_notification("Legato can't confirm dropped streams with this FFmpeg (%s): it judges them by "
+                          "their length until it's updated." % version)
+    out({"ok": ok, "ffmpeg": version, "seen": sorted(k for k, v in seen.items() if v)})
 
 
 def end_unproven(snap, state):
@@ -2685,17 +2841,28 @@ def stream_stopped(state, prefs, position, stalled=False, unproven=False):
                 # Pocket Casts never got it: the next Play carries on from
                 # here, within the hour (resume_last).
                 state["unsentBreak"] = {"uuid": episode.get("uuid"), "position": float(position), "at": time.time()}
+    # It stopped where this load began. Once, the link may simply have gone
+    # (a second after a resume); twice in a row at the same spot, nothing
+    # more of it arrives (it may be its end, misjudged): say how to mark it
+    # played, never doing it itself. An end that proved nothing says so at
+    # once. `breakStrike` remembers the first, across the reload (play_item).
+    record = state.get("stream") or {}
+    begun = record.get("begun") if isinstance(record, dict) else None
+    nothing_more = bool(unproven)
+    if not unproven and isinstance(position, (int, float)):
+        strike = state.get("breakStrike")
+        again = (isinstance(strike, dict) and strike.get("uuid") == episode.get("uuid")
+                 and isinstance(strike.get("at"), (int, float)) and abs(strike["at"] - position) < 2)
+        if again and isinstance(begun, (int, float)) and 0 <= position - begun < 2:
+            nothing_more = True
+        state["breakStrike"] = {"uuid": episode.get("uuid"), "at": float(position)}
     save_playback(state)
     player = Mpv.connect()
     if player:
         quit_mpv(player)
     view = player_view({}, state, prefs)
     view["streamBroke"] = True
-    # It stopped where this load began: nothing more of it arrives. It may be
-    # its end, misjudged: say how to mark it played (never done by itself).
-    record = state.get("stream") or {}
-    begun = record.get("begun") if isinstance(record, dict) else None
-    if unproven or (isinstance(begun, (int, float)) and isinstance(position, (int, float)) and 0 <= position - begun < 2):
+    if nothing_more:
         view["nothingMore"] = True
     return view
 
@@ -2733,6 +2900,13 @@ def check_server(state, prefs, player=None, quick=False):
             record = user_episode(uuid)
     except ApiError:
         return "unverified", state
+    if not record and state.get("recordSeen"):
+        # Pocket Casts knew this episode a moment ago and now says nothing (a
+        # 404, an empty answer, a change in its unofficial API): that's no
+        # answer, and confirming our own place on it could rewind the phone.
+        return "unverified", state
+    if record:
+        state["recordSeen"] = True
     finished = as_int(record.get("playingStatus")) == STATUS_PLAYED
     moved_on = top is not None and top["uuid"] != uuid and (finished or state.get("atTop") is True)
     if moved_on:
@@ -2807,6 +2981,12 @@ def resume_loaded(player, state, prefs):
             stream_stopped(state, prefs, snap.get("time-pos"), unproven=unproven,
                            stalled=bool(stall_seen(snap.get("user-data/legato"), state)))
             resume_last(prefs)
+            return
+        if snap.get("path") == (state.get("episode") or {}).get("url") and not ended_here(state):
+            # A real end no poll has handled yet: finished, as the poll would
+            # (marked played, off Up Next). Playing it again from the top here
+            # would push 0 over it. Play again plays it again.
+            finish_current(state, prefs, False)
             return
     if at_end or ended_here(state):
         # It played to its end here and is still loaded. With autoplay on,
@@ -2955,6 +3135,7 @@ def poll(autoplay=True, seeked=False):
                 heal_filters(fixer, snap, fresh)
     if due and below_start(state, position):
         due = False  # mpv couldn't start where asked: don't rewind the others to here
+    failures_said = False
     if due and isinstance(position, (int, float)):
         try:
             push_position(episode, position)
@@ -2965,9 +3146,10 @@ def poll(autoplay=True, seeked=False):
         except ApiError:
             state["lastSyncAt"] = now  # try again next interval, not every poll
             state["pushFailures"] = int(state.get("pushFailures") or 0) + 1
+            failures_said = state["pushFailures"] == PUSH_FAILURES_SAID
     view = player_view(snap, state, prefs)
-    if state.get("pushFailures") == PUSH_FAILURES_SAID:
-        view["syncFailed"] = True  # said once per run of failures
+    if failures_said:
+        view["syncFailed"] = True  # said once per run of failures: in the poll whose push made it two
     if state.pop("tellStart", None):
         view["startedFromTop"] = True
     save_playback(state)
@@ -3013,8 +3195,10 @@ def sync_now(player, state, force=False):
         state["unconfirmed"] = True
         save_playback(state)
         return
-    if player.get("eof-reached") is True or state.get("unconfirmed") or below_start(state, position):
-        # At the end (it's played), on a resume Pocket Casts never
+    if (player.get("eof-reached") is True or ended_here(state) or state.get("unconfirmed")
+            or below_start(state, position)):
+        # At the end, or dragged back from an end handled here (it's played:
+        # only Play reopens it, play_again), on a resume Pocket Casts never
         # confirmed (nothing is pushed until it answers, rule 2), or short of
         # where a host without ranges couldn't start (below_start).
         save_playback(state)
@@ -3553,6 +3737,10 @@ def resume_last(prefs):
             item = resolve_episode(episode["uuid"], episode.get("podcast", ""))
         except ApiError:
             item = None
+        if item and state.get("recordSeen") and not item.get("fromRecord"):
+            # Pocket Casts knew where you were in it and now says nothing: the
+            # show's public list would start it from 0 and push that.
+            raise ApiError("network", "Pocket Casts didn't answer: try again")
         if item and item.get("status") == STATUS_PLAYED:
             item = None
         if item and state.get("atTop") is True:
@@ -3959,17 +4147,24 @@ def cmd_notify(args):
     it's closed. Omarchy's OSD takes no messages from a third-party plugin
     (its shell answers such a summon with false). The text is one argument
     after `--`, never parsed as an option, and capped."""
+    if not send_notification(args.text):
+        raise ApiError("notify", "The notification couldn't be sent")
+    out({"sent": True})
+
+
+def send_notification(text):
+    """notify-send with Legato's name; the text one argument after `--`."""
     tool = trusted_tool("notify-send")
     if not tool:
-        raise ApiError("no_notify", "notify-send isn't installed")
-    text = " ".join(str(args.text or "").split())[:NOTIFY_MAX]
+        return False
+    text = " ".join(str(text or "").split())[:NOTIFY_MAX]
     try:
         subprocess.run([tool, "--app-name=Legato", "--urgency=normal", "--", "Legato", text],
                        env=child_env(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, timeout=5, check=False)
     except (OSError, subprocess.TimeoutExpired):
-        raise ApiError("notify", "The notification couldn't be sent")
-    out({"sent": True})
+        return False
+    return True
 
 
 def cmd_stats(args):
@@ -4120,6 +4315,8 @@ def build_parser():
     p.set_defaults(fn=cmd_stats)
 
     p = sub.add_parser("notify"); p.add_argument("text"); p.set_defaults(fn=cmd_notify)
+
+    p = sub.add_parser("watchcheck"); p.set_defaults(fn=cmd_watchcheck)
 
     p = sub.add_parser("mark"); p.add_argument("state", choices=("played", "unplayed")); p.add_argument("uuid")
     p.add_argument("--podcast", required=True); p.set_defaults(fn=cmd_mark)

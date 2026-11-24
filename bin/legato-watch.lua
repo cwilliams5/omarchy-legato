@@ -22,12 +22,19 @@
 --
 -- `user-data/legato` holds, for the current file: `watching` (this script
 -- runs; a player started by an older Legato has nothing), `cut` (the byte
--- offset N of the latest such line), `stallSince` (when the stall now under
--- way began, os.time()) and `stalls` ({since, ended} of the last few, newest
--- last: a long one is still there after a short one follows). It is reset
--- at the start of each file. Nothing else is read or changed.
+-- offset N of the latest such line), `failed` (any other warning or error
+-- from FFmpeg's network layers since the last seek), `seen` (which of the
+-- two lines came:
+-- `reconnect`, `short`; the bridge's self-check runs this script against a
+-- break it makes, to know these lines still read as written), `stallSince`
+-- (when the stall now under way began, os.time()) and `stalls` ({since,
+-- ended} of the last few, newest last: a long one is still there after a
+-- short one follows). It is reset at the start of each file. Nothing else
+-- is read or changed.
 
 local UNKNOWN = "18446744073709551615"
+-- FFmpeg's network layers, as they name themselves at the start of a line.
+local NETWORK = { http = true, https = true, tls = true, tcp = true, httpproxy = true }
 local state = { watching = true }
 
 local function publish()
@@ -37,11 +44,11 @@ end
 local function failed_at(text)
   local at = string.match(text, "Will reconnect at (%d+)")
   if at then
-    return at
+    return at, "reconnect"
   end
   local short, want = string.match(text, "Stream ends prematurely at (%d+), should be (%d+)")
   if short and want ~= UNKNOWN then
-    return short
+    return short, "short"
   end
   return nil
 end
@@ -49,6 +56,14 @@ end
 mp.register_event("start-file", function()
   state = { watching = true }
   publish()
+end)
+
+-- A seek starts a new read: a failure before it says nothing about after.
+mp.register_event("seek", function()
+  if state.failed then
+    state.failed = nil
+    publish()
+  end
 end)
 
 mp.observe_property("paused-for-cache", "bool", function(_, waiting)
@@ -72,9 +87,22 @@ mp.register_event("log-message", function(event)
   if event.prefix ~= "ffmpeg" then
     return
   end
-  local at = failed_at(event.text or "")
+  local text = event.text or ""
+  local at, kind = failed_at(text)
   if at then
     state.cut = tonumber(at)
+    state.seen = state.seen or {}
+    state.seen[kind] = true  -- which line it was (the bridge's self-check)
+    publish()
+  end
+  -- Any other warning or error from the network layers since the last seek
+  -- (a seek's request refused: "http: HTTP error 403"; a TLS error; whatever
+  -- a later FFmpeg calls them): `failed`. Not the two lines above (their
+  -- offset says whether mpv read on past them), nor the short-end line of a
+  -- host that gave no size, which comes at every end there.
+  local layer = string.match(text, "^(%a+): ")
+  if not at and layer and NETWORK[layer] and not string.find(text, UNKNOWN, 1, true) then
+    state.failed = true
     publish()
   end
 end)

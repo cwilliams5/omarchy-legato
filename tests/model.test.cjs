@@ -46,6 +46,15 @@ test("listening stats read as totals, with the time saved split by what saved it
   assert.equal(Model.fmtTotal(3 * 3600), "3 h")
   assert.equal(Model.fmtTotal(3 * 3600 + 5 * 60), "3 h 05 min")
   assert.equal(Model.fmtTotal(2 * 86400 + 4 * 3600 + 59), "2 d 4 h")
+  // The boundaries: 59 s and a minute, 59 min and an hour, 23 h 59 min and a
+  // day, whole days.
+  assert.equal(Model.fmtTotal(59.9), "59 s")
+  assert.equal(Model.fmtTotal(60), "1 min")
+  assert.equal(Model.fmtTotal(3599), "59 min")
+  assert.equal(Model.fmtTotal(3600), "1 h")
+  assert.equal(Model.fmtTotal(86399), "23 h 59 min")
+  assert.equal(Model.fmtTotal(86400), "1 d")
+  assert.equal(Model.fmtTotal(3 * 86400), "3 d")
   assert.equal(Model.fmtDay(0), "")
   // The local calendar day, whatever the zone (noon local time on Nov 23).
   assert.equal(Model.fmtDay(new Date(2026, 10, 23, 12).getTime() / 1000), "Nov 23, 2026")
@@ -393,6 +402,8 @@ test("audio that never loads is reported, as a notification when no panel shows 
   // Omarchy's shell refuses a third-party plugin's OSD summon (the panel
   // test checks the notification itself).
   assert.ok(!/omarchy\.osd/.test(service), "no OSD summon: Omarchy refuses it")
+  // The text after `--`, so one beginning with a dash is still text.
+  assert.match(service, /call\(\["notify", "--", String\(text\)\]/)
 })
 
 test("the password travels on stdin, never in argv, and is cleared after use", () => {
@@ -415,7 +426,7 @@ test("About: facts come from the repo, details and the issue link are well forme
   assert.equal(About.NAME, JSON.parse(manifest).name)
   assert.equal(About.MAINTAINER, "Cody Williams")
   // The listening stats are named in the privacy text: kept here, never sent.
-  assert.match(About.PRIVACY, /stats/i)
+  assert.match(About.PRIVACY, /listening stats/i)
   assert.match(About.PRIVACY, /never sent|stay on this computer|only on this computer/i)
   assert.match(About.BASED_ON, /^Nine Point Labs' Pocket Casts plugin$/)
   assert.equal(About.SUPPORT_URL, JSON.parse(manifest).homepage + "/issues")

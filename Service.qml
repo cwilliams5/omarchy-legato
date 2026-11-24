@@ -316,7 +316,7 @@ Item {
   // the panel's status line.
   function reportError(text) {
     flash(text, true)
-    if (!panelOpen || pagesOpen > 0) call(["notify", String(text)], function(result) {})
+    if (!panelOpen || pagesOpen > 0) call(["notify", "--", String(text)], function(result) {})
   }
 
   // An episode whose audio never arrives (its server is down, say) must not

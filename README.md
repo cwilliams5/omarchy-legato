@@ -93,8 +93,8 @@ by Nine Point Labs (MIT). What's new compared to the original:
 
 - **Keyboard-friendly,** in the panel's lists and player and in the video
   window (see [Keys](#keys)), and scriptable through `omarchy-shell` for
-  your own keybindings. (The Settings and Stats pages' buttons take the
-  mouse.)
+  your own keybindings. (The Settings, Stats and About pages' buttons take
+  the mouse.)
 - **Follows your Omarchy theme,** light or dark.
 
 ![The panel's In Progress, New releases and Podcasts tabs, and its Settings page](media/pages.png)
@@ -194,7 +194,9 @@ devices.
 - **A dropped stream, on a host that sends no file size:** when the audio
   stops part way ("Stream dropped. Press play to resume."), Legato tells it
   from the end by what mpv's network layer reports (a host with byte ranges
-  reconnects and says so) or by how far it read (a host without them sends
+  reconnects and says so; Legato checks once per FFmpeg update, with a
+  local test stream, that it still reads those reports, and falls back to
+  the episode's length with a notification if not) or by how far it read (a host without them sends
   the file straight through, to its size). Without a size from the host
   (rare: podcast hosts send it), a cut and the end look the same, so it
   goes by the episode's length, so a stop in the last tenth counts as the end and
@@ -204,8 +206,9 @@ devices.
   judged by its exact length the same way.
 - **An end that proves nothing isn't marked played:** an episode that ends
   the moment it loads (Pocket Casts has you past the end of this copy of
-  the file: ad-stitched copies differ), or far short of the length Pocket
-  Casts lists (an expired feed's placeholder clip). Legato says "Stream ends
+  the file: ad-stitched copies differ), or before half the length Pocket
+  Casts lists (an expired feed's placeholder clip; a feed that lists twice
+  an episode's real length hits this every time). Legato says "Stream ends
   here: mark it played." (right-click it in Up Next to do that).
 - **A show's skip-outro needs mpv to measure the file right:** it's
   counted back from mpv's length for the file, so Legato leaves it off when
@@ -406,7 +409,9 @@ it. The player's own choices, your sign-in and your listening stats stay.
 - mpv fetches through a small local check that runs while it does: every
   connection, redirects included, goes only to public addresses (or, if you
   allow it, your local network), never to this computer, and the address is
-  checked again once connected.
+  checked again once connected. (Once per FFmpeg update, a private, muted
+  player also plays a test stream Legato serves itself on this computer, to
+  check it still reads mpv's network reports.)
 - The sign-in fields aren't native text inputs, so nothing reads your
   clipboard unless you paste (Ctrl+V, Shift+Insert or a middle-click), and
   then at most 4 KB.

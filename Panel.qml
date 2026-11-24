@@ -58,8 +58,8 @@ Panel {
   property bool showStats: false
   // Counted on the service, as openPanels is (each panel adds itself once,
   // and takes itself off when it closes or goes away): it re-reads the stats
-  // after each poll while a Stats page is open, and sends errors to the OSD
-  // while a page hides the status line.
+  // after each poll while a Stats page is open, and sends errors as desktop
+  // notifications while a page hides the status line.
   property bool countedStats: false
   property bool countedPage: false
   onShowStatsChanged: notePages()

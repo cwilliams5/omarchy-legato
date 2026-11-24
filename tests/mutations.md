@@ -8,15 +8,15 @@ and runs the tests meant to catch each. A mutation that passes them is a
 
 ```bash
 tests/run                          # first: a green baseline (a red one "kills" everything)
-python3 -B tests/mutate.py .       # all of them, about 100 minutes
+python3 -B tests/mutate.py .       # all of them, about 2 hours
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (179 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (200 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
 it.
 
-## The set (179; strict review rounds 1 to 7, 2026-11-24)
+## The set (200; strict review rounds 1 to 8, 2026-11-24)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
@@ -119,6 +119,14 @@ caught each mutant. By area:
   the file are also "far short": the evidence tests now break past half),
   one needed numbers outside the drift slack, one a media-key pause after
   a healed stall. Final: 179 of 179 killed (230 Python tests, 36 node).
+- Round 8 (the reviewers' own): 28 of 38 (fit), 12 of 14 (safety); their
+  gaps are tests now. This set after round 8's fixes and the FFmpeg
+  self-check: 193 of 200; six survivors masked by the new catch-all
+  (`failed`: any network error since a seek is a break, so tests of the
+  older evidence passed without it) now have tests where only their own
+  evidence can tell (an HLS segment that comes back empty, a host without
+  ranges that goes silent, the self-check's warn-level reconnect line), and
+  one had numbers that moved nothing. Final: 200 of 200 killed.
 - Equivalent and left out: dropping `after > before` from the skip count
   (`add_stats` ignores values that aren't positive).
 

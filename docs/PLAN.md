@@ -836,12 +836,62 @@ reviewer found nothing critical or high; the safety reviewer three highs.
   a closed panel's notification), a healed stall that syncs again, test
   players ended by their socket even when the bridge can't reach them.
 
+### SR, round 8 (2026-11-24)
+
+reports kept outside the repo. Fit found
+nothing critical or high again; safety a critical and a high. Plus Cody's
+ask (a side note): the watcher keys on FFmpeg's wording, and an update
+could silently undo the fix.
+
+- [x] SR70 (Cody) The FFmpeg self-check: once per FFmpeg version
+  (`ffmpeg-version`), a detached `bridge watchcheck` serves a short silent
+  WAV from 127.0.0.1 and drops it, plays it in a private muted mpv with
+  the watcher, and needs both lines (`seen`). Failed: ranged hosts go by
+  length for that version, and one notification says so. Tests: passes
+  with this FFmpeg (n9.0.2); a reworded watcher (as if FFmpeg reworded)
+  fails loudly; the verdict's use; once per version; triggered by a new
+  player.
+- [x] SR71 (critical) A failed seek was the end: on a ranged host a seek
+  outside the cache needs a new request, and when it's refused (offline,
+  the host down, an expired link: the proxy answers a failed connect with
+  403) FFmpeg logs only "HTTP error 403". Fixed: the watcher records any
+  other warning or error from FFmpeg's network layers since the last seek
+  (`failed`); with it, a break unless mpv read to the size. Tests (skip
+  back after the link expired; the resume check's seek with the host down).
+- [x] SR72 (high) An empty episode lookup (404, empty 200, redirect) was
+  taken as Pocket Casts' answer: the stale local place confirmed and
+  pushed; a reload started from the public list at 0. Fixed: for an
+  episode Pocket Casts knew (`recordSeen`), an empty lookup is no answer
+  (unverified; a reload refuses with "Pocket Casts didn't answer: try
+  again"). Shows never followed keep the old path. Tests for all three.
+- [x] SR73 (medium) Skip-outro on a host without ranges never finished: the
+  outro's stop counts as the end there. Test.
+- [x] SR74 (low) Play at a real end no poll had handled played it again
+  from 0 (pushing 0): it finishes it now; the next Play plays it again.
+  A drag back after an end pushed it as in progress: sync_now leaves it.
+  Tests (the old Play-at-the-end test updated).
+- [x] SR75 (low) "Stream ends here: mark it played" after a link that went a
+  second after a resume: now only at the same spot twice in a row
+  (`breakStrike`). Test.
+- [x] SR76 (low-medium, fit) "Pocket Casts not reached" was said on every
+  poll between pushes, not once: now in the poll whose push made it two.
+  Test (polls that don't push in between; the count reset by a push that
+  works).
+- [x] SR77 (tests, fit) A failed stats switch or Clear on the page;
+  duration boundaries; the privacy check's wording; notify through the
+  argument parser (the text after `--`); resume_last's atTop check.
+- [x] SR78 (low, left) Tag rules gone after a Hyprland config reload until
+  Legato sends them again (README says the rules live until a reload);
+  plain IpcHandler, not Omarchy's ShellIpc (a keybind's call goes through
+  `qs ipc`, ~45 ms); an unreadable prefs.json counts stats again; the
+  Stats page's own switch and confirm instead of Omarchy's components.
+
 - [ ] H6 Ship 1.1.0 (a minor version: the stats are a feature) with the `ship-update` skill (marketplace verification
   request, Cody approves the filing).
 
 ## Testing
 
-- `tests/run` before every commit: all suites, about 9 minutes, nothing on
+- `tests/run` before every commit: all suites, about 13 minutes, nothing on
   screen. Each new behavior gets an end-to-end test against the fake server
   (`tests/test_bridge.py`, `PlayerTestCase`; set `AUDIO_SECONDS` for longer
   audio, and the fake serves byte ranges).
@@ -892,6 +942,11 @@ reviewer found nothing critical or high; the safety reviewer three highs.
   said. Fit found no critical or high (a replacement bar's two services
   left documented). 230 Python + 36 node tests; 179 of 179 mutants
   killed. Round 8 next.
+- 2026-11-24 (late): round 8 (SR70-SR78): the FFmpeg self-check (Cody's
+  ask); any network error since a seek is evidence (a failed seek was the
+  end); an empty lookup for a known episode is no answer; the outro stop
+  on hosts without ranges; Play at an unhandled end finishes it. 247
+  Python + 36 node tests; 200 of 200 mutants killed. Round 9 next.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

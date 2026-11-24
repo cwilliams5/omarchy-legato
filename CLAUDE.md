@@ -120,8 +120,9 @@ LegatoMark.qml       the logo, drawn with QtQuick.Shapes (bar chip, panel)
 Model.js             pure helpers (formatting, rows, trusted executables, closed environments)
 About.js             About facts and text (version and license read from the repo at run time)
 bin/legato-bridge    the Python helper: one subcommand per call, one JSON object out
-bin/legato-watch.lua mpv script (Legato's mpv only): records FFmpeg's "Stream ends prematurely"
-                     for the file playing, stream_broke's evidence
+bin/legato-watch.lua mpv script (Legato's mpv only): records FFmpeg's network failures (reconnects,
+                     short ends, any other network error since the last seek) and stalls for the
+                     file playing, stream_broke's and stall_seen's evidence
 install.sh           copy a checkout into the plugin folder and enable it
 tests/run            all tests: tests/test_bridge.py (Python, real mpv vs a fake server,
                      and the offscreen QML pages in tests/qml/) and tests/model.test.cjs
@@ -244,8 +245,17 @@ docs/PLAN.md         what's left to build
   it, once a minute at most, for six hours), then autoplays. Play on an
   ended episode starts what was queued since (if autoplay was on) or plays
   it again (`play_again`, which pushes it as in progress itself, since
-  Pocket Casts would say "played" and stop it). Dragged back from the end,
-  it waits there, paused; Play plays it again from there.
+  Pocket Casts would say "played" and stop it). Play at a real end no poll
+  has handled yet finishes it first (`resume_loaded`: marked played, off Up
+  Next; playing it from the top there pushed 0 over it); the next Play
+  plays it again. Dragged back from the end, it waits there, paused,
+  pushing nothing (`sync_now` leaves an episode that ended here alone);
+  Play plays it again from there. If Pocket Casts knew an episode (a
+  record came back: `recordSeen`) and its lookup now comes back empty (a
+  404, an empty answer, a redirect), that's no answer: the resume check
+  says unverified, and a reload refuses to start it from the show's public
+  list at 0 ("Pocket Casts didn't answer: try again"). Shows you never
+  followed have no record, and go on as before.
 - **Idle unload:** paused for `unloadAfterMinutes` (15), the player closes
   (`stop --if-paused`). The next play goes through `resume_last`, which asks
   Pocket Casts what to play.
@@ -265,9 +275,13 @@ docs/PLAN.md         what's left to build
   closed without TLS's close_notify, a link that timed out) or "Stream ends
   prematurely at N, should be M" with the host's size M (a clean close
   short of it). Recorded, and mpv read no further than N (`READ_PAST_CUT`;
-  a reconnect that worked reads on, to the size): a break. Not recorded,
-  with a size from the host: on a host with byte ranges (mpv's `seekable`)
-  the end, since FFmpeg reconnects (and says so) on any failure there; on
+  a reconnect that worked reads on, to the size): a break. So is any other
+  warning or error from FFmpeg's network layers since the last seek
+  (`failed`: a seek's new request refused logs only "HTTP error 403";
+  round 8), unless mpv read to the size. Nothing recorded, with a size
+  from the host: on a host with byte ranges (mpv's `seekable`) the end,
+  since FFmpeg reconnects (and says so) on a failure while reading there,
+  unless this FFmpeg failed the self-check (below); on
   one without, FFmpeg can't reconnect and an https drop or a timeout logs
   neither line, so the end only if mpv read to the size (`READ_TO_END`,
   4 KiB; a real end stops about 100 bytes short, a break far short, and an
@@ -284,13 +298,28 @@ docs/PLAN.md         what's left to build
   `unconfirmed` or `checkServer`, and not below the load's start;
   otherwise nothing: the next Play asks Pocket Casts anyway,
   `resume_last`), closes the player and says so;
-  a reload that got nothing (it stopped again within 2 s of where it began,
-  with no seek since) asks you to mark the episode played, never doing it
-  itself. Play loads it again from Pocket Casts' position, or from this
+  a reload that got nothing (it stopped again at the same spot, within 2 s
+  of where it began, with no seek since: `breakStrike`, carried across the
+  reload) asks you to mark the episode played, never doing it itself; the
+  first stop there says "Stream dropped" (a link that went a second after
+  a resume isn't the end of anything). On a host without ranges, a stop
+  where the show's skip-outro has it stop is the end too. Play loads it again from Pocket Casts' position, or from this
   machine's further one if its push failed within the hour
   (`unsentBreak`). Where it starts is never "from the top" because it's at
   or past the listed length (`start_position`): files run longer than
   listed (ads inserted on the fly), and that pushed 0 to every device.
+- **The FFmpeg self-check** (`cmd_watchcheck`, `bridge watchcheck`): the
+  watcher reads two FFmpeg log lines, and an update could reword them;
+  then every break on a host with ranges would look like the end again,
+  with nothing to show for it. When a player starts with an FFmpeg
+  (`ffmpeg-version`) not yet checked (`watch_check_due`, `watchcheck.json`
+  in the state folder), a detached process serves a short silent WAV from
+  127.0.0.1 with its size and ranges, hangs up a third of the way in, and
+  plays it in a private muted mpv with the watcher: both lines must show
+  within 12 s (`seen`: reconnect, short). If not, `ffmpeg_lines_trusted`
+  is false for that version: ranged hosts go by the length rule, and a
+  notification says so once. Nothing leaves this computer; it runs once
+  per FFmpeg version (again only if one never finished).
 - **An end that proves nothing** (`end_unproven`): mpv at its end with
   nothing played since the load (Pocket Casts' position past this copy of
   the file: ad-stitched copies differ per request; also an end before
@@ -593,7 +622,7 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   pages laid out offscreen with stand-ins for Omarchy's Commons and Ui (they
   read about 20 px short of the real pages), and `tests/qml/panel.qml`: the
   real Panel.qml and Service.qml with stand-ins for Quickshell's processes,
-  answering the bridge calls the service starts. About 9 minutes; nothing
+  answering the bridge calls the service starts. About 13 minutes; nothing
   appears on screen, and the test players load no mpv-mpris (they'd be
   media players on the desktop). `tests/mutations.md` lists the planted
   regressions the suite must catch.

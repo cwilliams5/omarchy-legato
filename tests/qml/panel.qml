@@ -17,7 +17,7 @@ Item {
   function notices() {
     return Processes.started.filter(function(p) {
       try { return p.running && p.command.indexOf("notify") >= 0 } catch (e) { return false }
-    }).map(function(p) { return p.command[p.command.indexOf("notify") + 1] })
+    }).map(function(p) { return p.command[p.command.length - 1] })
   }
 
   function check(name, ok, detail) {
@@ -247,7 +247,7 @@ Item {
     settle()
 
     // About replaces the Stats page; the counts follow, and About alone
-    // never re-reads the stats. Errors reach the OSD behind it too.
+    // never re-reads the stats. Errors go out as notifications behind it too.
     keys.textKey("i", 0)
     check("About replaces the Stats page", panel.showAbout && !panel.showStats && !statsView.visible
           && service.statsPagesOpen === 0 && service.pagesOpen === 1,
@@ -298,8 +298,8 @@ Item {
     service.applyPlayer({ active: true, playing: true, position: 2, duration: 100, syncFailed: true, item: null })
     check("pushes failing are said", service.actionError.indexOf("not synced") >= 0, service.actionError)
     said.push(service.actionError)
-    // Omarchy's OSD shows one line of about 38 characters (325 px at its
-    // title size); longer is cut off, advice and all.
+    // The panel's status line (and a notification's one line) fits about
+    // 38 characters; longer is cut off, advice and all.
     check("every playback message fits one line", said.every(function(m) { return m.length > 0 && m.length <= 38 }),
           JSON.stringify(said))
     settle()
@@ -327,6 +327,17 @@ Item {
     answer("stats clear", Object.assign({}, top.stats, { counting: false, listened: 0 }))
     check("a Clear's late answer is ignored", statsView.stats.listened === 5 && service.statsCounting === true,
           statsView.stats.listened + " " + service.statsCounting)
+    settle()
+    // A switch or Clear that fails says so on the page (round 1: a failed
+    // Clear looked done).
+    service.setStatsCounting(false)
+    fail("stats off", "Another Pocket Casts action is still running")
+    check("a failed switch shows on the page", named("statsError").visible && statsView.error.indexOf("still running") >= 0
+          && named("statsCounting").text === "On", statsView.error + " " + named("statsCounting").text)
+    service.clearStats()
+    fail("stats clear", "Couldn't delete the stats")
+    check("a failed Clear shows on the page", named("statsError").visible && statsView.error.indexOf("Couldn't delete") >= 0
+          && statsView.stats.listened === 5, statsView.error + " " + statsView.stats.listened)
     settle()
 
     // Back, and closing, are counted off the service.
