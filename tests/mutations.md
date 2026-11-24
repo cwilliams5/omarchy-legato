@@ -8,61 +8,64 @@ and runs the tests meant to catch each. A mutation that passes them is a
 
 ```bash
 tests/run                          # first: a green baseline (a red one "kills" everything)
-python3 -B tests/mutate.py .       # all of them, about 15 minutes
+python3 -B tests/mutate.py .       # all of them, about 30 minutes
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (57 x 4 minutes is
+Each mutation runs its own tests, not the whole suite (84 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
 it.
 
-## The set (57; strict review round 1, 2026-11-24)
+## The set (84; strict review rounds 1 and 2, 2026-11-24)
 
 The full list, with each mutation's pattern and tests, is in
-`tests/mutate.py`. By area:
+`tests/mutate.py`. The runner first checks each test set passes unmutated
+(a red baseline would count everything as killed) and names the test that
+caught each mutant. By area:
 
-- **Broken stream vs the end** (14): the time check and its 1% slack, the
-  unread-bytes check, a size known at load and lost, a no-size host with a
-  duration, the unknown case, which duration wins, another file's load
-  record, the load record itself, the end properties read, the poll's and
-  Play's paths (`resume_loaded` with and without the path in its snapshot,
-  and its reload).
-- **The broken stream's push** (4): after a long gap, while unconfirmed,
-  before the resume check, never.
-- **Play's quick check and sign-in** (6): never short, always short, Play
-  not quick, a refresh under the short limit, the sleep guard's refresh,
-  the 5 s value.
-- **Listening stats** (21): the seek flag and its bound, trim credited with
-  Trim off, the speed bounds, the gap limit, a count starting while
-  buffering, another file, a Trim change, a pause, errors reaching the
-  poll, the count after a seek, the slider as skipping, pause / speed /
-  switch / stop counting first, off, clear and its lock, intro and outro.
-- **skip-taskbar** (2): no untag rule, not by the pin state.
-- **QML** (10): the Stats page (zeros before the first read, Clear's two
-  clicks and its reset on leaving, errors, the bridge's counting), the
-  service (the seek flag on playback-restart and after a failed poll,
-  stats errors, the open page refreshing), the panel (one page at a time).
+- **Broken stream vs the end**: the size first (read to the end, much
+  unread, the skip-outro and its slack), a size known earlier and lost, the
+  no-size margin and which durations count, polls filling in the record,
+  Play's own check (the path and size in its snapshot) and its reload.
+- **The broken stream's push and the resume after it**: after a long gap,
+  while unconfirmed, before the check; Pocket Casts further on winning
+  after the player closed, and a further unsent local position kept.
+- **Play's quick check and sign-in**: short only on Play, never cutting a
+  refresh short, the sleep guard's refresh, the 5 s value.
+- **Listening stats**: the seek flag and its bound, the speed and Trim
+  matches, the bounds, the gap, buffering, another file, a pause, errors,
+  skips counted as gone (not as asked), the counts around pause, speed,
+  switch and stop, the lock cap, off, clear and its lock, intro and outro.
+- **skip-taskbar**: the untag rule, the pin match, the rules sent before
+  the pin.
+- **QML**: the round 2 fit reviewer's ten (keys behind the Stats page, its
+  stats, height, visibility, the date, plain-text errors, the broken-stream
+  report, the seek flag, the stats read, BarWidget's IPC) and the page
+  counts, against the real Panel and Service (`tests/qml/panel.qml`).
 
 ## Results
 
 - Round 1 (the reviewers' own mutants, before the fixes): 8 of 20 killed
-  (safety), 24 of 44 (fit).
-- After the fixes, this set: 56 of 60 killed, then the four survivors
-  resolved: a real gap (a pause, then a seek from a media widget, counted
-  the pause; now tested) and three equivalent mutants removed with the
-  redundant code they hit (a stats-file guard `load_json_at` already does,
-  a skip-forward check `after > before` already does, and Next's own count,
-  which `save_outgoing` already does). One more is equivalent and left
-  out: dropping `after > before` from the skip count, since `add_stats`
-  ignores values that aren't positive.
-- Final: 57 of 57 killed.
+  (safety), 24 of 44 (fit). After round 1's fixes: 57 of 57 of this set.
+- Round 2 (the reviewers' own): 6 of 12 (safety; 3 equivalent), 2 of 21
+  (fit). After round 2's fixes, this set: 78 of 86, then the 8 survivors
+  resolved: four real gaps tested (a poll filling in the record, Pocket
+  Casts further on winning after a close, the fresh count after a speed
+  change, Play at a real end keeping its player), one test hole the new
+  tag rules had opened (`pin = false` now appears in every rule's text),
+  one test pointed at the right check, and two equivalent mutants removed
+  with the redundant code they hit (a guard against learning at an end,
+  and an `&& opened` closing already covers). Final: 84 of 84 killed, on a
+  green suite (157 Python tests, 36 node).
+- Equivalent and left out: dropping `after > before` from the skip count
+  (`add_stats` ignores values that aren't positive).
 
 ## Not covered by mutation
 
-- The QML pages run with stand-ins for Omarchy's Commons and Ui
-  (`tests/qml/imports`); their sizes read about 20 px short of the real
-  shell's. Service.qml and Panel.qml need Quickshell, so their behaviour is
-  checked by pattern (`tests/model.test.cjs`), which a differently written
-  regression can slip past.
+- The QML runs with stand-ins for Omarchy's Commons and Ui and for
+  Quickshell's processes (`tests/qml/imports`): sizes read about 20 px
+  short of the real shell's, clicks are signals emitted by the test, and
+  the bridge never runs (the test answers its calls). BarWidget.qml isn't
+  loaded; its IPC is checked by pattern.
 - The Hyprland rules are checked as text; that Hyprland applies them as
   intended was tested live (docs/PLAN.md SR10, CLAUDE.md).

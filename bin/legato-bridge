@@ -136,6 +136,10 @@ BROKE_SLACK = 10
 # ...unless mpv had read all but this much of the file (1% of it if that's
 # more): then the duration it estimated was a little long.
 BROKE_UNREAD_BYTES = 64 * 1024
+# With the file's size never known, an end counts only within this share of
+# the longest duration given (Pocket Casts', mpv's): podcast files and their
+# listed durations differ by a few minutes (ads inserted on the fly).
+NO_SIZE_MARGIN = 0.10
 # Extra mpv arguments; the test suite sets --ao=null here.
 MPV_EXTRA_ARGS = ()
 SPEEDS = (0.8, 1.0, 1.1, 1.2, 1.3, 1.5, 1.7, 2.0, 2.5, 3.0)
@@ -1315,7 +1319,7 @@ def up_next_remove(uuids):
 # ---------------------------------------------------------------------- mpv
 
 MPV_PROPERTIES = ("path", "pause", "time-pos", "duration", "volume", "speed", "eof-reached", "vid", "track-list", "af",
-                  "idle-active", "paused-for-cache", "playlist-count")
+                  "idle-active", "paused-for-cache", "playlist-count", "stream-end")
 END_PROPERTIES = ("stream-pos", "stream-end", "file-local-options/end")
 
 
@@ -2037,7 +2041,7 @@ def load_stats():
 
 def stats_counting(prefs):
     """Whether listening stats are counted (prefs.json `stats`; on unless
-    turned off on the Settings page). A player choice, not a widget setting,
+    turned off on the Stats page). A player choice, not a widget setting,
     so turning it off survives the plugin being disabled."""
     return prefs.get("stats") is not False
 
@@ -2441,19 +2445,21 @@ def stream_broke(snap, state):
     and where its stream broke off for good (the network went, the host hung
     up; mpv retries for a while first). Only the first finishes the episode,
     and calling a break the end is the worse mistake (it marks an unfinished
-    episode played on every device), so a break is recognised by what the
-    file itself says, as mpv knew it when the episode loaded (`stream` in
-    the state, from play_item):
+    episode played on every device and starts the next), so where the
+    evidence is weak this leans towards a break: a real end misjudged costs
+    a press of Play or a "mark played", not a lost place.
 
-    - within BROKE_SLACK seconds (or 1%) of the end (the load-time duration,
-      less the show's skip-outro), it's the end;
-    - otherwise, with the file's size known now, it broke if much of the
-      file is unread;
-    - with the size unknown now but known at load, it broke: mpv drops the
-      size when the stream fails;
-    - with no size at load either (a host that sends none), it broke if mpv
-      knew the duration at load, since the time is then short of the end;
-    - with neither, it can't be told, and it's the end, as before 1.1."""
+    1. The file's size, known now: much of it unread is a break (unless the
+       show's skip-outro stopped it there on purpose); read to its end, the
+       end.
+    2. The size known earlier for this file (`stream`: recorded at load,
+       filled in by polls) and gone now: a break; mpv drops it when the
+       stream fails.
+    3. The size never known (a host that sends none, or a break before any
+       poll learned it): compared with the longest duration given (Pocket
+       Casts', mpv's at load or now; mpv's own can be far short for an MP3
+       still arriving), it's the end only within NO_SIZE_MARGIN of it.
+    4. No size and no duration at all: the end, as before 1.1."""
     if snap.get("eof-reached") is not True:
         return False
     position = snap.get("time-pos")
@@ -2461,20 +2467,40 @@ def stream_broke(snap, state):
         return False
     loaded = state.get("stream")
     loaded = loaded if isinstance(loaded, dict) and loaded.get("url") == snap.get("path") else {}
-    known = loaded.get("duration")
-    known = float(known) if isinstance(known, (int, float)) and known > 0 else None
-    duration = known if known is not None else snap.get("duration")
-    if not isinstance(duration, (int, float)) or duration <= 0:
-        return False
-    end = duration - skip_last_of(snap.get("file-local-options/end"))
-    if position >= end - max(BROKE_SLACK, duration / 100):
-        return False
+    skip = skip_last_of(snap.get("file-local-options/end"))
+    durations = [d for d in (snap.get("duration"), loaded.get("duration"), (state.get("episode") or {}).get("duration"))
+                 if isinstance(d, (int, float)) and not isinstance(d, bool) and d > 0]
+    longest = max(durations) if durations else None
     read, size = snap.get("stream-pos"), snap.get("stream-end")
     if isinstance(size, int) and size > 0:
-        return not isinstance(read, int) or size - read > max(BROKE_UNREAD_BYTES, size // 100)
+        if isinstance(read, int) and size - read <= max(BROKE_UNREAD_BYTES, size // 100):
+            return False  # read to its end
+        # Much unread. The show's skip-outro stops short on purpose.
+        return not (skip and longest is not None
+                    and position >= longest - skip - max(BROKE_SLACK, longest / 100))
     if isinstance(loaded.get("size"), int) and loaded["size"] > 0:
         return True
-    return known is not None
+    if longest is None:
+        return False
+    return position < longest - skip - max(BROKE_SLACK, longest * NO_SIZE_MARGIN)
+
+
+def learn_stream(state, snap):
+    """Fill in what's known of the playing file (`stream`, stream_broke's
+    evidence) from a poll: a load slower than wait_for_load's wait stored
+    none, and a player an older Legato started has no record at all."""
+    url = (state.get("episode") or {}).get("url")
+    if not url or snap.get("path") != url:
+        return
+    record = state.get("stream")
+    record = dict(record) if isinstance(record, dict) and record.get("url") == url else {"url": url}
+    size, duration = snap.get("stream-end"), snap.get("duration")
+    if not isinstance(record.get("size"), int) and isinstance(size, int) and size > 0:
+        record["size"] = size
+    if (isinstance(duration, (int, float)) and duration > 0
+            and not (isinstance(record.get("duration"), (int, float)) and record["duration"] >= duration)):
+        record["duration"] = float(duration)  # the longest mpv has reported for it
+    state["stream"] = record
 
 
 def stream_stopped(state, prefs, position):
@@ -2498,7 +2524,7 @@ def stream_stopped(state, prefs, position):
                 state["lastSyncPos"] = float(position)
                 episode["playedUpTo"] = int(position)
             except ApiError:
-                pass  # the next play reads Pocket Casts' older position: a little earlier, never later
+                pass  # resume_last carries on from state["position"], which Pocket Casts never got
     save_playback(state)
     player = Mpv.connect()
     if player:
@@ -2664,6 +2690,7 @@ def poll(autoplay=True, seeked=False):
         # mpv is playing something this plugin did not load.
         return player_view(snap, state, prefs)
     count_listening(state, snap, prefs, seeked)
+    learn_stream(state, snap)
     position = snap.get("time-pos")
     if isinstance(position, (int, float)):
         state["position"] = float(position)
@@ -3273,8 +3300,9 @@ def cmd_play(args):
 
 def resume_last(prefs):
     """Nothing is loaded (mpv was closed, or the machine restarted): pick up
-    the last episode where Pocket Casts says you left it, else the top of Up
-    Next. Another device may have finished it or moved on to something else
+    the last episode where Pocket Casts says you left it (or further, where
+    this machine got to and couldn't tell it), else the top of Up Next.
+    Another device may have finished it or moved on to something else
     since; then the top of Up Next is what plays, and the last episode is
     neither restarted nor queued again."""
     state = load_playback()
@@ -3294,11 +3322,20 @@ def resume_last(prefs):
                 top = None
             if top and top["uuid"] != item["uuid"]:
                 item = None
+    if item and item.get("uuid") == episode.get("uuid"):
+        # Further than Pocket Casts has it, and never sent (its push failed:
+        # the network was down when the stream broke, say): carry on from
+        # there, as check_server keeps such a position for a paused player.
+        # Pocket Casts being further on wins, as always.
+        local = float(state.get("position") or 0)
+        if moved_since_push(state) and local > as_int(item.get("playedUpTo")):
+            item = dict(item, playedUpTo=int(local))
     if not item:
         item = next_in_up_next("")
     if not item:
         raise ApiError("nothing_queued", "Up Next is empty — pick an episode to play")
-    # The old local position is stale here by definition: never push it.
+    # The outgoing player is gone: nothing of it is pushed here (play_item
+    # pushes the position it starts from).
     play_item(item, prefs, save_previous=False)
 
 

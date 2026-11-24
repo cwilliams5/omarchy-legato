@@ -66,8 +66,8 @@ by Nine Point Labs (MIT). What's new compared to the original:
   top and Transparency, which lets your desktop show through while you work
   in other windows (it turns solid while you use it). Legato's keys work in
   the window; mpv's own are off there. While it's on top, it's tagged
-  `skip-taskbar`, so taskbars and window switchers that honor the tag
-  (Transom, for one) leave it out.
+  `skip-taskbar`, so taskbars and window switchers that honor the tag leave
+  it out.
 
   <img src="media/video-menu.png" width="400" alt="The video window's right-click menu: Always on top, Transparency with its levels from Off to 80%, Pause / play, Hide video">
 
@@ -115,15 +115,16 @@ development: Node.js and, optionally, `qmllint` (Qt 6) for the tests.
 
 **What it changes:** only its own files:
 
-- `~/.local/state/omarchy-legato/`: your sign-in tokens, the episode loaded
-  and the player's settings (each file readable only by you)
+- `~/.local/state/omarchy-legato/`: your sign-in tokens, the episode loaded,
+  the player's settings and your listening stats (each file readable only
+  by you)
 - `~/.cache/omarchy-legato/`: cover art
 - its own entry in `~/.config/omarchy/shell.json` (where the chip sits, and
   its settings)
 
 While the video window is shown, Legato adds its window rules to the
 running Hyprland through `hyprctl` (where the window goes, no title bar, its
-transparency). They live in memory only and are gone at the next config
+transparency, and the `skip-taskbar` tag while it's on top). They live in memory only and are gone at the next config
 reload; your Hyprland and Omarchy config files are never edited. While an
 episode is loaded, Legato holds a short logind sleep delay, released as soon
 as it has saved your place.
@@ -176,11 +177,12 @@ devices.
   Episodes served from this computer itself never play.
 - **A cover isn't a video:** some feeds pack the episode's cover into the
   file as a video stream. Legato treats those episodes as audio.
-- **A dropped stream on a host that sends no file details:** when the
-  audio stops part way, Legato tells that from the episode's end by the
-  file's size or length. A host that sends neither (rare: podcast hosts
-  send at least one) leaves it unable to tell, and it counts the stop as
-  the end, marking the episode played, as before 1.1.
+- **A dropped stream near the end, on a host that sends no file size:**
+  when the audio stops part way, Legato tells that from the episode's end
+  by the file's size. Without one (rare: podcast hosts send it), it goes by
+  the episode's length, so a stop in the last tenth counts as the end and
+  marks the episode played. With no length either, every stop counts as the
+  end, as before 1.1.
 
 ## Built on
 

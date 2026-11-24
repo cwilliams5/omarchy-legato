@@ -97,7 +97,7 @@ Item {
   readonly property bool videoPinned: !player || player.videoPinned !== false
   // Episodes served from the local network (a home media server): off unless chosen.
   readonly property bool localFeeds: !!player && player.localFeeds === true
-  // Listening stats are counted unless turned off (prefs.json, Settings page).
+  // Listening stats are counted unless turned off (prefs.json, the Stats page).
   readonly property bool statsCounting: !player || player.statsCounting !== false
   readonly property bool hasVideo: playerActive && player.hasVideo === true
   readonly property bool videoOn: playerActive && player.video === true
@@ -310,9 +310,10 @@ Item {
 
   // An error from an action you took with the panel closed (middle-click,
   // a keybind) would otherwise go unseen: show it on the shell's OSD too.
+  // Also while a page (About, Settings, Stats) hides the panel's status line.
   function reportError(text) {
     flash(text, true)
-    if (!panelOpen && shell && typeof shell.summon === "function")
+    if ((!panelOpen || pagesOpen > 0) && shell && typeof shell.summon === "function")
       shell.summon("omarchy.osd", JSON.stringify({ icon: "media", message: text, duration: 4000 }))
   }
 
@@ -454,12 +455,13 @@ Item {
   property bool _seekedSincePoll: false
 
   // The listening stats page's numbers (the bridge's `stats`): read when the
-  // page opens and after each poll while it's open (statsPageOpen, set by
-  // the panel); null until then. A failure is kept for the page to show
+  // page opens and after each poll while one is open (statsPagesOpen,
+  // counted by the panels); null until then. A failure is kept for the page to show
   // (statsError): the panel's status line is hidden behind a page.
   property var stats: null
   property string statsError: ""
-  property bool statsPageOpen: false
+  property int statsPagesOpen: 0  // panels showing the Stats page (Panel.notePages)
+  property int pagesOpen: 0       // panels showing any page (About, Settings, Stats)
   function loadStats() {
     call(["stats"], function(result) { root.applyStats(result) })
   }
@@ -510,7 +512,7 @@ Item {
     }
     reportPlayerProblems(player)
     syncPlayerEvents()
-    if (statsPageOpen) loadStats()  // the open Stats page follows what's counted
+    if (statsPagesOpen > 0) loadStats()  // an open Stats page follows what's counted
   }
 
   function reportPlayerProblems(view) {

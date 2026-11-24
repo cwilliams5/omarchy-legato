@@ -2,7 +2,7 @@
 run the tests meant to catch each. A mutation the tests miss is a survivor:
 behaviour the suite doesn't really check. See tests/mutations.md.
 
-usage: python3 -B tests/mutate.py . [name ...]      (from the repo root; about 15 minutes)
+usage: python3 -B tests/mutate.py . [name ...]      (from the repo root; about 30 minutes)
 
 The working copy is never changed: the repo is copied to a temporary folder
 first, and each mutation is undone before the next.
@@ -16,27 +16,55 @@ T = "tests.test_bridge."
 
 # (name, file, old, new, tests): `old` must occur exactly once.
 MUTATIONS = [
-    # --- broken stream vs the end (SR1, SR3)
-    ("broke: no time check", B,
-     "    if position >= end - max(BROKE_SLACK, duration / 100):\n        return False\n", "",
+    # --- broken stream vs the end (SR1, SR3, SR15-SR17)
+    ("broke: read to the end isn't the end", B,
+     "            return False  # read to its end", "            return True",
      [T + "BrokenStream.test_how_a_break_is_told_from_the_end", T + "BrokenStream.test_a_real_end_is_still_the_end"]),
-    ("broke: 1% slack dropped", B,
-     "    if position >= end - max(BROKE_SLACK, duration / 100):", "    if position >= end - BROKE_SLACK:",
-     [T + "BrokenStream.test_how_a_break_is_told_from_the_end"]),
     ("broke: unread bytes ignored", B,
-     "        return not isinstance(read, int) or size - read > max(BROKE_UNREAD_BYTES, size // 100)",
-     "        return False", [T + "BrokenStream.test_how_a_break_is_told_from_the_end"]),
+     "        if isinstance(read, int) and size - read <= max(BROKE_UNREAD_BYTES, size // 100):",
+     "        if True:", [T + "BrokenStream.test_how_a_break_is_told_from_the_end"]),
+    ("broke: the skip-outro stop is a break", B,
+     "        return not (skip and longest is not None", "        return not (False and longest is not None",
+     [T + "BrokenStream.test_how_a_break_is_told_from_the_end"]),
+    ("broke: the skip-outro's 1% dropped", B,
+     "                    and position >= longest - skip - max(BROKE_SLACK, longest / 100))",
+     "                    and position >= longest - skip - BROKE_SLACK)", [T + "BrokenStream.test_how_a_break_is_told_from_the_end"]),
+    ("broke: the skip-outro's slack widened", B,
+     "                    and position >= longest - skip - max(BROKE_SLACK, longest / 100))",
+     "                    and position >= longest - skip - max(BROKE_SLACK, longest / 25))", [T + "BrokenStream.test_how_a_break_is_told_from_the_end"]),
+    ("broke: nothing known is a break", B,
+     "    if longest is None:\n        return False", "    if longest is None:\n        return True",
+     [T + "BrokenStream.test_how_a_break_is_told_from_the_end"]),
+    ("broke: the no-size margin dropped", B,
+     "    return position < longest - skip - max(BROKE_SLACK, longest * NO_SIZE_MARGIN)",
+     "    return position < longest - skip - BROKE_SLACK", [T + "BrokenStream.test_how_a_break_is_told_from_the_end"]),
+    ("broke: only mpv's duration", B,
+     "    durations = [d for d in (snap.get(\"duration\"), loaded.get(\"duration\"), (state.get(\"episode\") or {}).get(\"duration\"))",
+     "    durations = [d for d in (snap.get(\"duration\"),)",
+     [T + "BrokenStream.test_how_a_break_is_told_from_the_end", T + "BrokenStream.test_a_host_without_a_size_breaks_and_ends_properly"]),
+    ("broke: the shortest duration", B,
+     "    longest = max(durations) if durations else None", "    longest = min(durations) if durations else None",
+     [T + "BrokenStream.test_how_a_break_is_told_from_the_end"]),
+    ("broke: another file's load record", B,
+     "loaded.get(\"url\") == snap.get(\"path\") else {}", "True else {}",
+     [T + "BrokenStream.test_how_a_break_is_told_from_the_end"]),
+    ("learn: polls fill in nothing", B,
+     "    learn_stream(state, snap)\n", "", [T + "BrokenStream.test_a_slow_load_still_tells_a_break_from_the_end"]),
+    ("learn: no size from a poll", B,
+     "        record[\"size\"] = size", "        pass", [T + "BrokenStream.test_polls_fill_in_what_a_slow_load_missed"]),
+    ("learn: the duration can shrink", B,
+     "            and not (isinstance(record.get(\"duration\"), (int, float)) and record[\"duration\"] >= duration)):",
+     "            ):", [T + "BrokenStream.test_polls_fill_in_what_a_slow_load_missed"]),
+    ("resume: Pocket Casts' older position wins after a failed push", B,
+     "        if moved_since_push(state) and local > as_int(item.get(\"playedUpTo\")):", "        if False:",
+     [T + "BrokenStream.test_a_break_while_pocket_casts_is_down_carries_on_from_there"]),
+    ("resume: the local position always wins", B,
+     "        if moved_since_push(state) and local > as_int(item.get(\"playedUpTo\")):", "        if True:",
+     [T + "ResumeAsksPocketCastsFirst"]),
     ("broke: a lost size isn't a break", B,
      "    if isinstance(loaded.get(\"size\"), int) and loaded[\"size\"] > 0:\n        return True",
      "    if isinstance(loaded.get(\"size\"), int) and loaded[\"size\"] > 0:\n        return False",
      [T + "BrokenStream.test_how_a_break_is_told_from_the_end", T + "BrokenStream.test_a_stream_that_breaks_part_way_is_not_finished"]),
-    ("broke: no-size host with a duration isn't a break", B,
-     "    return known is not None\n", "    return False\n", [T + "BrokenStream.test_how_a_break_is_told_from_the_end"]),
-    ("broke: unknown counts as broken", B,
-     "    return known is not None\n", "    return True\n", [T + "BrokenStream.test_how_a_break_is_told_from_the_end"]),
-    ("broke: the eof duration wins", B,
-     "    duration = known if known is not None else snap.get(\"duration\")", "    duration = snap.get(\"duration\")",
-     [T + "BrokenStream.test_how_a_break_is_told_from_the_end"]),
     ("broke: another file's load record", B,
      "loaded.get(\"url\") == snap.get(\"path\") else {}", "True else {}",
      [T + "BrokenStream.test_how_a_break_is_told_from_the_end"]),
@@ -55,7 +83,8 @@ MUTATIONS = [
      [T + "BrokenStream.test_play_pressed_before_a_poll_saw_the_break_carries_on_too"]),
     ("resume: snapshot without the path", B,
      "(\"eof-reached\", \"path\", \"time-pos\", \"duration\") + END_PROPERTIES", "(\"eof-reached\", \"time-pos\", \"duration\") + END_PROPERTIES",
-     [T + "BrokenStream.test_play_pressed_before_a_poll_saw_the_break_carries_on_too"]),
+     [T + "BrokenStream.test_play_pressed_before_a_poll_saw_the_break_carries_on_too",
+      T + "BrokenStream.test_play_at_a_real_end_before_any_poll_plays_it_again"]),
     ("resume: broken branch doesn't reload", B,
      "            stream_stopped(state, prefs, snap.get(\"time-pos\"))\n            resume_last(prefs)",
      "            stream_stopped(state, prefs, snap.get(\"time-pos\"))",
@@ -133,6 +162,23 @@ MUTATIONS = [
     ("seek: count not restarted", B,
      "            state[\"listening\"] = {}  # a new count from here: the jump itself isn't listening\n", "",
      [T + "ListeningStats.test_with_trim_on_a_skip_isnt_counted_as_trimmed_too"]),
+    ("seek: a skip counted as asked, not as gone", B,
+     "                add_stats(skipping=after - before)  # the skip-forward button's time saved",
+     "                add_stats(skipping=float(args.seconds))", [T + "ListeningStats.test_a_skip_counts_how_far_it_went"]),
+    ("speed: waits the full lock for the stats", B,
+     "        lock = StateLock(timeout=0.5)", "        lock = StateLock()", [T + "ListeningStats.test_a_speed_change_never_waits_long_for_the_stats"]),
+    ("speed: no fresh count after the change", B,
+     "        yield\n        state[\"listening\"] = {}\n        player = Mpv.connect()\n        if player:\n            with player:\n                count_listening(state, listen_snap(player), load_prefs())\n        save_playback(state)",
+     "        yield\n        save_playback(state)", [T + "ListeningStats.test_a_speed_or_trim_change_counts_what_came_before"]),
+    ("count: speed change not noticed", B,
+     "    if (ours and last.get(\"uuid\") == episode.get(\"uuid\") and last.get(\"speed\") == speed",
+     "    if (ours and last.get(\"uuid\") == episode.get(\"uuid\")", [T + "ListeningCount.test_a_speed_change_mid_stretch_drops_that_stretch"]),
+    ("videopin: pin before the rules", B,
+     "        place_video_window(prefs)\n        hyprctl(\"dispatch\", 'hl.dsp.window.pin(",
+     "        hyprctl(\"dispatch\", 'hl.dsp.window.pin(", [T + "VideoWindow"]),
+    ("resume: Play's end check without the file size", B,
+     "(\"eof-reached\", \"path\", \"time-pos\", \"duration\") + END_PROPERTIES", "(\"eof-reached\", \"path\", \"time-pos\", \"duration\")",
+     [T + "BrokenStream.test_play_at_a_real_end_before_any_poll_plays_it_again"]),
     ("seek: the slider counted as skipping", B,
      "            if (args.relative and isinstance(before, (int, float))",
      "            if (isinstance(before, (int, float))",
@@ -189,22 +235,55 @@ MUTATIONS = [
      "    if (!result.ok) { root.statsError = result.error || \"Couldn't read the listening stats\"; return }",
      "    if (!result.ok) return", ["node"]),
     ("service: the open page never refreshes", S,
-     "    if (statsPageOpen) loadStats()  // the open Stats page follows what's counted\n", "", ["node"]),
+     "    if (statsPagesOpen > 0) loadStats()  // an open Stats page follows what's counted\n", "", [T + "QmlPages"]),
+    # The round 2 fit reviewer's QML mutants, against the real Panel and Service (tests/qml/panel.qml).
+    ("panel: keys act behind the Stats page", "Panel.qml",
+     "  readonly property bool pageOpen: showAbout || showSettings || showStats", "  readonly property bool pageOpen: showAbout || showSettings",
+     [T + "QmlPages"]),
+    ("panel: the page never gets its stats", "Panel.qml",
+     "        stats: root.service ? root.service.stats : null", "        stats: null", [T + "QmlPages"]),
+    ("panel: the card ignores the Stats page's height", "Panel.qml",
+     "      root.showStats ? statsView.implicitHeight :\n", "", [T + "QmlPages"]),
+    ("panel: the Stats page always drawn", "Panel.qml",
+     "        visible: root.showStats\n", "        visible: true\n", [T + "QmlPages"]),
+    ("stats page: since without a date", "StatsView.qml",
+     "  readonly property bool counted: root.known && Number(root.stats.since) > 0", "  readonly property bool counted: root.known",
+     [T + "QmlPages"]),
+    ("stats page: the error as rich text", "StatsView.qml",
+     "    textFormat: Text.PlainText\n    wrapMode: Text.WordWrap\n    text: root.error", "    textFormat: Text.StyledText\n    wrapMode: Text.WordWrap\n    text: root.error",
+     [T + "QmlPages"]),
+    ("service: a broken stream unreported", S,
+     "    if (view.streamBroke === true) reportError(", "    if (false) reportError(", [T + "QmlPages"]),
+    ("service: the seek flag never handed back", S,
+     "    var seeked = _seekedSincePoll\n", "    var seeked = false\n", [T + "QmlPages"]),
+    ("service: the stats read thrown away", S,
+     "    call([\"stats\"], function(result) { root.applyStats(result) })", "    call([\"stats\"], function(result) { })", [T + "QmlPages"]),
+    ("barwidget: IPC stats opens About", "BarWidget.qml",
+     "panelLoader.item.setStats(true) }", "panelLoader.item.setAbout(true) }", ["node"]),
+    ("panel: pages not counted", "Panel.qml",
+     "    if (page !== countedPage) { service.pagesOpen = Math.max(0, service.pagesOpen + (page ? 1 : -1)); countedPage = page }\n", "",
+     [T + "QmlPages"]),
+    ("service: errors off the OSD behind a page", S,
+     "    if ((!panelOpen || pagesOpen > 0) && shell", "    if (!panelOpen && shell", [T + "QmlPages"]),
     ("panel: settings and stats both open", "Panel.qml",
      "    if (showSettings) { showAbout = false; showStats = false }", "    if (showSettings) { showAbout = false }", ["node"]),
 ]
 
 
 def run_tests(repo, tests):
-    ok = True
+    """(passed, the failing tests' names)."""
+    failed = []
     py = [t for t in tests if t != "node"]
     if py:
         r = subprocess.run([sys.executable, "-B", "-m", "unittest", *py], cwd=repo, capture_output=True, text=True, timeout=900)
-        ok = ok and r.returncode == 0
+        if r.returncode != 0:
+            failed += [line.split(" ", 2)[1] for line in r.stderr.splitlines()
+                       if line.startswith(("FAIL: ", "ERROR: "))] or ["unittest exit %d" % r.returncode]
     if "node" in tests:
         r = subprocess.run(["node", "--test", "tests/model.test.cjs"], cwd=repo, capture_output=True, text=True, timeout=300)
-        ok = ok and r.returncode == 0
-    return ok
+        if r.returncode != 0:
+            failed += ["node: " + line.strip()[2:].strip() for line in r.stdout.splitlines() if line.strip().startswith("✖ ")][:1] or ["node"]
+    return not failed, failed
 
 
 def main():
@@ -214,9 +293,18 @@ def main():
     repo = os.path.join(work, "repo")
     shutil.copytree(src, repo, ignore=shutil.ignore_patterns(".git", "__pycache__", "media", "branding"))
     killed = survived = 0
+    baseline = {}
     for name, path, old, new, tests in MUTATIONS:
         if only and name not in only:
             continue
+        key = tuple(tests)
+        if key not in baseline:
+            # A red baseline would count every mutant as killed.
+            baseline[key] = run_tests(repo, tests)
+            if not baseline[key][0]:
+                print("BASELINE RED  %s: %s" % (", ".join(tests), baseline[key][1]))
+        if not baseline[key][0]:
+            print("SKIP  %-40s (its tests fail unmutated)" % name); continue
         full = os.path.join(repo, path)
         original = open(full, encoding="utf-8").read()
         count = original.count(old)
@@ -224,11 +312,11 @@ def main():
             print("SKIP  %-40s (pattern found %d times)" % (name, count)); continue
         open(full, "w", encoding="utf-8").write(original.replace(old, new))
         try:
-            caught = not run_tests(repo, tests)
+            passed, failing = run_tests(repo, tests)
         finally:
             open(full, "w", encoding="utf-8").write(original)
-        if caught:
-            killed += 1; print("kill  %s" % name)
+        if not passed:
+            killed += 1; print("kill  %s  (%s)" % (name, ", ".join(failing)))
         else:
             survived += 1; print("SURVIVED  %s" % name)
         sys.stdout.flush()

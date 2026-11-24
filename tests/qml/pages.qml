@@ -110,11 +110,17 @@ Item {
     clear.clicked()
     check("the second click clears, and disarms", stats.clears === 1 && !stats.confirmClear, stats.clears)
 
+    // A fresh file: no date to show yet.
+    stats.stats = { listened: 0, speed: 0, trim: 0, skipping: 0, intro: 0, outro: 0, finished: 0, since: 0, counting: true }
+    check("a fresh file says counting starts next", find(stats, "statsSince").text.indexOf("counting starts") >= 0,
+          find(stats, "statsSince").text)
+
     // A failure is shown on the page itself (the panel's status line is hidden).
     var error = find(stats, "statsError")
     check("no error, no line", !error.visible, error.visible)
     stats.error = "Another Pocket Casts action is still running"
     check("an error shows on the page", error.visible && error.text === stats.error, error.text)
+    check("as plain text (it comes from outside)", error.textFormat === Text.PlainText, error.textFormat)
 
     Qt.exit(failures)
   }

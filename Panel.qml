@@ -53,8 +53,14 @@ Panel {
   property bool showAbout: false
   property bool showSettings: false
   property bool showStats: false
-  // The service re-reads the stats after each poll while this page is open.
-  onShowStatsChanged: if (service) service.statsPageOpen = showStats
+  // Counted on the service, as openPanels is (each panel adds itself once,
+  // and takes itself off when it closes or goes away): it re-reads the stats
+  // after each poll while a Stats page is open, and sends errors to the OSD
+  // while a page hides the status line.
+  property bool countedStats: false
+  property bool countedPage: false
+  onShowStatsChanged: notePages()
+  onPageOpenChanged: notePages()
   // The episode the right-click menu is open for, or null.
   property var menuItem: null
   property real menuX: 0
@@ -313,13 +319,25 @@ Panel {
     else if (!isOpen && countedOpen) { service.openPanels = Math.max(0, service.openPanels - 1); countedOpen = false }
   }
 
-  Component.onDestruction: noteOpen(false)
+  function notePages() {
+    if (!service) return
+    var stats = showStats, page = pageOpen  // closing the panel clears both
+    if (stats !== countedStats) { service.statsPagesOpen = Math.max(0, service.statsPagesOpen + (stats ? 1 : -1)); countedStats = stats }
+    if (page !== countedPage) { service.pagesOpen = Math.max(0, service.pagesOpen + (page ? 1 : -1)); countedPage = page }
+  }
+
+  Component.onDestruction: {
+    noteOpen(false)
+    showStats = showAbout = showSettings = false
+    notePages()
+  }
 
   implicitWidth: 1
   implicitHeight: 1
 
   onOpenedChanged: {
     noteOpen(opened)
+    notePages()
     if (!opened) {
       showAbout = false
       showSettings = false

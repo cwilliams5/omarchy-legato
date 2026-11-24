@@ -411,8 +411,8 @@ it's new (mutants killed: 8 of 20 and 24 of 44).
   duration header: mpv's duration shrinks to what arrived, so a break reads
   as the end. Fix: use the load-time duration; with neither size nor
   duration known at load, it's the end as before 1.1 (a stated limit).
-  Fixed as far as can be told: the load-time duration is used; neither size
-  nor duration at load means the end (README's known limit).
+  Not fixed by this (round 2 found it still ends for a no-size MP3): see
+  SR15-SR17.
 - [x] SR4 (medium) Play's short check still waits a full token refresh
   (hourly), and a 401 inside it refreshes under the 5 s limit. Fix: the
   token request gets its own timeout (lowered only by the sleep guard);
@@ -456,7 +456,7 @@ it's new (mutants killed: 8 of 20 and 24 of 44).
   stale while open. Fix: "…" until read; re-read on each poll while open.
   Fixed: "…" until the first read; re-read after each poll while the page
   is open.
-- [x] SR13 Tests that gave false confidence: the broken-stream push's
+- [x] SR13 (round 2: the QML part wasn't really fixed until SR19) Tests that gave false confidence: the broken-stream push's
   guards (unconfirmed, checkServer) untested; "carries on" tests passed
   with nothing playing; the `--seeked` and 300 s gap tests passed without
   their code; next/switch/absolute-seek/clear-lock/trim-change counting
@@ -468,6 +468,67 @@ it's new (mutants killed: 8 of 20 and 24 of 44).
   "private until 1.0.0"), test times (70 s / 20 s; it's ~3 min), PLAN
   "toward 1.0.3", H2's "5 s" without the refresh caveat.
   Fixed in CLAUDE.md and this plan.
+
+### SR, round 2 (2026-11-24)
+
+Fresh reviewers again: reports kept outside the repo.
+The push rules, lock order, idle cost and security hold. The break-vs-end
+judgment still lands on "played" off the one host shape the tests used,
+and the QML wiring's tests are patterns (reviewers' mutants: 6 of 12
+safety, 2 of 21 fit).
+
+- [x] SR15 (critical) A load slower than wait_for_load's 20 s stores an
+  empty load record; a later break is then the end (marked played). Fix:
+  polls fill the record in (and create one for a player an older Legato
+  loaded), and a break is judged size first.
+  Fixed: `learn_stream` fills the record from every poll (and makes one for
+  an older Legato's player); the size decides first. Tests: a slow load
+  with and without a poll before the break.
+- [x] SR16 (high) mpv misreads an MP3's duration at load (no VBR header, a
+  stitched ad: 18.4 s of 60), and the duration was checked before the size
+  evidence. Fix: the size decides whenever it's known (now or earlier).
+  Fixed: size first (known now, or earlier and gone). Unit cases for an
+  18.4-of-60 misread.
+- [x] SR17 (medium) A host with no size, serving MP3: mpv's load-time
+  duration is what has arrived (1.1 s), so every break was the end. Fix:
+  with the size never known, compare with the longest duration given
+  (Pocket Casts', mpv's at load or now), with a 10% margin.
+  Fixed: `NO_SIZE_MARGIN` against the longest duration (Pocket Casts'
+  included). Test: a no-size host breaks and ends properly. README's known
+  limit says what's left.
+- [x] SR18 (medium) A break while Pocket Casts is unreachable: Play
+  resumed from the last successful push (possibly long before). Fix:
+  resume_last keeps a further local position Pocket Casts never received,
+  as check_server already does.
+  Fixed: resume_last keeps a further, unsent local position; Pocket Casts
+  further on still wins (both tested).
+- [x] SR19 (medium) QML wiring checked only by patterns (Panel, Service,
+  BarWidget): e.g. `pageOpen` without the Stats page lets Delete remove a
+  hidden Up Next episode. Fix: an offscreen test of the real Panel and
+  Service with stand-ins.
+  Fixed: tests/qml/panel.qml runs the real Panel and Service with stand-ins
+  for Quickshell's processes and Omarchy's components (21 checks); the fit
+  reviewer's 10 QML mutants are in tests/mutate.py and killed (BarWidget's
+  IPC by pattern).
+- [x] SR20 (low) Untested edges: the speed match, skips counted by how far
+  playback moved, the 0.5 s lock cap, the fresh count after a change, the
+  1% slack's upper side, Play's end check reading the end properties.
+  Fixed: a test for each (and a pin assertion the new tag rules had made
+  meaningless, found by mutation).
+- [x] SR21 (low) `statsPageOpen` is one flag for every panel (two screens);
+  playback errors aren't visible while a page is open.
+  Fixed: panels count their Stats and other pages on the service
+  (`statsPagesOpen`, `pagesOpen`), and errors go to the OSD while a page is
+  open.
+- [x] SR22 Claims: the README's limit (it isn't only hosts sending
+  neither), "Transom, for one" (its tag support isn't released yet), What
+  it changes (stats.json, the tag rules), stale "Settings page" comments,
+  "5 s per request" (10 at most), the suite's time, PLAN SR3/SR13/H1;
+  media/stats.png predates the switch and Clear. tests/mutate.py checks
+  no baseline and doesn't name the killing test.
+  Fixed, except media/stats.png (needs a re-shot of the Stats page, with
+  Cody's OK to use an empty workspace). tests/mutate.py checks a green
+  baseline per test set and names the killing test.
 
 - [ ] H6 Ship 1.1.0 (a minor version: the stats are a feature) with the `ship-update` skill (marketplace verification
   request, Cody approves the filing).
@@ -486,6 +547,13 @@ it's new (mutants killed: 8 of 20 and 24 of 44).
   playing, 0 paused, 0 idle.
 
 ## Log
+
+- 2026-11-24: strict review rounds 1 and 2 (phase SR). Round 2's critical
+  (a slow load left no record, and a break was marked played) and high (a
+  misread MP3 duration checked before the size) fixed with the break
+  judged size first and towards a break when unsure; QML now tested with
+  the real Panel and Service offscreen. 157 Python + 36 node tests; the
+  mutation set (tests/mutate.py) 84 of 84 killed. Round 3 next.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

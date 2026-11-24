@@ -77,8 +77,8 @@ test("the stats page opens from the header, `a` and closes like the others; it r
   // A failure is kept for the page (never a blank page or a silent Clear).
   assert.match(service, /function applyStats\(result\) \{\s*if \(!result\.ok\) \{ root\.statsError = result\.error \|\| "[^"]+"; return \}\s*root\.statsError = ""\s*root\.stats = result\.data/)
   // The open page follows what's counted: re-read after each poll while open.
-  assert.match(panel, /onShowStatsChanged: if \(service\) service\.statsPageOpen = showStats/)
-  assert.match(service, /if \(statsPageOpen\) loadStats\(\)/)
+  assert.match(panel, /onShowStatsChanged: notePages\(\)/)
+  assert.match(service, /if \(statsPagesOpen > 0\) loadStats\(\)/)
   // One page at a time.
   assert.match(panel, /if \(showAbout\) \{ showSettings = false; showStats = false \}/)
   assert.match(panel, /if \(showSettings\) \{ showAbout = false; showStats = false \}/)
@@ -384,7 +384,7 @@ test("audio that never loads is reported, on the OSD when no panel is open", () 
   assert.match(service, /message\.event === "end-file" && message\.reason === "error"/)
   assert.match(service, /view\.loadFailed === true/)
   assert.match(service, /shell\.summon\("omarchy\.osd"/)
-  assert.match(service, /if \(!panelOpen && shell/)
+  assert.match(service, /if \(\(!panelOpen \|\| pagesOpen > 0\) && shell/)
 })
 
 test("the password travels on stdin, never in argv, and is cleared after use", () => {
@@ -450,6 +450,7 @@ test("About is reachable from the header, the `i` key and IPC, and resets on clo
   assert.match(panel, /if \(root\.showAbout\) \{ root\.setAbout\(false\); return \}/)
   assert.match(panel, /if \(!opened\) \{\s*showAbout = false/)
   assert.match(widget, /function about\(\): void \{ root\.open\(\); if \(panelLoader\.item\) panelLoader\.item\.setAbout\(true\) \}/)
+  assert.match(widget, /function stats\(\): void \{ root\.open\(\); if \(panelLoader\.item\) panelLoader\.item\.setStats\(true\) \}/)
 })
 
 test("install.sh ships the About page and the LICENSE it reads", () => {

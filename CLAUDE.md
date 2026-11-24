@@ -227,19 +227,25 @@ docs/PLAN.md         what's left to build
 - **A stream that breaks off part way** (`stream_broke`): mpv retries, then
   sits at `eof-reached` where it got to, just as at a real end. Calling a
   break the end is the worse mistake (it marks an unfinished episode played
-  everywhere), so it's judged by what mpv knew of the file as it loaded
-  (`stream` in playback.json: url, size, duration, from `load_into_mpv`):
-  within 10 s (or 1%) of the load-time duration, less the skip-outro (read
-  back from mpv's `file-local-options/end`), it's the end; otherwise it
-  broke if much of the file is unread, or if the size known at load is gone
-  (mpv drops it when the stream fails), or if the host sent no size but mpv
-  knew the duration. With neither known at load it's the end, as before 1.1
-  (a stated limit). `stream_stopped` pushes the position (only if the last
-  push is under `RECHECK_AFTER` old, and not while `unconfirmed` or
-  `checkServer`; otherwise it sets `checkServer`, rule 2), closes the
-  player and says so; Play loads it again from Pocket Casts' position.
+  everywhere and starts the next), so the judgment leans towards a break:
+  the file's size decides when it's known now (read to its end: the end;
+  much unread: a break, unless the show's skip-outro stopped it within 10 s
+  or 1%) or was known earlier (`stream` in playback.json, recorded at load
+  and filled in by every poll, `learn_stream`; gone now: a break, mpv drops
+  it when the stream fails). With the size never known, the longest
+  duration given (Pocket Casts', mpv's at load or since) decides, with a 10%
+  margin (`NO_SIZE_MARGIN`); with none at all it's the end, as before 1.1.
+  mpv's own durations aren't trusted alone: an MP3 without a VBR header can
+  read 18 s of 60 at load, and a no-size MP3 reads what has arrived.
+  `stream_stopped` pushes the position (only if the last push is under
+  `RECHECK_AFTER` old, and not while `unconfirmed` or `checkServer`;
+  otherwise it sets `checkServer`, rule 2), closes the player and says so.
+  Play then loads it again: from Pocket Casts' position, or from this
+  machine's further one if its push failed (`resume_last`, as check_server
+  keeps such a position for a paused player).
 - **The resume check on a press of Play** (`check_server(quick=True)`, from
-  `resume_loaded`) waits `RESUME_CHECK_TIMEOUT` (5 s) per request, not
+  `resume_loaded`) waits `RESUME_CHECK_TIMEOUT` (5 s; 10 at most with a
+  trickling answer) per request, not
   `HTTP_TIMEOUT`: unanswered, the episode plays anyway (`unconfirmed`). A
   sign-in refresh due meanwhile (at most hourly) keeps its own
   `TOKEN_TIMEOUT` (15 s; only the sleep guard lowers it): one cut short
@@ -474,7 +480,9 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   QML is otherwise only checked when the shell loads it, and a panel's
   only when it opens), plus `tests/qml/pages.qml`: the Settings and Stats
   pages laid out offscreen with stand-ins for Omarchy's Commons and Ui (they
-  read about 20 px short of the real pages). About 3 minutes; nothing
+  read about 20 px short of the real pages), and `tests/qml/panel.qml`: the
+  real Panel.qml and Service.qml with stand-ins for Quickshell's processes,
+  answering the bridge calls the service starts. About 4 minutes; nothing
   appears on screen, and the test players load no mpv-mpris (they'd be
   media players on the desktop). `tests/mutations.md` lists the planted
   regressions the suite must catch.
