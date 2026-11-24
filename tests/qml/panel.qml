@@ -246,10 +246,18 @@ Item {
     check("Stats replaces About", panel.showStats && !panel.showAbout && service.statsPagesOpen === 1 && service.pagesOpen === 1,
           service.statsPagesOpen + " " + service.pagesOpen)
     settle()
+    named("statsBack").clicked()
+    check("the page's Back closes it", !panel.showStats && !statsView.visible && service.statsPagesOpen === 0
+          && service.pagesOpen === 0, panel.showStats + " " + service.statsPagesOpen + " " + service.pagesOpen)
+    panel.setSettings(true)
+    keys.textKey("a", 0)
+    check("Stats replaces Settings", panel.showStats && !panel.showSettings && service.pagesOpen === 1,
+          panel.showStats + " " + panel.showSettings + " " + service.pagesOpen)
+    settle()
 
     // The broken stream's two messages, and a host that can't start part way.
     service.applyPlayer({ active: false, playing: false, streamBroke: true, nothingMore: true, item: null })
-    check("nothing more arriving asks to mark it played", service.actionError.indexOf("Mark it played") >= 0, service.actionError)
+    check("nothing more arriving asks to mark it played", service.actionError.indexOf("Stream ends here") >= 0, service.actionError)
     var said = [service.actionError]
     service.applyPlayer({ active: true, playing: true, position: 1, duration: 100, startedFromTop: true, item: null })
     check("a host that can't start part way is said", service.actionError.indexOf("from top") >= 0, service.actionError)

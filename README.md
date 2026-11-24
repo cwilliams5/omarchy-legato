@@ -27,10 +27,12 @@ by Nine Point Labs (MIT). What's new compared to the original:
 - **Nothing runs while paused or idle.** The original started a Python
   process every 5 seconds while playing and every minute while idle.
 - **A failed load says so,** instead of showing an episode playing in
-  silence.
+  silence, and **a dropped stream isn't finished:** the original marked
+  the episode played wherever the audio stopped.
 - **New:** Trim Silence, Volume Boost, a picture-in-picture video window,
-  each show's skip intro and outro, pausing before the computer sleeps, a
-  Settings page, right-click menus, and its own icon in the bar.
+  each show's skip intro and outro, pausing before the computer sleeps,
+  listening stats (on this computer only), a Settings page, right-click
+  menus, and its own icon in the bar.
 
 > **Unofficial.** Pocket Casts has no public API for your account. Legato
 > uses the same endpoints as the Pocket Casts web player, so a change on
@@ -185,17 +187,23 @@ devices.
   either; seeking back doesn't sync until playback gets past your place.
 - **A dropped stream, on a host that sends no file size:** when the audio
   stops part way ("Stream dropped. Press play to resume."), Legato knows it
-  broke because mpv's network layer reports a stream that ended short of
-  its size. Without a size (rare: podcast hosts send it), it goes by the
-  episode's length, so a stop in the last tenth counts as the end and
+  broke because mpv's network layer reports the failure (a reconnect, or a
+  stream that ended short of its size). Without a size from the host (rare:
+  podcast hosts send it), a cut and the end look the same there, so it goes
+  by the episode's length, so a stop in the last tenth counts as the end and
   marks the episode played. With no length either, every stop counts as
   the end, as before 1.1. The other way round, such a file much shorter
-  than Pocket Casts lists never seems to end: Legato says "Nothing more
-  arrives. Mark it played?" (right-click it in Up Next to do that).
+  than Pocket Casts lists never seems to end: Legato says "Stream ends
+  here. Mark it played?" (right-click it in Up Next to do that).
 - **A show's skip-outro needs mpv to measure the file right:** it's
   counted back from mpv's length for the file, so Legato leaves it off when
-  that disagrees with Pocket Casts' (some ad-stitched MP3s read far short),
-  and the episode plays to its end.
+  that disagrees with Pocket Casts' (some ad-stitched MP3s read far short)
+  or Pocket Casts lists no length, and the episode plays to its end.
+- **A host that stops sending but keeps the connection open:** the panel
+  shows the episode buffering, and Legato sends no position meanwhile, so
+  your phone keeps its place if you carry on there; once it plays again,
+  Pocket Casts is asked first. A link that dies outright is noticed within
+  about a minute and handled as a dropped stream.
 
 ## Built on
 

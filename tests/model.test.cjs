@@ -47,7 +47,13 @@ test("listening stats read as totals, with the time saved split by what saved it
   assert.equal(Model.fmtTotal(3 * 3600 + 5 * 60), "3 h 05 min")
   assert.equal(Model.fmtTotal(2 * 86400 + 4 * 3600 + 59), "2 d 4 h")
   assert.equal(Model.fmtDay(0), "")
-  assert.match(Model.fmtDay(Date.UTC(2026, 10, 23, 12) / 1000), /^Nov 2[34], 2026$/)
+  // The local calendar day, whatever the zone (noon local time on Nov 23).
+  assert.equal(Model.fmtDay(new Date(2026, 10, 23, 12).getTime() / 1000), "Nov 23, 2026")
+  assert.equal(Model.fmtDay(new Date(2026, 0, 1, 0, 30).getTime() / 1000), "Jan 1, 2026")
+  // Late and early in the local day (one of them is another day in UTC
+  // anywhere but UTC itself).
+  assert.equal(Model.fmtDay(new Date(2026, 10, 23, 23, 30).getTime() / 1000), "Nov 23, 2026")
+  assert.equal(Model.fmtDay(new Date(2026, 10, 23, 0, 30).getTime() / 1000), "Nov 23, 2026")
   const saved = Model.statsSaved({ speed: 100, trim: 20, skipping: 30, intro: 12, outro: 26 })
   assert.equal(saved.total, 188)
   assert.equal(saved.rows.map((r) => r.seconds).join(","), "100,20,30,38")

@@ -602,7 +602,7 @@ four rounds have each found critical or high ones there: inferring "the
 stream broke" from mpv's numbers (size, position, durations) doesn't
 converge: the judgment now needs positive evidence (below).
 
-- [x] SR31 (critical) A host that answers mpv's reconnect with an error page
+- [x] SR31 (critical; completed by SR40) A host that answers mpv's reconnect with an error page
   with a Content-Length (503, 403, 416): mpv reports the page's length as
   the size, "read to its end", marked played (the ordinary host shape).
   Fixed by the evidence approach (above): bin/legato-watch.lua and the new
@@ -681,12 +681,63 @@ Also: no "at the end means from the top" for an episode in progress (SR34),
 the skip-outro only when mpv's duration agrees with Pocket Casts' (SR33),
 a seek lifts the floor only if the start was honoured (SR35).
 
+### SR, round 5 (2026-11-24)
+
+reports kept outside the repo. Both
+reviewers found the same critical, which round 4's probe missed because it
+only ever used the suite's plain-http fake.
+
+- [x] SR40 (critical) An https stream dropped without TLS's close_notify (a
+  network, a CDN edge going), or a link gone silent, never logs FFmpeg's
+  short-end line, so the watcher saw nothing and the break was the end:
+  marked played, the next one started. Fixed: the watcher also records
+  "Will reconnect at N", which every break shape tried logs and no real
+  end does (probed: five break shapes and seven real ends over http and
+  https). Tests: HttpsStreams (the fake host behind TLS, mpv verifying it
+  with --tls-ca-file: a drop, a 503, a stall then close, a real end, an
+  M4A with its index at the back, Play after a break never pushes 0) and
+  StalledStream (http, a read timeout).
+- [x] SR41 (high, since 1.0) A stalled stream pushed its stuck position every
+  30 s over the phone you carried on with, and kept the last push fresh so
+  the gap check never asked; over https mpv's network timeout doesn't
+  apply inside the tunnel, so the stall had no limit. Fixed: no periodic
+  push while buffering or of an unmoved position; feed connections keep
+  TCP keepalive (a dead path fails within about a minute). A server alive
+  but silent still stalls, pushing nothing (README). Test: a stalled https
+  stream never rewinds the phone; keepalive set on feed sockets.
+- [x] SR42 (low) The sleep guard waited up to 40 s for the auth lock before
+  learning it may not refresh, with no overall deadline: its push could go
+  out after a sleep. Fixed: access_token refuses before the lock;
+  SLEEP_GUARD_DEADLINE (10 s) for the whole pause and push. Tests.
+- [x] SR43 (low) A group-writable plugin folder silently disables the
+  watcher (the length rule then decides): documented in CLAUDE.md, tested.
+- [x] SR44 (low) The long-gap break's `checkServer` was dead (Play goes
+  through resume_last anyway): removed; the test asserts the behaviour
+  (Play follows the phone).
+- [x] SR45 (low) Skip-outro off when Pocket Casts lists no duration:
+  documented (README) and tested.
+- [ ] SR46 (low) media/stats.png predates the Stats page's On/Off and Clear:
+  re-shoot on an empty workspace, with Cody's OK (Bitwarden on workspace 1
+  blacks out captures).
+- [x] SR47 (nits) "Stream ends here. Mark it played?"; the suite's time;
+  the README's what's-new list; history out of stream_broke's docstring.
+  Left as they are: video_rule_lua's long docstring (it records live-tested
+  Hyprland behaviour the code depends on); http_timeout's global and
+  listening_change's manual lock (work, tested); the untag rule would
+  also untag a user's own tag on Legato's window class (harmless).
+- [x] SR48 (tests) The reviewers' surviving mutants: sync_now's not-yet-
+  checked guard (a media-key resume then Stop), resume_last's finished
+  check, mark_needs_reauth's same-session check, the Stats page's Back,
+  Settings giving way to Stats, fmtDay's local day (exact now), the
+  watcher's ownership check, the outro without a listed length: tests
+  for each.
+
 - [ ] H6 Ship 1.1.0 (a minor version: the stats are a feature) with the `ship-update` skill (marketplace verification
   request, Cody approves the filing).
 
 ## Testing
 
-- `tests/run` before every commit: all suites, about 5 minutes, nothing on
+- `tests/run` before every commit: all suites, about 9 minutes, nothing on
   screen. Each new behavior gets an end-to-end test against the fake server
   (`tests/test_bridge.py`, `PlayerTestCase`; set `AUDIO_SECONDS` for longer
   audio, and the fake serves byte ranges).
@@ -719,6 +770,13 @@ a seek lifts the floor only if the start was honoured (SR35).
   that (bin/legato-watch.lua). Messages fit the OSD; the panel test runs
   signed in; the sleep guard never refreshes the sign-in. 188 Python + 36
   node tests; 137 of 137 mutants killed. Round 5 next.
+- 2026-11-24 (night): round 5 (SR40-SR48): https drops and silent links
+  logged no short-end line, so were taken for the end; the watcher now
+  also records FFmpeg's reconnects. A stalled stream no longer pushes its
+  stall; feed connections keep TCP keepalive; the sleep guard has a
+  deadline and never waits for the auth lock. The fake host now serves
+  over TLS and can stall. 204 Python + 36 node tests; 150 of 150 mutants
+  killed. Round 6 next.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

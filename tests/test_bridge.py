@@ -22,6 +22,7 @@ import re
 import shutil
 import signal
 import socket
+import ssl
 import stat
 import subprocess
 import sys
@@ -488,6 +489,24 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
             cut = s.get("cut", {}).get(name)
             if s.get("slowaudio", {}).get(name):  # a slow host: the first byte takes a while
                 time.sleep(s["slowaudio"][name])
+            if name in s.get("hang", {}):
+                # The link stalls part way: the first `hang` bytes, then
+                # nothing for `hangFor` seconds with the connection open, then
+                # it closes; reconnects get nothing.
+                if s.setdefault("hangServed", {}).get(name):
+                    self.close_connection = True
+                    return
+                s["hangServed"][name] = True
+                self.send_response(200)
+                self.send_header("Content-Type", "audio/mpeg")
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Content-Length", str(len(blob)))
+                self.end_headers()
+                self.wfile.write(blob[:s["hang"][name]])
+                self.wfile.flush()
+                time.sleep(s.get("hangFor", 60))
+                self.close_connection = True
+                return
             if name in s.get("nosize", ()):
                 # A host that sends no size and serves no ranges: the body
                 # runs until the connection closes (cut, if asked, part way).
@@ -1287,6 +1306,29 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         """What mpv-mpris does for a media key or playerctl: straight to mpv."""
         with bridge.Mpv.connect() as player:
             player.set("pause", paused)
+
+    def test_a_media_key_resume_then_stop_pushes_nothing_unchecked(self):
+        # Strict review 5: playing again by a media key (not yet checked with
+        # Pocket Casts), then Stop before any poll: the phone's further
+        # position stays.
+        self.play_then_pause()
+        self.other_device(EP_1, 25)
+        self.mpv_set_pause(False)
+        time.sleep(1)
+        run_bridge("stop")
+        self.assertEqual(self.fake["progress"][EP_1], 25)
+
+    def test_play_never_restarts_an_episode_finished_elsewhere(self):
+        # The player closed; the phone finished the episode. Play takes the
+        # top of Up Next, never the finished one from the top.
+        self.play_then_pause()
+        run_bridge("stop")
+        state = bridge.load_playback()
+        state["atTop"] = False  # only the finished check can tell
+        bridge.save_playback(state)
+        self.other_device(EP_1, 30, bridge.STATUS_PLAYED)
+        self.fake["upnext"] = [EP_2]
+        self.assertEqual(run_bridge("toggle")["data"]["item"]["uuid"], EP_2)
 
     def test_resume_follows_a_rewind_on_another_device(self):
         # Rule 2 when Pocket Casts is behind this machine's last push: the
@@ -2097,7 +2139,9 @@ class BrokenStream(PlayerTestCase):
         self.assertTrue(run_bridge("player")["data"].get("streamBroke"))
         self.assertEqual(len([b for b in self.writes("/sync/update_episode") if b["uuid"] == EP_1]), before)
         self.assertEqual(self.fake["progress"][EP_1], 25)
-        self.assertTrue(bridge.load_playback().get("checkServer"))
+        self.fake["cut"] = {}
+        self.assertGreater(run_bridge("toggle")["data"]["position"], 24)  # Play follows the phone
+        self.assertGreaterEqual(self.fake["progress"][EP_1], 25)
 
     def break_without_a_poll(self):
         self.fake["cut"] = {EP_1: len(self.audio) // 5}
@@ -2481,9 +2525,10 @@ class BrokenStream(PlayerTestCase):
         self.assertIn("stream-pos", bridge.END_PROPERTIES)
 
     def test_the_watcher_records_a_cut_short_stream(self):
-        # The watcher itself, in mpv's own Lua: FFmpeg's line for a sized
-        # stream is recorded (the latest), the one for a host that gave no
-        # size isn't, other messages aren't, and a new file starts clean.
+        # The watcher itself, in mpv's own Lua: FFmpeg's short-end line for a
+        # sized stream and its reconnect lines (an https drop, a timeout) are
+        # recorded (the latest), the short-end line for a host that gave no
+        # size isn't, other components' aren't, and a new file starts clean.
         lua = shutil.which("lua5.1") or shutil.which("luajit")
         if not lua:
             self.skipTest("no Lua 5.1 to run mpv's script in")
@@ -2502,13 +2547,18 @@ class BrokenStream(PlayerTestCase):
             show()
             handlers["log-message"]({ prefix = "ffmpeg", level = "error", text = "http: Stream ends prematurely at 30000, should be 120270" })
             show()
+            handlers["log-message"]({ prefix = "ffmpeg", level = "warn", text = "https: Will reconnect at 41000 in 0 second(s), error=Input/output error.\n" })
+            show()
+            handlers["log-message"]({ prefix = "ffmpeg", level = "warn", text = "http: Will reconnect at 52000 in 1 second(s), error=Connection timed out.\n" })
+            show()
             handlers["start-file"]({})
             show()
             io.write(props.level)
         """
         done = subprocess.run([lua, "-e", harness], capture_output=True, text=True, timeout=10,
                               env={"WATCH": str(ROOT / "bin" / "legato-watch.lua"), "PATH": "/usr/bin"})
-        self.assertEqual(done.stdout, "true nil;true 24054;true 24054;true 30000;true nil;error", done.stderr)
+        self.assertEqual(done.stdout, "true nil;true 24054;true 24054;true 30000;true 41000;true 52000;true nil;warn",
+                         done.stderr)
 
     def test_polls_fill_in_what_a_slow_load_missed(self):
         url = "http://example.com/a.mp3"
@@ -3200,6 +3250,249 @@ class AboutTests(TempHome):
         result = run_bridge("status")
         self.assertTrue(result["ok"])
         self.assertEqual(result["data"]["python"], "%d.%d.%d" % sys.version_info[:3])
+
+
+def make_cert(folder):
+    """A certificate for 127.0.0.1, for the TLS host (mpv verifies it against
+    this file: --tls-ca-file, verification stays on)."""
+    key, cert = os.path.join(folder, "key.pem"), os.path.join(folder, "cert.pem")
+    subprocess.run(["/usr/bin/openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key,
+                    "-out", cert, "-days", "2", "-subj", "/CN=localhost", "-addext", "subjectAltName=IP:127.0.0.1"],
+                   check=True, capture_output=True)
+    return key, cert
+
+
+@NEEDS_PLAYER
+@unittest.skipUnless(os.path.exists("/usr/bin/openssl"), "needs openssl for the TLS host")
+class HttpsStreams(PlayerTestCase):
+    """Strict review 5: the ordinary podcast host is https. A connection that
+    drops without TLS's close_notify (a network, a CDN edge going) or a link
+    that goes silent never logs FFmpeg's "Stream ends prematurely" line;
+    both log "Will reconnect at N". The same fake host, behind TLS."""
+
+    AUDIO_SECONDS = 30
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.tls_dir = tempfile.mkdtemp(prefix="legato-tls-")
+        key, cls.cert = make_cert(cls.tls_dir)
+        cls.tls = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakePocketCasts)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cls.cert, key)
+        cls.tls.socket = context.wrap_socket(cls.tls.socket, server_side=True)
+        threading.Thread(target=cls.tls.serve_forever, daemon=True).start()
+        cls.tls_base = "https://127.0.0.1:%d" % cls.tls.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tls.shutdown()
+        cls.tls.server_close()
+        shutil.rmtree(cls.tls_dir, ignore_errors=True)
+        super().tearDownClass()
+
+    def setUp(self):
+        super().setUp()
+        for uuid, episode in self.fake["episodes"].items():
+            episode["duration"] = self.AUDIO_SECONDS
+            episode["url"] = self.tls_base + "/audio/%s.mp3" % uuid
+        patcher = mock.patch.object(bridge, "MPV_EXTRA_ARGS", ("--ao=null", "--tls-ca-file=" + self.cert))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def settled(self, uuid=EP_1, timeout=60):
+        return self.wait_for(lambda: (lambda v: v if v.get("streamBroke") or v.get("ended")
+                                      or (v["item"] or {}).get("uuid") != uuid else None)(run_bridge("player")["data"]),
+                             timeout=timeout)
+
+    def assert_broke(self, view):
+        self.assertTrue(view.get("streamBroke"), view)
+        self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+        self.assertEqual(self.fake["upnext"][0], EP_1)
+
+    def test_an_https_stream_that_drops_part_way_is_not_finished(self):
+        self.fake["cut"] = {EP_1: len(self.audio) // 5}  # closed without close_notify
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.assert_broke(self.settled())
+
+    def test_an_https_stream_whose_reconnect_gets_a_503_is_not_finished(self):
+        self.fake["cut"] = {EP_1: len(self.audio) // 5}
+        self.fake["cutReply"] = 503
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.assert_broke(self.settled())
+
+    def test_an_https_stream_that_stalls_then_closes_is_not_finished(self):
+        self.fake["hang"] = {EP_1: len(self.audio) // 5}
+        self.fake["hangFor"] = 8
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.assert_broke(self.settled())
+
+    def test_an_https_stream_played_to_its_end_is_finished(self):
+        self.fake["progress"][EP_1] = 25
+        self.fake["status"][EP_1] = bridge.STATUS_IN_PROGRESS
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.settled()
+        self.assertEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+
+    def test_an_https_m4a_with_its_index_at_the_back_ends_properly(self):
+        # Several range requests (the index at the back first): none of them
+        # a failure, so a real end.
+        self.fake["media"] = {EP_1: encode(["-f", "lavfi", "-i", "sine=duration=600", "-c:a", "aac", "-b:a", "32k"], ".m4a")}
+        self.fake["episodes"][EP_1].update(duration=600, url=self.tls_base + "/audio/%s.m4a" % EP_1)
+        self.fake["progress"][EP_1] = 595
+        self.fake["status"][EP_1] = bridge.STATUS_IN_PROGRESS
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.settled()
+        self.assertEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+
+    def test_play_after_an_https_break_never_pushes_zero(self):
+        self.fake["upnext"] = [EP_1]  # nothing to autoplay
+        self.fake["cut"] = {EP_1: len(self.audio) // 5}
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.settled()
+        self.fake["cut"] = {}  # the network is back
+        before = len(self.writes("/sync/update_episode"))
+        run_bridge("toggle")
+        self.assertNotIn(0, [b["position"] for b in self.writes("/sync/update_episode")[before:] if b["uuid"] == EP_1])
+
+    def test_a_stalled_https_stream_never_rewinds_the_phone(self):
+        # The host stops sending and keeps the connection open: mpv waits.
+        # You carry on with the phone; the laptop used to push the stall
+        # every 30 s.
+        self.fake["hang"] = {EP_1: len(self.audio) // 5}
+        self.fake["hangFor"] = 90
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: (lambda v: v if v["buffering"] and v["position"] > 3 else None)(run_bridge("player")["data"]),
+                      timeout=40)
+        time.sleep(3)
+        self.fake["progress"][EP_1] = 25  # the phone listened on
+        state = bridge.load_playback()
+        state["lastSyncAt"] = time.time() - 31  # the 30 s push is due
+        bridge.save_playback(state)
+        run_bridge("player")
+        self.assertGreaterEqual(self.fake["progress"][EP_1], 25)
+
+
+@NEEDS_PLAYER
+class StalledStream(PlayerTestCase):
+    """Plain http; the link stalls part way and the reconnects get nothing.
+    mpv's network timeout cut from Legato's 30 s to 3 s."""
+
+    AUDIO_SECONDS = 30
+
+    def setUp(self):
+        super().setUp()
+        for episode in self.fake["episodes"].values():
+            episode["duration"] = self.AUDIO_SECONDS
+        patcher = mock.patch.object(bridge, "MPV_EXTRA_ARGS", ("--ao=null", "--network-timeout=3"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_stream_that_stalls_part_way_is_not_finished(self):
+        self.fake["hang"] = {EP_1: len(self.audio) // 5}
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        view = self.wait_for(lambda: (lambda v: v if v.get("streamBroke") or v.get("ended")
+                                      or (v["item"] or {}).get("uuid") != EP_1 else None)(run_bridge("player")["data"]),
+                             timeout=90)
+        self.assertTrue(view.get("streamBroke"), view)
+        self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+
+
+class Round5Units(TempHome):
+    """Strict review 5's smaller findings and the guards its mutants slipped past."""
+
+    def test_the_watcher_is_loaded_only_from_a_folder_nobody_else_writes(self):
+        with tempfile.TemporaryDirectory() as plugin:
+            folder = os.path.join(plugin, "bin")
+            os.mkdir(folder, 0o755)
+            with open(os.path.join(folder, "legato-watch.lua"), "w") as fh:
+                fh.write("-- watcher")
+            os.chmod(plugin, 0o755)
+            with mock.patch.object(bridge, "__file__", os.path.join(folder, "legato-bridge")):
+                self.assertEqual(bridge.watch_script(), os.path.join(os.path.realpath(folder), "legato-watch.lua"))
+                os.chmod(folder, 0o775)  # group-writable: refused (the length rule then decides)
+                self.assertEqual(bridge.watch_script(), "")
+
+    def test_feed_connections_notice_a_dead_link(self):
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        try:
+            with mock.patch.object(bridge, "feed_address_allowed", lambda address, allow_local: True):
+                sock = bridge.connect_feed_host("127.0.0.1", server.getsockname()[1], False)
+            with sock:
+                self.assertEqual(sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE), 1)
+                self.assertLessEqual(sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE), 30)
+        finally:
+            server.close()
+
+    def test_the_sleep_guard_never_waits_for_the_auth_lock(self):
+        # Another call refreshing on a slow link holds the auth lock: the
+        # guard, which may not refresh anyway, doesn't wait for it (logind
+        # waits 15 s at most).
+        bridge.save_auth({"access_token": "old", "refresh_token": "r1", "expires_at": 0, "uuid": "u"})
+        other = bridge.auth_lock()
+        other.__enter__()
+        try:
+            with mock.patch.object(bridge, "REFRESH_ALLOWED", False):
+                started = time.monotonic()
+                with self.assertRaises(bridge.ApiError):
+                    bridge.access_token(bridge.load_auth())
+                self.assertLess(time.monotonic() - started, 2)
+        finally:
+            other.__exit__(None, None, None)
+
+    def test_the_sleep_guard_gives_up_within_its_deadline(self):
+        class Monitor:
+            stdout = iter(())
+            def terminate(self):
+                pass
+        alarm, term = signal.getsignal(signal.SIGALRM), signal.getsignal(signal.SIGTERM)
+        try:
+            with mock.patch.object(bridge, "trusted_tool", lambda name: "/usr/bin/true"), \
+                    mock.patch.object(bridge.subprocess, "Popen", lambda *a, **k: Monitor()), \
+                    mock.patch.object(bridge, "wait_for_sleep", lambda lines: True), \
+                    mock.patch.object(bridge, "pause_for_sleep", lambda: time.sleep(5)), \
+                    mock.patch.object(bridge, "SLEEP_GUARD_DEADLINE", 1):
+                started = time.monotonic()
+                with self.assertRaises(bridge.ApiError) as ctx:
+                    bridge.cmd_sleepguard(None)
+                self.assertEqual(ctx.exception.code, "sleepguard")
+                self.assertLess(time.monotonic() - started, 3)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, alarm)
+            signal.signal(signal.SIGTERM, term)
+
+    def test_a_stale_call_never_flags_a_new_session_expired(self):
+        # A call still holding the old session's tokens, after you signed out
+        # and in again: its failed refresh mustn't mark the new one expired.
+        bridge.save_auth({"access_token": "a2", "refresh_token": "r2", "expires_at": time.time() + 3600, "uuid": "u"})
+        with self.assertRaises(bridge.ApiError):
+            bridge.mark_needs_reauth({"access_token": "a1", "refresh_token": "r1", "uuid": "u"})
+        self.assertNotIn("needs_reauth", bridge.load_auth())
+        with self.assertRaises(bridge.ApiError):
+            bridge.mark_needs_reauth(bridge.load_auth())
+        self.assertTrue(bridge.load_auth()["needs_reauth"])
+
+    def test_no_outro_without_a_listed_length(self):
+        # Pocket Casts lists no duration: mpv's can't be checked, so the
+        # outro stays off (the episode plays to its end) rather than risk a
+        # misread one ending it at once.
+        self.assertFalse(bridge.outro_applies(0, 1800.0, 0, 30))
+        self.assertTrue(bridge.outro_applies(1800, 1795.0, 0, 30))
+        self.assertTrue(bridge.outro_applies(1800, 1900.0, 0, 30))   # longer than listed: ads
+        self.assertFalse(bridge.outro_applies(1800, 1500.0, 0, 30))  # far short: misread
+        self.assertFalse(bridge.outro_applies(1800, 1795.0, 1780, 30))  # starts inside the outro
+        self.assertFalse(bridge.outro_applies(1800, None, 0, 30))
 
 
 if __name__ == "__main__":

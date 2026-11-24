@@ -208,7 +208,10 @@ docs/PLAN.md         what's left to build
   event triggers one `player` poll, which pushes the position when due,
   handles the end of an episode (mark played, autoplay the next) and runs the
   resume check.
-- **Sync:** pushes every 30 s while playing, at once on pause or seek; a
+- **Sync:** pushes every 30 s while playing (never while mpv is buffering,
+  nor a position that hasn't moved since the last push: a stalled stream
+  pushed its stall over the phone you carried on with, and kept the last
+  push fresh so the gap check never asked), at once on pause or seek; a
   resume asks first (rule 2). Pocket Casts keeps the playing episode at the
   top of Up Next; `playback.json`'s `atTop` records whether this machine's
   episode was put there, so a different top later means another device moved
@@ -237,20 +240,25 @@ docs/PLAN.md         what's left to build
   positions, durations: an error page's length taken for the size, a host
   without ranges keeping its size, misread MP3 durations, an M4A's index
   left unread), so it rests on evidence: Legato's mpv script
-  (`bin/legato-watch.lua`) records FFmpeg's "Stream ends prematurely at N,
-  should be M" for the file playing (`user-data/legato`), logged whenever a
-  stream whose size the host gave ends short of it. Recorded, and mpv read
-  no further than N (`READ_PAST_CUT`; a reconnect that worked reads on): a
-  break. Not recorded, with a size from the host: the end. Only a host
-  that gives no size (FFmpeg logs the line at every end there, M unknown)
-  or a player without the watcher (an older Legato's) falls back to the
+  (`bin/legato-watch.lua`) records, for the file playing
+  (`user-data/legato`), where FFmpeg's http layer saw the stream fail:
+  "Will reconnect at N" (a read failed: a dropped connection, an https one
+  closed without TLS's close_notify, a link that timed out) or "Stream ends
+  prematurely at N, should be M" with the host's size M (a clean close
+  short of it). Recorded, and mpv read no further than N (`READ_PAST_CUT`;
+  a reconnect that worked reads on): a break. Not recorded, with a size
+  from the host: the end. Only a host that gives no size (FFmpeg logs the
+  short-end line at every end there, M unknown) or a player without the
+  watcher (an older Legato's, or one whose plugin folder others can write:
+  `watch_script` refuses it) falls back to the
   longest duration given (Pocket Casts', mpv's at load or since, `stream`
   in playback.json, filled in by polls, `learn_stream`), with a 10% margin
   (`NO_SIZE_MARGIN`) and the skip-outro allowed for; with no duration at
   all it's the end, as before 1.1. `stream_stopped` pushes the position
   (only if the last push is under `RECHECK_AFTER` old, not while
   `unconfirmed` or `checkServer`, and not below the load's start;
-  otherwise it sets `checkServer`, rule 2), closes the player and says so;
+  otherwise nothing: the next Play asks Pocket Casts anyway,
+  `resume_last`), closes the player and says so;
   a reload that got nothing (it stopped again within 2 s of where it began,
   with no seek since) asks you to mark the episode played, never doing it
   itself. Play loads it again from Pocket Casts' position, or from this
@@ -302,8 +310,10 @@ docs/PLAN.md         what's left to build
   legato-bridge sleepguard`. The guard waits on `dbus-monitor` for logind's
   PrepareForSleep (a broadcast only: a signal sent straight to the monitor
   has a destination and is ignored), then pauses a playing episode, pushes
-  its position (4 s deadline, with the current sign-in only: a refresh cut
-  short there could sign you out), sets `checkServer`, and exits, releasing the delay; the
+  its position (4 s per request and `SLEEP_GUARD_DEADLINE`, 10 s, for all
+  of it; with the current sign-in only, never waiting for the auth lock: a
+  refresh cut short there could sign you out), sets `checkServer`, and
+  exits, releasing the delay; the
   service starts a fresh guard 3 s later. A guard that fails instead
   waits longer each time (6 s, doubling) and after five failures in a row
   the service gives up and says so, until the next episode is loaded. A
@@ -426,14 +436,22 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   depends on the host: `stream-end` (the size) reads None after a refused
   reconnect, the error page's length (70 bytes) after one answered with a
   503 or 403, and stays the full size on a host without ranges (no
-  reconnect). What doesn't vary: FFmpeg logs `http: Stream ends
-  prematurely at N, should be M` (level error, prefix `ffmpeg`) for every
-  break of a stream whose size the host gave, and nothing at a real end
-  (MP3, an M4A with its index at the back, an ad-stitched MP3: probed with
-  mpv's log from its start). With no size, M reads 18446744073709551615 and
-  the line comes at every end. The failure happens as the cache fills,
-  often in the first second, before anything but a script loaded with mpv
-  could hear it. At a real end `stream-pos` stops short of the size by
+  reconnect). What FFmpeg logs (prefix `ffmpeg`) also varies: `Stream
+  ends prematurely at N, should be M` (error) comes only for a clean close
+  short of a known size (plain http, or https with close_notify); an https
+  connection closed without close_notify gives a TLS pull error, and a link
+  that goes silent a read timeout. Every break tried logs `Will reconnect
+  at N` (warn), though, and no real end tried logs either line: an MP3
+  over http and https, closed with or without close_notify or left open
+  after the last byte; an M4A with its index at the back over both; an
+  ad-stitched MP3 over http (probed with mpv's log from its start, and in
+  the suite's HttpsStreams and BrokenStream, round 5). With no size, the short-end line's M reads
+  18446744073709551615 and it comes at every end. The failure happens as
+  the cache fills, often in the first second, before anything but a script
+  loaded with mpv could hear it. mpv's `--network-timeout` doesn't reach
+  inside an https CONNECT tunnel: the feed proxy's upstream sockets keep
+  TCP keepalive (`keep_alive`: a dead path fails within about a minute); a
+  server alive but silent still stalls, pushing nothing. At a real end `stream-pos` stops short of the size by
   what follows the audio: about 100 bytes for an MP3 (a trailing tag), the
   whole index for an M4A written without `+faststart`.
 - **Dragging a widget off the Omarchy bar disables its plugin** (Omarchy
@@ -526,7 +544,7 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   pages laid out offscreen with stand-ins for Omarchy's Commons and Ui (they
   read about 20 px short of the real pages), and `tests/qml/panel.qml`: the
   real Panel.qml and Service.qml with stand-ins for Quickshell's processes,
-  answering the bridge calls the service starts. About 5 minutes; nothing
+  answering the bridge calls the service starts. About 9 minutes; nothing
   appears on screen, and the test players load no mpv-mpris (they'd be
   media players on the desktop). `tests/mutations.md` lists the planted
   regressions the suite must catch.

@@ -8,22 +8,23 @@ and runs the tests meant to catch each. A mutation that passes them is a
 
 ```bash
 tests/run                          # first: a green baseline (a red one "kills" everything)
-python3 -B tests/mutate.py .       # all of them, about an hour
+python3 -B tests/mutate.py .       # all of them, about 80 minutes
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (137 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (150 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
 it.
 
-## The set (137; strict review rounds 1 to 4, 2026-11-24)
+## The set (150; strict review rounds 1 to 5, 2026-11-24)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
 (a red baseline would count everything as killed) and names the test that
 caught each mutant. By area:
 
-- **Broken stream vs the end**: the watcher's evidence (its cut, a
+- **Broken stream vs the end**: the watcher's evidence (reconnect lines,
+  its warn level, its cut, a
   reconnect that read on, a size without a cut, the load's size, players
   without the watcher, the property read at an end, the script loaded at
   all) and the watcher's own Lua (unknown sizes, other components' lines,
@@ -37,8 +38,12 @@ caught each mutant. By area:
   while unconfirmed, before the check; Pocket Casts further on winning
   after the player closed, and a further unsent local position kept.
 - **Play's quick check and sign-in**: short only on Play, never cutting a
-  refresh short, no refresh before sleep, the deadline held while a
-  refresh is stored, the 5 s value.
+  refresh short, no refresh before sleep and no wait for its lock, the
+  guard's own deadline, the deadline held while a refresh is stored, a
+  stale call never flagging a new session, the 5 s value.
+- **Stalls and resumes**: no push while buffering, keepalive on feed
+  connections, a media-key resume then Stop pushing nothing unchecked, a
+  finished episode never restarted.
 - **Listening stats**: the seek flag and its bound, the speed and Trim
   matches, the bounds, the gap, buffering, another file, a pause, errors,
   skips counted as gone (not as asked), the counts around pause, speed,
@@ -87,6 +92,13 @@ caught each mutant. By area:
   the misread duration, which mpv refuses anyway) got a break near the end
   and a 10 s outro. Final: 137 of 137 killed, on a green suite (188 Python
   tests, 36 node).
+- Round 5 (the reviewers' own): 12 of 20 behaviour mutants (fit), 9 of 13
+  (safety); their survivors are tests now. This set after round 5's fixes:
+  149 of 151 on a green suite; one survivor was a redundant check (the
+  refresh guard repeated inside refresh_tokens, removed with its mutant),
+  the other a date test whose times fell on the same day in UTC (late and
+  early local times added, run against the node suite). Final: 150 of 150
+  killed (204 Python tests, 36 node).
 - Equivalent and left out: dropping `after > before` from the skip count
   (`add_stats` ignores values that aren't positive).
 

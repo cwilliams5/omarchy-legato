@@ -939,11 +939,6 @@ def refresh_tokens(auth):
             return current["access_token"]  # another call refreshed it
         auth.clear()
         auth.update(current)  # refresh the session as it is on disk now
-        if not REFRESH_ALLOWED:
-            # Before sleep (pause_for_sleep): a refresh cut short by its 4 s
-            # limit after Pocket Casts rotated the refresh token would sign you
-            # out. The push waits; the next resume asks Pocket Casts (rule 2).
-            raise ApiError("network", "No sign-in refresh just before sleep")
         # The call's deadline waits until the answer is stored: one landing
         # between Pocket Casts' answer and the write would lose a rotated
         # refresh token. TOKEN_TIMEOUT bounds the wait.
@@ -970,6 +965,12 @@ def access_token(auth, force_refresh=False):
         return auth["access_token"]
     if not auth.get("refresh_token"):
         mark_needs_reauth(auth)
+    if not REFRESH_ALLOWED:
+        # Before sleep (pause_for_sleep): a refresh cut short by its 4 s limit
+        # after Pocket Casts rotated the refresh token would sign you out, and
+        # the auth lock another call holds could keep the push past the sleep.
+        # The push waits; the next resume asks Pocket Casts (rule 2).
+        raise ApiError("network", "No sign-in refresh just before sleep")
     return refresh_tokens(auth)
 
 
@@ -2499,14 +2500,17 @@ def stream_broke(snap, state):
     up or answered with an error page; mpv retries for a while first). Only
     the first finishes the episode. Calling a break the end is the worse
     mistake: it marks an unfinished episode played on every device and starts
-    the next. Judging it from mpv's numbers (sizes, positions, durations)
-    failed four strict reviews in a row on host shapes nobody had tried, so
-    the judgment rests on evidence:
+    the next. mpv's numbers (sizes, positions, durations) can't tell them
+    apart on every host (an error page's length read as the size, a host
+    without ranges keeping its size, misread MP3 durations), so the judgment
+    rests on what FFmpeg reports:
 
     1. The watcher (bin/legato-watch.lua, in every player since 1.1) records
-       FFmpeg's "Stream ends prematurely at N" for the file playing: the host
-       gave a size and the stream ended short of it. Recorded, and mpv read
-       no further (a reconnect that worked reads on): a break.
+       where FFmpeg's http layer saw the stream fail for the file playing
+       ("Will reconnect at N": a read failed, over http or https, a dropped
+       or silent link; "Stream ends prematurely at N" with the host's size:
+       a clean close short of it). Recorded, and mpv read no further (a
+       reconnect that worked reads on): a break.
     2. No such line, and the host gave a size: the end. A real end logs
        nothing, whatever mpv's estimated duration says (an M4A's index after
        its audio, a misread MP3, a show's skip-outro).
@@ -2592,16 +2596,15 @@ def stream_stopped(state, prefs, position):
     finished. Where it got to is pushed (it was playing here, so this machine
     produced it) unless its resume is still unconfirmed or unchecked, or the
     last push is over RECHECK_AFTER old (the shell was down, the machine
-    slept: another device may have carried on since, so rule 2 asks first).
+    slept: another device may have carried on since; the next Play asks
+    Pocket Casts anyway, resume_last).
     The player is closed: the next play loads it again from where Pocket
     Casts has it, like any play after the idle unload."""
     episode = state.get("episode") or {}
     if isinstance(position, (int, float)):
         state["position"] = float(position)
         recent = time.time() - float(state.get("lastSyncAt") or 0) < RECHECK_AFTER
-        if not recent:
-            state["checkServer"] = True
-        elif (episode.get("uuid") and not state.get("unconfirmed") and not state.get("checkServer")
+        if (recent and episode.get("uuid") and not state.get("unconfirmed") and not state.get("checkServer")
                 and not below_start(state, position)):
             try:
                 push_position(episode, position)
@@ -2833,7 +2836,13 @@ def poll(autoplay=True, seeked=False):
             return player_view(snap, state, prefs)
         return poll_after_change(state, prefs)
     due = False
-    if snap.get("pause") is False and now - float(state.get("lastSyncAt") or 0) >= SYNC_INTERVAL:
+    if (snap.get("pause") is False and now - float(state.get("lastSyncAt") or 0) >= SYNC_INTERVAL
+            and snap.get("paused-for-cache") is not True and moved_since_push(state)):
+        # Only a position playing here produces (rule 1). A stalled stream
+        # (buffering, the link gone quiet) sits still: pushing it pulled the
+        # phone you carried on with back to the stall, every poll, and kept
+        # the last push fresh, so the gap check never asked first. Unpushed,
+        # the gap grows, and once it plays again Pocket Casts is asked.
         due = True
     elif (snap.get("pause") is True and moved_since_push(state) and not state.get("unconfirmed")
           and now - float(state.get("lastSyncAt") or 0) < RECHECK_AFTER):
@@ -3072,6 +3081,20 @@ def resolve_feed_host(host, port):
         return []
 
 
+def keep_alive(sock):
+    """TCP keepalive on a feed connection. mpv's own network timeout doesn't
+    reach inside the https tunnel, so a path that died without a word (Wi-Fi
+    gone, a NAT or VPN dropping it) left mpv buffering for as long as TCP
+    waits, hours. Probed after 20 s of silence, it fails within about a
+    minute: the relay closes, mpv reconnects or gives up, and the watcher
+    sees the break. (A server that's alive but sends nothing still stalls:
+    nothing is pushed meanwhile, poll.)"""
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    for name, value in (("TCP_KEEPIDLE", 20), ("TCP_KEEPINTVL", 10), ("TCP_KEEPCNT", 4)):
+        if hasattr(socket, name):
+            sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, name), value)
+
+
 def connect_feed_host(host, port, allow_local):
     """A socket to `host` on an allowed address, checked again once
     connected. Raises FeedRefused when no address may be used."""
@@ -3083,6 +3106,7 @@ def connect_feed_host(host, port, allow_local):
         try:
             sock.connect(sockaddr)
             if feed_address_allowed(sock.getpeername()[0], allow_local):
+                keep_alive(sock)
                 return sock
         except OSError:
             pass
@@ -3596,6 +3620,7 @@ def cmd_speed(args):
 # so the push gets a short deadline of its own.
 
 SLEEP_PUSH_TIMEOUT = 4
+SLEEP_GUARD_DEADLINE = 10
 
 
 def wait_for_sleep(lines):
@@ -3661,7 +3686,17 @@ def cmd_sleepguard(args):
         # The monitor ended without announcing a sleep (D-Bus restarted, say):
         # a failure, so the service backs off instead of restarting it at once.
         raise ApiError("sleepguard", "The sleep monitor stopped before any sleep")
-    paused = pause_for_sleep()
+    # The whole pause and push within SLEEP_GUARD_DEADLINE (logind waits 15 s
+    # at most): a push that waited on a lock could go out after the machine
+    # slept and woke, over whatever was played meanwhile.
+    signal.signal(signal.SIGALRM, _deadline_passed)
+    signal.alarm(SLEEP_GUARD_DEADLINE)
+    try:
+        paused = pause_for_sleep()
+    except DeadlinePassed:
+        raise ApiError("sleepguard", "Pausing before sleep took too long")
+    finally:
+        signal.alarm(0)
     out({"sleeping": sleeping, "paused": paused})
 
 
