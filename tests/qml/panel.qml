@@ -13,7 +13,12 @@ Item {
   height: 1200
 
   property int failures: 0
-  property var summoned: []
+  // The texts of the running `notify` calls (desktop notifications).
+  function notices() {
+    return Processes.started.filter(function(p) {
+      try { return p.running && p.command.indexOf("notify") >= 0 } catch (e) { return false }
+    }).map(function(p) { return p.command[p.command.indexOf("notify") + 1] })
+  }
 
   function check(name, ok, detail) {
     if (ok) console.warn("ok " + name)
@@ -128,7 +133,8 @@ Item {
     var service = panel.service
     service.python = "/usr/bin/python3"  // no interpreter probe
     service.authenticated = true
-    service.shell = { summon: function(id, json) { top.summoned = top.summoned.concat([JSON.parse(json).message]) } }
+    // Omarchy's shell refuses a third-party plugin's OSD summon: none here.
+    service.shell = {}
     var keys = find(panel, function(i) { return typeof i.textKey === "function" && "blocked" in i })
     var card = find(panel, function(i) { return typeof i.fittedContentHeight === "function" })
     var statsView = named("statsView")
@@ -142,6 +148,9 @@ Item {
     keys.textKey("n", 0)
     check("n on the main view asks for the next episode", calls("next").length === 1, calls("next").length)
     settle()
+    service.reportError("y")
+    check("with the main view showing, an error stays in the status line", notices().length === 0,
+          JSON.stringify(notices()))
 
     // The header's Stats button opens the page; `a` closes it again.
     named("statsButton").clicked()
@@ -210,11 +219,13 @@ Item {
     answerExactly("stats", top.stats)
     check("a good read clears it", !named("statsError").visible && statsView.error === "", statsView.error)
 
-    // An error from playback reaches the OSD while a page hides the status line.
-    top.summoned = []
+    // An error from playback goes out as a notification while a page hides
+    // the status line.
+    settle()
     service.applyPlayer({ active: false, playing: false, streamBroke: true, item: null })
     check("a broken stream is reported", service.actionError.indexOf("Stream dropped") >= 0, service.actionError)
-    check("and reaches the OSD while a page is open", top.summoned.length === 1, JSON.stringify(top.summoned))
+    check("and sent as a notification while a page is open",
+          JSON.stringify(notices()) === JSON.stringify([service.actionError]), JSON.stringify(notices()))
 
     // The switch and Clear reach the bridge. A read asked before the switch
     // answers into nothing (it may have read the file before the change).
@@ -239,9 +250,19 @@ Item {
           panel.showStats + " " + service.statsPagesOpen + " " + service.pagesOpen)
     service.applyPlayer({ active: true, playing: true, position: 13, duration: 100, item: null })
     check("no stats read behind About", exactly("stats").length === 0, exactly("stats").length)
-    top.summoned = []
+    settle()
     service.reportError("x")
-    check("an error behind About reaches the OSD", top.summoned.length === 1, JSON.stringify(top.summoned))
+    check("an error behind About is sent as a notification", JSON.stringify(notices()) === "[\"x\"]",
+          JSON.stringify(notices()))
+    settle()
+    // The license shown takes the privacy text's place: the page still fits
+    // (both together hung 113 px below the panel).
+    var about = named("aboutView")
+    named("aboutLicense").clicked()
+    about.forceLayout()
+    check("About with its license open fits the panel", about.implicitHeight + 32 <= 760 - 20
+          && named("aboutLicenseText").visible && !named("aboutPrivacy").visible, about.implicitHeight)
+    named("aboutLicense").clicked()
     keys.textKey("a", 0)
     check("Stats replaces About", panel.showStats && !panel.showAbout && service.statsPagesOpen === 1 && service.pagesOpen === 1,
           service.statsPagesOpen + " " + service.pagesOpen)
@@ -249,6 +270,10 @@ Item {
     named("statsBack").clicked()
     check("the page's Back closes it", !panel.showStats && !statsView.visible && service.statsPagesOpen === 0
           && service.pagesOpen === 0, panel.showStats + " " + service.statsPagesOpen + " " + service.pagesOpen)
+    // A page opened over an open right-click menu closes it.
+    panel.menuItem = top.episode
+    keys.textKey("i", 0)
+    check("a page closes an open menu", panel.showAbout && panel.menuItem === null, JSON.stringify(panel.menuItem))
     panel.setSettings(true)
     keys.textKey("a", 0)
     check("Stats replaces Settings", panel.showStats && !panel.showSettings && service.pagesOpen === 1,
@@ -268,7 +293,7 @@ Item {
     said.push(service.actionError)
     // Omarchy's OSD shows one line of about 38 characters (325 px at its
     // title size); longer is cut off, advice and all.
-    check("every playback message fits the OSD", said.every(function(m) { return m.length > 0 && m.length <= 38 }),
+    check("every playback message fits one line", said.every(function(m) { return m.length > 0 && m.length <= 38 }),
           JSON.stringify(said))
     settle()
 
@@ -328,6 +353,9 @@ Item {
     // and takes it off when it goes away while showing it.
     var other = panelMaker.createObject(top)
     check("the second panel shares the service", other.service === service, other.service === service)
+    var otherLocal = find(other, function(i) { return i.objectName === "localService" })
+    check("and makes no idle copy of it (it would take the legato IPC target)",
+          otherLocal && otherLocal.active === false && otherLocal.item === null, otherLocal && otherLocal.item)
     other.open()
     other.setStats(true)
     check("its Stats page is counted", service.statsPagesOpen === 1 && service.pagesOpen === 1,

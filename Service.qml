@@ -309,12 +309,13 @@ Item {
   }
 
   // An error from an action you took with the panel closed (middle-click,
-  // a keybind) would otherwise go unseen: show it on the shell's OSD too.
-  // Also while a page (About, Settings, Stats) hides the panel's status line.
+  // a keybind) or from playback would otherwise go unseen: send it as a
+  // desktop notification too (bridge `notify`; Omarchy's OSD refuses a
+  // third-party plugin). Also while a page (About, Settings, Stats) hides
+  // the panel's status line.
   function reportError(text) {
     flash(text, true)
-    if ((!panelOpen || pagesOpen > 0) && shell && typeof shell.summon === "function")
-      shell.summon("omarchy.osd", JSON.stringify({ icon: "media", message: text, duration: 4000 }))
+    if (!panelOpen || pagesOpen > 0) call(["notify", String(text)], function(result) {})
   }
 
   // An episode whose audio never arrives (its server is down, say) must not
@@ -523,14 +524,13 @@ Item {
     if (!view) return
     if (view.loadFailed === true) loadFailed("")
     if (view.playerHung === true) reportError("Player stopped responding. Press play.")
-    // Every message here fits Omarchy's OSD on one line (about 38 characters
-    // at its title size) and the panel's status line; the README has the
-    // detail. The stream broke off part way (the network or the episode's
+    // Every message here fits the panel's status line (and a notification's
+    // single line; about 38 characters); the README has the detail. The stream broke off part way (the network or the episode's
     // server went): not finished, the player is closed, play loads it again.
     // If the reload got nothing at all, it may be the end, misjudged: it asks
     // you to mark it played (Up Next's right-click; the bridge never does
     // that by itself).
-    if (view.nothingMore === true) reportError("Stream ends here. Mark it played?")
+    if (view.nothingMore === true) reportError("Stream ends here: mark it played.")
     else if (view.streamBroke === true) reportError("Stream dropped. Press play to resume.")
     // A host that can't start part way: it plays from the top, and Legato
     // sends no position until playback passes where you were.

@@ -1,5 +1,6 @@
 import QtQuick
 import "../.."
+import "../../Model.js" as Model
 
 // The panel's Settings and Stats pages, laid out offscreen with stand-ins for
 // Omarchy's Commons and Ui (tests/qml/imports), run by test_bridge.QmlPages:
@@ -88,6 +89,8 @@ Item {
     check("listened", find(stats, "statsListened").text === "1 d 14 h", find(stats, "statsListened").text)
     check("time saved in total", find(stats, "statsSavedTotal").text === "1 d 3 h", find(stats, "statsSavedTotal").text)
     check("counting on: the switch says On", find(stats, "statsCounting").text === "On", find(stats, "statsCounting").text)
+    check("since the first count's day", find(stats, "statsSince").text === "listened on this computer since "
+          + Model.fmtDay(1789300000), find(stats, "statsSince").text)
     // Each row its own number: speed 19 h 10 min, Trim 6 h 48 min,
     // skipping 51 min, intro + outro 21 min; 63 finished.
     var rows = [0, 1, 2, 3].map(function(i) { return find(stats, "statsRowValue" + i).text })

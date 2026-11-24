@@ -87,8 +87,8 @@ test("the stats page opens from the header, `a` and closes like the others; it r
   assert.match(panel, /onShowStatsChanged: notePages\(\)/)
   assert.match(service, /if \(statsPagesOpen > 0\) loadStats\(\)/)
   // One page at a time.
-  assert.match(panel, /if \(showAbout\) \{ showSettings = false; showStats = false \}/)
-  assert.match(panel, /if \(showSettings\) \{ showAbout = false; showStats = false \}/)
+  assert.match(panel, /if \(showAbout\) \{ showSettings = false; showStats = false; closeMenu\(\) \}/)
+  assert.match(panel, /if \(showSettings\) \{ showAbout = false; showStats = false; closeMenu\(\) \}/)
   assert.match(panel, /if \(showStats\) \{\s*showAbout = false\s*showSettings = false/)
   // A failed poll gives the seek flag back.
   assert.match(service, /if \(!result\.ok && seeked\) root\._seekedSincePoll = true/)
@@ -386,12 +386,13 @@ test("nothing runs on a timer while paused or idle; while playing, polls are syn
   assert.match(service, /observe_property/)
 })
 
-test("audio that never loads is reported, on the OSD when no panel is open", () => {
+test("audio that never loads is reported, as a notification when no panel shows it", () => {
   const service = fs.readFileSync(path.join(ROOT, "Service.qml"), "utf8")
   assert.match(service, /message\.event === "end-file" && message\.reason === "error"/)
   assert.match(service, /view\.loadFailed === true/)
-  assert.match(service, /shell\.summon\("omarchy\.osd"/)
-  assert.match(service, /if \(\(!panelOpen \|\| pagesOpen > 0\) && shell/)
+  // Omarchy's shell refuses a third-party plugin's OSD summon (the panel
+  // test checks the notification itself).
+  assert.ok(!/omarchy\.osd/.test(service), "no OSD summon: Omarchy refuses it")
 })
 
 test("the password travels on stdin, never in argv, and is cleared after use", () => {
@@ -413,6 +414,9 @@ test("About: facts come from the repo, details and the issue link are well forme
   assert.equal(JSON.parse(manifest).author, "Cody Williams")
   assert.equal(About.NAME, JSON.parse(manifest).name)
   assert.equal(About.MAINTAINER, "Cody Williams")
+  // The listening stats are named in the privacy text: kept here, never sent.
+  assert.match(About.PRIVACY, /stats/i)
+  assert.match(About.PRIVACY, /never sent|stay on this computer|only on this computer/i)
   assert.match(About.BASED_ON, /^Nine Point Labs' Pocket Casts plugin$/)
   assert.equal(About.SUPPORT_URL, JSON.parse(manifest).homepage + "/issues")
   assert.match(About.TAGLINE, /not affiliated with or endorsed by Pocket Casts or Automattic/)

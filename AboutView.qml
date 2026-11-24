@@ -178,8 +178,11 @@ Column {
     }
   }
 
+  // "Read it" shows the license where the privacy text was, so the page
+  // keeps its height (both together hung below the panel).
   Text {
     width: parent.width
+    visible: !root.showLicense
     text: "PRIVACY"
     color: root.dim
     font.family: root.fontFamily
@@ -188,6 +191,7 @@ Column {
   }
   Text {
     objectName: "aboutPrivacy"
+    visible: !root.showLicense
     width: parent.width
     wrapMode: Text.WordWrap
     textFormat: Text.PlainText

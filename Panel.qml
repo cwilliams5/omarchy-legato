@@ -30,7 +30,7 @@ Panel {
   // same instance. A shell without service support gets a local one.
   readonly property var sharedService: bar && bar.shell && typeof bar.shell.serviceFor === "function"
     ? bar.shell.serviceFor(moduleName) : null
-  readonly property var service: sharedService || localService
+  readonly property var service: sharedService || (localService.item || null)
 
   function pushSettings() { if (service) service.settings = settings }
   onSettingsChanged: pushSettings()
@@ -84,15 +84,17 @@ Panel {
     python: service ? service.pythonVersion : ""
   })
 
+  // A page opened over an open right-click menu closes the menu (it acts on
+  // the list the page hides).
   function setAbout(on) {
     showAbout = !!on
-    if (showAbout) { showSettings = false; showStats = false }
+    if (showAbout) { showSettings = false; showStats = false; closeMenu() }
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
   function setSettings(on) {
     showSettings = !!on
-    if (showSettings) { showAbout = false; showStats = false }
+    if (showSettings) { showAbout = false; showStats = false; closeMenu() }
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
@@ -102,6 +104,7 @@ Panel {
     if (showStats) {
       showAbout = false
       showSettings = false
+      closeMenu()
       if (service) service.loadStats()
     }
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -360,9 +363,14 @@ Panel {
     })
   }
 
-  Service {
+  // Made only when the shell has no service to share: an idle copy would
+  // still register the `legato` IPC target, and whichever registers first
+  // takes it (the shell log warned of the second at every start).
+  Loader {
     id: localService
+    objectName: "localService"
     active: root.sharedService === null
+    sourceComponent: Service {}
   }
 
   // ------------------------------------------------------------- pieces --

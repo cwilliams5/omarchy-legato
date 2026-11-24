@@ -92,7 +92,7 @@ Column {
         ? (root.counted ? "listened on this computer since " + Model.fmtDay(root.stats.since) + ". Not counting now."
                         : "Not counting: turned off below.")
         : root.counted ? "listened on this computer since " + Model.fmtDay(root.stats.since)
-                       : "listened on this computer: counting starts with the next episode you play"
+                       : "listened on this computer: counting starts as you listen"
       color: root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall

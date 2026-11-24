@@ -8,15 +8,15 @@ and runs the tests meant to catch each. A mutation that passes them is a
 
 ```bash
 tests/run                          # first: a green baseline (a red one "kills" everything)
-python3 -B tests/mutate.py .       # all of them, about 80 minutes
+python3 -B tests/mutate.py .       # all of them, about 90 minutes
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (150 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (162 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
 it.
 
-## The set (150; strict review rounds 1 to 5, 2026-11-24)
+## The set (162; strict review rounds 1 to 6, 2026-11-25)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
@@ -41,8 +41,11 @@ caught each mutant. By area:
   refresh short, no refresh before sleep and no wait for its lock, the
   guard's own deadline, the deadline held while a refresh is stored, a
   stale call never flagging a new session, the 5 s value.
-- **Stalls and resumes**: no push while buffering, keepalive on feed
-  connections, a media-key resume then Stop pushing nothing unchecked, a
+- **Hosts without ranges**: judged by reading to the size, with mpv's
+  `seekable` read at the end; an end far from the size, or past it.
+- **Stalls and resumes**: a stall is an interruption (no push by a pause,
+  stop or the break; a check once it heals; the watcher's timing), no
+  push while buffering, keepalive on feed connections, a media-key resume then Stop pushing nothing unchecked, a
   finished episode never restarted.
 - **Listening stats**: the seek flag and its bound, the speed and Trim
   matches, the bounds, the gap, buffering, another file, a pause, errors,
@@ -99,6 +102,14 @@ caught each mutant. By area:
   the other a date test whose times fell on the same day in UTC (late and
   early local times added, run against the node suite). Final: 150 of 150
   killed (204 Python tests, 36 node).
+- Round 6 (the reviewers' own): 27 of 41 (fit; 8 real survivors), and the
+  safety reviewer's 2 of 8 that survived. Their gaps are tests now. This
+  set after round 6's fixes: 160 of 163; the survivors were an end-only
+  read made redundant by the stall work (Play now takes the full
+  snapshot), `seekable` caught only by an M4A whose index is at the back
+  (pointed there), and a stall-then-break test that polled during the
+  stall (now it doesn't). Final: 162 of 162 killed (218 Python tests, 36
+  node).
 - Equivalent and left out: dropping `after > before` from the skip count
   (`add_stats` ignores values that aren't positive).
 

@@ -135,6 +135,14 @@ STATS_KEYS = ("listened", "speed", "trim", "skipping", "intro", "outro")
 # where FFmpeg saw a sized stream end short; mpv having read this far past
 # that spot means a reconnect worked and the stream went on.
 READ_PAST_CUT = 64 * 1024
+# A stream read straight through (a host without byte ranges) ends where its
+# size says: mpv stops this close to it at a real end (about 100 bytes for an
+# MP3's trailing tag, 81 for an M4A) and far short at a break.
+READ_TO_END = 4096
+# Stuck this long (mpv buffering, nothing arriving), the stream counts as
+# interrupted, like a pause: its position isn't pushed (you may have carried
+# on with your phone meanwhile), and playing on asks Pocket Casts first.
+STALL_AFTER = 15
 # With no size from the host (or no watcher), an end counts only within this
 # share of the longest duration given (Pocket Casts', mpv's), or BROKE_SLACK
 # seconds if that's more: podcast files and their listed durations differ by
@@ -1339,8 +1347,8 @@ def up_next_remove(uuids):
 # ---------------------------------------------------------------------- mpv
 
 MPV_PROPERTIES = ("path", "pause", "time-pos", "duration", "volume", "speed", "eof-reached", "vid", "track-list", "af",
-                  "idle-active", "paused-for-cache", "playlist-count", "stream-end")
-END_PROPERTIES = ("stream-pos", "stream-end", "file-local-options/end", "user-data/legato")
+                  "idle-active", "paused-for-cache", "playlist-count", "stream-end", "user-data/legato")
+END_PROPERTIES = ("stream-pos", "stream-end", "file-local-options/end", "seekable")
 
 
 def runtime_dir(create=False):
@@ -2500,28 +2508,30 @@ def stream_broke(snap, state):
     up or answered with an error page; mpv retries for a while first). Only
     the first finishes the episode. Calling a break the end is the worse
     mistake: it marks an unfinished episode played on every device and starts
-    the next. mpv's numbers (sizes, positions, durations) can't tell them
-    apart on every host (an error page's length read as the size, a host
-    without ranges keeping its size, misread MP3 durations), so the judgment
-    rests on what FFmpeg reports:
+    the next. mpv's numbers alone can't tell them apart on every host (an
+    error page's length read as the size, misread MP3 durations, an M4A's
+    index left unread), so it goes by what the host is and what FFmpeg says:
 
-    1. The watcher (bin/legato-watch.lua, in every player since 1.1) records
-       where FFmpeg's http layer saw the stream fail for the file playing
-       ("Will reconnect at N": a read failed, over http or https, a dropped
-       or silent link; "Stream ends prematurely at N" with the host's size:
-       a clean close short of it). Recorded, and mpv read no further (a
-       reconnect that worked reads on): a break.
-    2. No such line, and the host gave a size: the end. A real end logs
-       nothing, whatever mpv's estimated duration says (an M4A's index after
-       its audio, a misread MP3, a show's skip-outro).
-    3. A host that gives no size (FFmpeg can't tell a cut from the end
-       there), or a player without the watcher (started by an older Legato):
-       compared with the longest duration given (Pocket Casts', mpv's at load
-       or since), it's the end only within NO_SIZE_MARGIN of it, the
-       skip-outro allowed for. With no duration at all, the end, as before 1.1.
+    1. A host that serves byte ranges (mpv: `seekable`): FFmpeg reconnects
+       on any failure and logs it ("Will reconnect at N"; "Stream ends
+       prematurely at N" for a clean close short of the size), which the
+       watcher (bin/legato-watch.lua) records for the file playing. Recorded,
+       and mpv read no further (a reconnect that worked reads on, to the
+       end): a break. Nothing recorded: the end.
+    2. A host that gives a size but no ranges: the stream is read straight
+       through and FFmpeg can't reconnect (an https drop or a timeout logs no
+       such line). The end only if mpv read to the size (READ_TO_END); short
+       of it, or nothing read at all (an M4A whose index is at the back
+       can't play there), a break.
+    3. A host that gives no size (FFmpeg can't tell a cut from the end), or a
+       player without the watcher (started by an older Legato, or refused by
+       watch_script): compared with the longest duration given (Pocket
+       Casts', mpv's at load or since), it's the end only within
+       NO_SIZE_MARGIN of it, the skip-outro allowed for. With no duration at
+       all, the end, as before 1.1.
 
-    A real end misjudged by 3 leaves the episode in progress: Play loads it
-    again at its end, which stops again and says to mark it played
+    A real end misjudged leaves the episode in progress: Play loads it again
+    at its end, which stops again and asks you to mark it played
     (stream_stopped); nothing is pushed back."""
     if snap.get("eof-reached") is not True:
         return False
@@ -2536,12 +2546,16 @@ def stream_broke(snap, state):
 
     watch = snap.get("user-data/legato")
     if isinstance(watch, dict) and watch.get("watching") is True:
-        cut, read = watch.get("cut"), snap.get("stream-pos")
-        if number(cut) and not (number(read) and read > cut + READ_PAST_CUT):
+        read = snap.get("stream-pos")
+        # The size the host gave at load, else now (after a failed reconnect
+        # mpv can report an error page's length instead).
+        size = next((s for s in (loaded.get("size"), snap.get("stream-end")) if number(s) and s > 0), None)
+        to_end = number(read) and size is not None and 0 <= size - read <= READ_TO_END
+        cut = watch.get("cut")
+        if number(cut) and not to_end and not (number(read) and read > cut + READ_PAST_CUT):
             return True
-        sizes = (snap.get("stream-end"), loaded.get("size"))
-        if any(number(size) and size > 0 for size in sizes):
-            return False
+        if size is not None:
+            return False if snap.get("seekable") is True else not to_end
     skip = skip_last_of(snap.get("file-local-options/end"))
     durations = [d for d in (snap.get("duration"), loaded.get("duration"), (state.get("episode") or {}).get("duration"))
                  if number(d) and d > 0]
@@ -2549,6 +2563,24 @@ def stream_broke(snap, state):
         return False
     longest = max(durations)
     return position < longest - skip - max(BROKE_SLACK, longest * NO_SIZE_MARGIN)
+
+
+def stall_seen(watch, state):
+    """A stall of STALL_AFTER or more (the watcher times mpv's buffering):
+    "now" while it lasts, "ended" once it's over and not yet handled
+    (`stallHandled`, the end's time), else None."""
+    if not isinstance(watch, dict):
+        return None
+    since = watch.get("stallSince")
+    if isinstance(since, (int, float)) and time.time() - since >= STALL_AFTER:
+        return "now"
+    last = watch.get("lastStall")
+    if isinstance(last, dict):
+        began, ended = last.get("since"), last.get("ended")
+        if (isinstance(began, (int, float)) and isinstance(ended, (int, float)) and ended - began >= STALL_AFTER
+                and ended > float(state.get("stallHandled") or 0)):
+            return "ended"
+    return None
 
 
 def below_start(state, position):
@@ -2591,20 +2623,21 @@ def learn_stream(state, snap):
     state["stream"] = record
 
 
-def stream_stopped(state, prefs, position):
+def stream_stopped(state, prefs, position, stalled=False):
     """The episode's stream broke off part way (stream_broke): it's not
     finished. Where it got to is pushed (it was playing here, so this machine
     produced it) unless its resume is still unconfirmed or unchecked, or the
     last push is over RECHECK_AFTER old (the shell was down, the machine
-    slept: another device may have carried on since; the next Play asks
-    Pocket Casts anyway, resume_last).
+    slept) or it stalled for a while first (`stalled`): another device may
+    have carried on since; the next Play asks Pocket Casts anyway,
+    resume_last.
     The player is closed: the next play loads it again from where Pocket
     Casts has it, like any play after the idle unload."""
     episode = state.get("episode") or {}
     if isinstance(position, (int, float)):
         state["position"] = float(position)
         recent = time.time() - float(state.get("lastSyncAt") or 0) < RECHECK_AFTER
-        if (recent and episode.get("uuid") and not state.get("unconfirmed") and not state.get("checkServer")
+        if (recent and not stalled and episode.get("uuid") and not state.get("unconfirmed") and not state.get("checkServer")
                 and not below_start(state, position)):
             try:
                 push_position(episode, position)
@@ -2724,11 +2757,12 @@ def resume_loaded(player, state, prefs):
     if player.get("pause") is False and not at_end:
         return  # already playing (a media key got there first)
     if at_end:
-        snap = {name: player.get(name) for name in ("eof-reached", "path", "time-pos", "duration") + END_PROPERTIES}
+        snap = player.snapshot()
         if snap.get("path") == (state.get("episode") or {}).get("url") and stream_broke(snap, state):
             # Its stream broke off before a poll saw it: not the end (playing it
             # again from the top would push 0). Load it again from where it got to.
-            stream_stopped(state, prefs, snap.get("time-pos"))
+            stream_stopped(state, prefs, snap.get("time-pos"),
+                           stalled=bool(stall_seen(snap.get("user-data/legato"), state)))
             resume_last(prefs)
             return
     if at_end or ended_here(state):
@@ -2798,7 +2832,7 @@ def poll(autoplay=True, seeked=False):
         state["position"] = float(position)
     if state.get("handledEnd") != episode.get("uuid") and stream_broke(snap, state):
         # Not the end: the stream broke off. Say so; nothing is marked played.
-        return stream_stopped(state, prefs, position)
+        return stream_stopped(state, prefs, position, stalled=bool(stall_seen(snap.get("user-data/legato"), state)))
     if snap.get("eof-reached") is True and state.get("handledEnd") != episode.get("uuid"):
         outro = skip_last_of(snap.get("file-local-options/end"))
         if outro:
@@ -2817,6 +2851,16 @@ def poll(autoplay=True, seeked=False):
         reopen_ended(state, position)
         return player_view(snap, state, prefs)
     now = time.time()
+    stall = stall_seen(snap.get("user-data/legato"), state)
+    if stall:
+        # Stuck for a while (the link went quiet): an interruption, like a
+        # pause. Nothing is pushed while it lasts (you may carry on with your
+        # phone meanwhile), and playing on after it asks Pocket Casts first.
+        state["checkServer"] = True
+        if stall == "now":
+            save_playback(state)
+            return player_view(snap, state, prefs)
+        state["stallHandled"] = snap["user-data/legato"]["lastStall"]["ended"]
     if snap.get("pause") is True:
         # Whoever paused it (this panel, a media key, playerctl), the next
         # resume asks Pocket Casts first.
@@ -2907,6 +2951,12 @@ def sync_now(player, state, force=False):
     if not episode.get("uuid") or not isinstance(position, (int, float)):
         return
     state["position"] = float(position)
+    if stall_seen(player.get("user-data/legato"), state):
+        # Where a stalled stream got stuck isn't news: you may have carried
+        # on with your phone meanwhile. The next resume asks first.
+        state["checkServer"] = True
+        save_playback(state)
+        return
     if player.get("eof-reached") is True or state.get("unconfirmed") or below_start(state, position):
         # At the end (it's played), on a resume Pocket Casts never
         # confirmed (nothing is pushed until it answers, rule 2), or short of
@@ -3652,18 +3702,29 @@ def pause_for_sleep():
     global HTTP_TIMEOUT, REFRESH_ALLOWED
     HTTP_TIMEOUT = SLEEP_PUSH_TIMEOUT
     REFRESH_ALLOWED = False
-    with StateLock(timeout=2):
-        state = load_playback()
-        player = Mpv.connect(timeout=1.0)
-        if not player:
+    player = Mpv.connect(timeout=1.0)
+    if not player:
+        return False
+    with player:
+        if player.get("pause") is not False or player.get("eof-reached") is True:
             return False
-        with player:
-            if player.get("pause") is not False or player.get("eof-reached") is True:
-                return False
-            player.set("pause", True)
+        # Paused first, before the state lock: a poll pushing on a slow link
+        # can hold that for many seconds, and the machine is about to sleep.
+        player.set("pause", True)
+        try:
+            lock = StateLock(timeout=2)
+            lock.__enter__()
+        except ApiError:
+            # Paused, not pushed: the poll that sees the pause sets
+            # checkServer, and the next resume asks Pocket Casts first.
+            return True
+        try:
+            state = load_playback()
             state["checkServer"] = True
-            sync_now(player, state, force=True)  # nothing if unconfirmed (sync_now)
-        return True
+            sync_now(player, state, force=True)  # nothing if unconfirmed or stalled (sync_now)
+        finally:
+            lock.__exit__(None, None, None)
+    return True
 
 
 def cmd_sleepguard(args):
@@ -3826,6 +3887,28 @@ def cmd_stop(args):
     out(view)
 
 
+NOTIFY_MAX = 300
+
+
+def cmd_notify(args):
+    """A desktop notification (`notify-send`, which Omarchy's shell shows and
+    keeps in its notification list): how the panel's errors reach you while
+    it's closed. Omarchy's OSD takes no messages from a third-party plugin
+    (its shell answers such a summon with false). The text is one argument
+    after `--`, never parsed as an option, and capped."""
+    tool = trusted_tool("notify-send")
+    if not tool:
+        raise ApiError("no_notify", "notify-send isn't installed")
+    text = " ".join(str(args.text or "").split())[:NOTIFY_MAX]
+    try:
+        subprocess.run([tool, "--app-name=Legato", "--urgency=normal", "--", "Legato", text],
+                       env=child_env(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=5, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        raise ApiError("notify", "The notification couldn't be sent")
+    out({"sent": True})
+
+
 def cmd_stats(args):
     """The listening stats counted on this computer (stats.json), after an
     optional change: `on` / `off` (counting, in prefs.json) or `clear`
@@ -3972,6 +4055,8 @@ def build_parser():
     p = sub.add_parser("stop"); p.add_argument("--if-paused", action="store_true"); p.set_defaults(fn=cmd_stop)
     p = sub.add_parser("stats"); p.add_argument("value", nargs="?", choices=("on", "off", "clear"))
     p.set_defaults(fn=cmd_stats)
+
+    p = sub.add_parser("notify"); p.add_argument("text"); p.set_defaults(fn=cmd_notify)
 
     p = sub.add_parser("mark"); p.add_argument("state", choices=("played", "unplayed")); p.add_argument("uuid")
     p.add_argument("--podcast", required=True); p.set_defaults(fn=cmd_mark)

@@ -158,8 +158,9 @@ docs/PLAN.md         what's left to build
    load failed: close the player and report it. Why: a failed load must not
    trigger an Up Next switch or a resume check.
 4. **Nothing runs on a timer while paused or idle.** (While an episode is
-   loaded, playing or paused, one process waits: the sleep guard, blocked on
-   D-Bus with no timer; with nothing loaded, nothing at all.) The only
+   loaded, playing or paused, two processes wait with no timer: the sleep
+   guard, blocked on D-Bus, and the feed proxy mpv fetches through, which
+   ends with mpv; with nothing loaded, nothing at all.) The only
    repeating timers run while playing: one poll every 32 s (just over the bridge's 30 s
    `SYNC_INTERVAL`, so each one pushes) and the slider tick while a panel is
    open. Everything else arrives as an mpv event on the socket.
@@ -191,8 +192,12 @@ docs/PLAN.md         what's left to build
    true (tests compare it with the hosts the bridge can reach).
 7. **Every text that comes from outside renders as plain text**
    (`Text.PlainText`): episode titles, error messages, mpv's error strings.
-8. **Errors from actions taken with the panel closed go to the OSD too**
-   (`reportError`), or nobody sees them.
+8. **Errors from actions taken with the panel closed go out as desktop
+   notifications too** (`reportError` → `bridge notify` → `notify-send`), or
+   nobody sees them. Not Omarchy's OSD: its shell refuses a summon from a
+   plugin whose kinds lack `bar` unless it clones omarchy.audio, media or
+   monitor (`pluginCloneMaySummon`, `barPluginMayControl` in shell.qml), and
+   says nothing; 1.0's OSD messages never showed.
 
 ## How it works, in one screen
 
@@ -209,10 +214,14 @@ docs/PLAN.md         what's left to build
   handles the end of an episode (mark played, autoplay the next) and runs the
   resume check.
 - **Sync:** pushes every 30 s while playing (never while mpv is buffering,
-  nor a position that hasn't moved since the last push: a stalled stream
-  pushed its stall over the phone you carried on with, and kept the last
-  push fresh so the gap check never asked), at once on pause or seek; a
-  resume asks first (rule 2). Pocket Casts keeps the playing episode at the
+  nor a position that hasn't moved since the last push), at once on pause
+  or seek; a resume asks first (rule 2). A stall of `STALL_AFTER` (15 s) or
+  more (the watcher times mpv's `paused-for-cache`: `stallSince`,
+  `lastStall`; `stall_seen`) is an interruption, like a pause: nothing is
+  pushed while it lasts nor by a pause, stop, next, switch, sleep or break
+  push meanwhile (`sync_now`, `stream_stopped`), and once it plays again
+  the poll asks Pocket Casts first (`stallHandled` marks it done). A
+  stalled stream used to push its stall over the phone you carried on with. Pocket Casts keeps the playing episode at the
   top of Up Next; `playback.json`'s `atTop` records whether this machine's
   episode was put there, so a different top later means another device moved
   on.
@@ -231,7 +240,7 @@ docs/PLAN.md         what's left to build
   (`stop --if-paused`). The next play goes through `resume_last`, which asks
   Pocket Casts what to play.
 - **Load failures:** while the stream opens, the view reads as buffering; if
-  mpv gives up, the panel and the OSD say so once.
+  mpv gives up, the panel (or a notification) says so once.
 - **A stream that breaks off part way** (`stream_broke`): mpv retries, then
   sits at `eof-reached` where it got to, just as at a real end. Calling a
   break the end is the worse mistake (it marks an unfinished episode played
@@ -246,10 +255,16 @@ docs/PLAN.md         what's left to build
   closed without TLS's close_notify, a link that timed out) or "Stream ends
   prematurely at N, should be M" with the host's size M (a clean close
   short of it). Recorded, and mpv read no further than N (`READ_PAST_CUT`;
-  a reconnect that worked reads on): a break. Not recorded, with a size
-  from the host: the end. Only a host that gives no size (FFmpeg logs the
-  short-end line at every end there, M unknown) or a player without the
-  watcher (an older Legato's, or one whose plugin folder others can write:
+  a reconnect that worked reads on, to the size): a break. Not recorded,
+  with a size from the host: on a host with byte ranges (mpv's `seekable`)
+  the end, since FFmpeg reconnects (and says so) on any failure there; on
+  one without, FFmpeg can't reconnect and an https drop or a timeout logs
+  neither line, so the end only if mpv read to the size (`READ_TO_END`,
+  4 KiB; a real end stops about 100 bytes short, a break far short, and an
+  M4A whose index is at the back reads nothing there: it can't play). Only
+  a host that gives no size (FFmpeg logs the short-end line at every end
+  there, M unknown, and an https one TLS errors too) or a player without
+  the watcher (an older Legato's, or one whose plugin folder others can write:
   `watch_script` refuses it) falls back to the
   longest duration given (Pocket Casts', mpv's at load or since, `stream`
   in playback.json, filled in by polls, `learn_stream`), with a 10% margin
@@ -309,11 +324,12 @@ docs/PLAN.md         what's left to build
   `systemd-inhibit --what=sleep --mode=delay … setpriv --pdeathsig TERM
   legato-bridge sleepguard`. The guard waits on `dbus-monitor` for logind's
   PrepareForSleep (a broadcast only: a signal sent straight to the monitor
-  has a destination and is ignored), then pauses a playing episode, pushes
-  its position (4 s per request and `SLEEP_GUARD_DEADLINE`, 10 s, for all
-  of it; with the current sign-in only, never waiting for the auth lock: a
-  refresh cut short there could sign you out), sets `checkServer`, and
-  exits, releasing the delay; the
+  has a destination and is ignored), then pauses a playing episode (before
+  taking the state lock, which a poll pushing on a slow link can hold for
+  many seconds), pushes its position if it gets the lock within 2 s (4 s
+  per request and `SLEEP_GUARD_DEADLINE`, 10 s, for all of it; with the
+  current sign-in only, never waiting for the auth lock: a refresh cut
+  short there could sign you out), sets `checkServer`, and exits, releasing the delay; the
   service starts a fresh guard 3 s later. A guard that fails instead
   waits longer each time (6 s, doubling) and after five failures in a row
   the service gives up and says so, until the next episode is loaded. A
@@ -379,8 +395,13 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   FFmpeg's `silenceremove` (with `stop_silence`, `detection` and
   `timestamp`) through `lavfi`: what phases B and C need.
 - **Quickshell's `Socket`** (path, connected, write, flush, SplitParser)
-  carries the mpv events. Plugins can summon the OSD with
-  `shell.summon("omarchy.osd", '{"icon":"media","message":..,"duration":ms}')`.
+  carries the mpv events. Omarchy's OSD (`shell.summon("omarchy.osd", ..)`)
+  answers false to a plugin like Legato (rule 8), with no log line.
+- **A fallback Service still registers its IPC target.** Quickshell keeps
+  an `IpcHandler` with `enabled: false` registered, and the first handler
+  of a target wins (the shell logs "another handler is registered" for the
+  second). Each panel made an idle Service for shells without service
+  support; it's a Loader now, active only then.
 - **Qt 6.12** adds a QtQuick `Color` type: a bare `Color.x` in plugin QML no
   longer reaches `qs.Commons`' Color and renders black. The original has 7
   such references (PLAN A2).
@@ -451,7 +472,12 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   loaded with mpv could hear it. mpv's `--network-timeout` doesn't reach
   inside an https CONNECT tunnel: the feed proxy's upstream sockets keep
   TCP keepalive (`keep_alive`: a dead path fails within about a minute); a
-  server alive but silent still stalls, pushing nothing. At a real end `stream-pos` stops short of the size by
+  server alive but silent still stalls (an interruption after 15 s,
+  pushing nothing). On a host without byte ranges (no `Accept-Ranges`)
+  FFmpeg marks the stream unseekable and never reconnects (libmpv sets
+  `reconnect` but not `reconnect_streamed`): no "Will reconnect", and an
+  https drop or a timeout no short-end line either; mpv's `seekable` reads
+  false there, and the size stays known (round 6 probe). At a real end `stream-pos` stops short of the size by
   what follows the audio: about 100 bytes for an MP3 (a trailing tag), the
   whole index for an M4A written without `+faststart`.
 - **Dragging a widget off the Omarchy bar disables its plugin** (Omarchy

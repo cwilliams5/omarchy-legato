@@ -68,8 +68,8 @@ by Nine Point Labs (MIT). What's new compared to the original:
   top and Transparency, which lets your desktop show through while you work
   in other windows (it turns solid while you use it). Legato's keys work in
   the window; mpv's own are off there. While it's on top, it's tagged
-  `skip-taskbar`, so taskbars and window switchers that honor the tag leave
-  it out.
+  `skip-taskbar`, a tag a taskbar or window switcher can honor to leave
+  it out (none in Omarchy itself does yet).
 
   <img src="media/video-menu.png" width="400" alt="The video window's right-click menu: Always on top, Transparency with its levels from Off to 80%, Pause / play, Hide video">
 
@@ -149,6 +149,9 @@ Hyprland stay until it reloads its config: `hyprctl reload`, or log out.
 - **While playing,** one short Python process every 30 seconds sends your
   position to Pocket Casts (about 80 ms of CPU each); with the Stats page
   open, one more after each, to keep its numbers current.
+- **While an episode is loaded,** two small helpers wait with no timer: the
+  sleep guard (for the pause before sleep) and the feed proxy mpv fetches
+  through. They end with the player.
 - **mpv** uses about 90 MB with an episode loaded and no CPU while paused,
   plus about 100 MB once its video window has been shown, until the player
   closes. After 15 minutes paused (`unloadAfterMinutes`), the player closes
@@ -186,24 +189,30 @@ devices.
   other devices aren't sent back. A seek ahead doesn't land on such a host
   either; seeking back doesn't sync until playback gets past your place.
 - **A dropped stream, on a host that sends no file size:** when the audio
-  stops part way ("Stream dropped. Press play to resume."), Legato knows it
-  broke because mpv's network layer reports the failure (a reconnect, or a
-  stream that ended short of its size). Without a size from the host (rare:
-  podcast hosts send it), a cut and the end look the same there, so it goes
-  by the episode's length, so a stop in the last tenth counts as the end and
+  stops part way ("Stream dropped. Press play to resume."), Legato tells it
+  from the end by what mpv's network layer reports (a host with byte ranges
+  reconnects and says so) or by how far it read (a host without them sends
+  the file straight through, to its size). Without a size from the host
+  (rare: podcast hosts send it), a cut and the end look the same, so it
+  goes by the episode's length, so a stop in the last tenth counts as the end and
   marks the episode played. With no length either, every stop counts as
   the end, as before 1.1. The other way round, such a file much shorter
   than Pocket Casts lists never seems to end: Legato says "Stream ends
-  here. Mark it played?" (right-click it in Up Next to do that).
+  here: mark it played." (right-click it in Up Next to do that).
 - **A show's skip-outro needs mpv to measure the file right:** it's
   counted back from mpv's length for the file, so Legato leaves it off when
   that disagrees with Pocket Casts' (some ad-stitched MP3s read far short)
   or Pocket Casts lists no length, and the episode plays to its end.
-- **A host that stops sending but keeps the connection open:** the panel
-  shows the episode buffering, and Legato sends no position meanwhile, so
-  your phone keeps its place if you carry on there; once it plays again,
+- **A stream that stalls** (the link goes quiet; the panel shows it
+  buffering): after 15 seconds it counts as an interruption, like a pause.
+  Legato sends no position while it lasts or when you pause or stop it, so
+  your phone keeps its place if you carry on there, and once it plays again
   Pocket Casts is asked first. A link that dies outright is noticed within
-  about a minute and handled as a dropped stream.
+  about a minute and handled as a dropped stream; a server that keeps the
+  connection open but sends nothing leaves it buffering until you stop it.
+- **Messages while the panel is closed** (a dropped stream, a load that
+  failed) come as desktop notifications: Omarchy's on-screen display takes
+  none from a plugin like Legato.
 
 ## Built on
 
@@ -331,7 +340,7 @@ Boost, the video window's place, Always on top and Transparency, whether
 episodes from your local network may play, and whether listening stats are
 counted) in
 `~/.local/state/omarchy-legato/prefs.json`. Change them from the panel, the
-video window's menu or the Settings page.
+video window's menu, the Settings page or (the stats) the Stats page.
 
 Disabling the plugin (or dragging its chip off the bar, which disables it)
 removes its entry from the bar, and the settings in the table above go with

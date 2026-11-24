@@ -732,6 +732,56 @@ only ever used the suite's plain-http fake.
   watcher's ownership check, the outro without a listed length: tests
   for each.
 
+### SR, round 6 (2026-11-24)
+
+reports kept outside the repo. Both found
+the same critical on a host class round 5's TLS host never was: one that
+sends a size but no byte ranges.
+
+- [x] SR49 (critical) On a host without ranges, an https drop or a silent
+  link (http or https) was the end: FFmpeg never reconnects an unseekable
+  stream (no "Will reconnect"), and only a clean close logs the short-end
+  line. Fixed: such a stream (mpv's `seekable` false) is read straight
+  through, so it's the end only if mpv read to its size (READ_TO_END);
+  probed: breaks stop 96 KB short, real ends about 100 bytes short (MP3,
+  M4A, ad-stitched), and an M4A with its index at the back can't play
+  there at all (now a break, not "played"). TLS error lines rejected as
+  evidence: an https host without a size logs them at its real end too.
+  Tests: HttpsStreams (no ranges: a drop, a stall, a real end, the M4A),
+  StalledStream (plain http, no ranges, silent).
+- [x] SR50 (high, since 1.0) A stalled stream's stuck position was still
+  pushed by pause, stop, next, a switch, the sleep guard and the break,
+  and check_server refreshed the last push during a stall. Fixed: a stall
+  of STALL_AFTER (15 s) or more is an interruption (the watcher times
+  mpv's buffering): nothing pushed during it or by those, and playing on
+  after it asks Pocket Casts first. Tests: pause and stop during a stall,
+  a stall that heals (follows the phone), a break after a long stall.
+- [x] SR51 (high, since 1.0) Omarchy's shell refuses a third-party plugin's
+  OSD summon, so every closed-panel error (rule 8) was dropped. Fixed:
+  desktop notifications (`bridge notify`, notify-send, the text one
+  argument after `--`); Cody may prefer `omarchy-osd` (a public command,
+  but it sidesteps the shell's choice). Tests: the panel test checks the
+  notify call (its stand-in shell had accepted any summon).
+- [x] SR52 (medium, since 1.0) About with its license open was 113 px taller
+  than the panel. Fixed: the license takes the privacy text's place. Test.
+- [x] SR53 (low) A reconnect that worked near the end judged a break: the
+  end counts when mpv read to the size. Test (and one further in).
+- [x] SR54 (low, since 1.0) The sleep guard waited 2 s for the state lock
+  before pausing: now it pauses first. Test (the lock held).
+- [x] SR55 (low) Each panel's idle fallback Service registered the `legato`
+  IPC target too (the shell logged it at every start; first wins): now
+  made only without a shared service. Test.
+- [x] SR56 (low) A page opened over an open right-click menu (a, i, g):
+  closes it now. The nothing-more message as a statement; "counting
+  starts as you listen" after Clear; README and CLAUDE.md (helpers in
+  rule 4 and Resources, the tag's wording, the stats switch's page, stale
+  comments). Test for the menu.
+- [x] SR57 (tests) The reviewers' survivors: keepalive's interval and count,
+  the sleep deadline under logind's 15 s, add_stats' guard, off writing
+  nothing, the since-date line, stats in the privacy text, a healing
+  reconnect. Left: the previous file's late log line can reach the next
+  file (errs toward a break, recoverable).
+
 - [ ] H6 Ship 1.1.0 (a minor version: the stats are a feature) with the `ship-update` skill (marketplace verification
   request, Cody approves the filing).
 
@@ -777,6 +827,11 @@ only ever used the suite's plain-http fake.
   deadline and never waits for the auth lock. The fake host now serves
   over TLS and can stall. 204 Python + 36 node tests; 150 of 150 mutants
   killed. Round 6 next.
+- 2026-11-25 (overnight): round 6 (SR49-SR57): hosts without ranges judged
+  by reading to the size; a stall of 15 s is an interruption, like a
+  pause; errors go out as notifications (Omarchy's OSD never took them);
+  About fits with its license open; one service per shell answers IPC.
+  218 Python + 36 node tests; 162 of 162 mutants killed. Round 7 next.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

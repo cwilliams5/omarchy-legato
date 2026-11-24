@@ -8,6 +8,7 @@ Run with tests/run, or directly:
     /usr/bin/python3 -I -B -m unittest discover -s tests -v
 """
 
+import argparse
 import base64
 import functools
 import gzip
@@ -489,22 +490,32 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
             cut = s.get("cut", {}).get(name)
             if s.get("slowaudio", {}).get(name):  # a slow host: the first byte takes a while
                 time.sleep(s["slowaudio"][name])
-            if name in s.get("hang", {}):
+            if name in s.get("hang", {}) and not (s.get("hangResume") and s.get("hangServed", {}).get(name)
+                                                  and time.time() >= s.get("hangUntil", 0)):
                 # The link stalls part way: the first `hang` bytes, then
                 # nothing for `hangFor` seconds with the connection open, then
-                # it closes; reconnects get nothing.
+                # it closes; reconnects get nothing. With `hangResume` the link
+                # comes back: the rest arrives, and requests after the stall
+                # are served.
                 if s.setdefault("hangServed", {}).get(name):
                     self.close_connection = True
                     return
                 s["hangServed"][name] = True
+                s["hangUntil"] = time.time() + s.get("hangFor", 60)
                 self.send_response(200)
                 self.send_header("Content-Type", "audio/mpeg")
-                self.send_header("Accept-Ranges", "bytes")
+                if not s.get("hangNoRanges"):
+                    self.send_header("Accept-Ranges", "bytes")
                 self.send_header("Content-Length", str(len(blob)))
                 self.end_headers()
                 self.wfile.write(blob[:s["hang"][name]])
                 self.wfile.flush()
                 time.sleep(s.get("hangFor", 60))
+                if s.get("hangResume"):  # the link comes back: the rest arrives
+                    try:
+                        self.wfile.write(blob[s["hang"][name]:])
+                    except OSError:
+                        pass
                 self.close_connection = True
                 return
             if name in s.get("nosize", ()):
@@ -536,6 +547,8 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
                 self.trickle(blob[:cut] if cut is not None else blob)
                 self.close_connection = True
                 return
+            if cut is not None and s.setdefault("cutServed", {}).get(name) and s.get("cutHeal"):
+                cut = None  # the network is back: mpv's reconnect is served
             if cut is not None and s.setdefault("cutServed", {}).get(name):
                 if s.get("cutReply"):
                     # The host is up but failing: mpv's reconnect gets an
@@ -1108,6 +1121,23 @@ class EndToEnd(PlayerTestCase):
         # Already paused: nothing to do, nothing sent.
         self.assertFalse(bridge.pause_for_sleep())
         self.assertEqual(len(self.writes("/sync/update_episode")), before + 1)
+
+    def test_before_sleep_it_pauses_even_while_a_poll_holds_the_lock(self):
+        # Strict review 6: a poll pushing on a slow link holds the state lock
+        # for many seconds; the guard pauses first, then pushes if it can.
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.wait_for(lambda: run_bridge("player")["data"]["position"] > 0.5)
+        held = bridge.StateLock()
+        held.__enter__()
+        try:
+            started = time.monotonic()
+            self.assertTrue(bridge.pause_for_sleep())
+            self.assertLess(time.monotonic() - started, 4)
+            with bridge.Mpv.connect() as player:
+                self.assertIs(player.get("pause"), True)
+        finally:
+            held.__exit__(None, None, None)
 
     def test_before_sleep_an_expired_sign_in_is_never_refreshed(self):
         # A refresh cut short by the guard's 4 s limit after Pocket Casts
@@ -2478,7 +2508,7 @@ class BrokenStream(PlayerTestCase):
         def snap(**kw):
             base = {"eof-reached": True, "path": url, "time-pos": 1800.0, "duration": 3600.0,
                     "stream-pos": None, "stream-end": None, "file-local-options/end": "none",
-                    "user-data/legato": watching}
+                    "user-data/legato": watching, "seekable": True}
             base.update(kw)
             return base
         def state(size=None, duration=None, listed=None):
@@ -2502,6 +2532,15 @@ class BrokenStream(PlayerTestCase):
         self.assertFalse(bridge.stream_broke(snap(**{"time-pos": 23.0, "duration": 18.4}), state(size=1_000_000, listed=60)))
         self.assertFalse(bridge.stream_broke(snap(**{"stream-end": 5000, "time-pos": 0.0, "file-local-options/end": "-20"}),
                                              state(listed=60)))
+        #    ...an error page's length (70) read for the size, with the load's
+        #    size unknown: mpv read past it, so not "to the end".
+        self.assertTrue(bridge.stream_broke(snap(**cut, **{"stream-end": 70, "stream-pos": 39_990_000}), {}))
+        # 2b. A host without ranges (not seekable): read straight through, the
+        #     end only if mpv read to the size; nothing read at all is a break.
+        unseekable = {"seekable": False, "stream-end": 120_270}
+        self.assertFalse(bridge.stream_broke(snap(**unseekable, **{"stream-pos": 120_166}), {}))
+        self.assertTrue(bridge.stream_broke(snap(**unseekable, **{"stream-pos": 23_966}), {}))
+        self.assertTrue(bridge.stream_broke(snap(**unseekable, **{"stream-pos": None, "time-pos": 0.0}), {}))
         # 3. No size from the host, or a player without the watcher: against
         #    the longest duration given, with a 10% margin (or 10 s), the
         #    skip-outro allowed for. A no-size MP3's mpv duration is what arrived.
@@ -2520,9 +2559,12 @@ class BrokenStream(PlayerTestCase):
         self.assertTrue(bridge.stream_broke(snap(**{"time-pos": 6.0, "duration": 6.0}),
                                             {"stream": {"url": "http://other/b.mp3", "size": 5}, "episode": {"duration": 30}}))
         self.assertFalse(bridge.stream_broke(snap(**{"eof-reached": False}), state(size=100)))
-        # What the poll reads includes the watcher's record, at an end.
-        self.assertIn("user-data/legato", bridge.END_PROPERTIES)
+        # What the poll reads includes the watcher's record (every poll: it
+        # times stalls too), and at an end where mpv read to and whether it
+        # could seek.
+        self.assertIn("user-data/legato", bridge.MPV_PROPERTIES)
         self.assertIn("stream-pos", bridge.END_PROPERTIES)
+        self.assertIn("seekable", bridge.END_PROPERTIES)
 
     def test_the_watcher_records_a_cut_short_stream(self):
         # The watcher itself, in mpv's own Lua: FFmpeg's short-end line for a
@@ -2533,9 +2575,10 @@ class BrokenStream(PlayerTestCase):
         if not lua:
             self.skipTest("no Lua 5.1 to run mpv's script in")
         harness = r"""
-            local props, handlers = {}, {}
+            local props, handlers, observed = {}, {}, {}
             mp = { set_property_native = function(name, value) props[name] = value end,
                    register_event = function(name, fn) handlers[name] = fn end,
+                   observe_property = function(name, kind, fn) observed[name] = fn end,
                    enable_messages = function(level) props.level = level end }
             dofile(os.getenv("WATCH"))
             local function show() local d = props["user-data/legato"] io.write(tostring(d.watching), " ", tostring(d.cut), ";") end
@@ -2551,13 +2594,21 @@ class BrokenStream(PlayerTestCase):
             show()
             handlers["log-message"]({ prefix = "ffmpeg", level = "warn", text = "http: Will reconnect at 52000 in 1 second(s), error=Connection timed out.\n" })
             show()
+            observed["paused-for-cache"]("paused-for-cache", true)
+            local d = props["user-data/legato"]
+            io.write(tostring(type(d.stallSince) == "number"), ";")
+            observed["paused-for-cache"]("paused-for-cache", true)  -- still the same stall
+            local since = d.stallSince
+            observed["paused-for-cache"]("paused-for-cache", false)
+            d = props["user-data/legato"]
+            io.write(tostring(d.stallSince), " ", tostring(d.lastStall.since == since and d.lastStall.ended >= since), ";")
             handlers["start-file"]({})
             show()
             io.write(props.level)
         """
         done = subprocess.run([lua, "-e", harness], capture_output=True, text=True, timeout=10,
                               env={"WATCH": str(ROOT / "bin" / "legato-watch.lua"), "PATH": "/usr/bin"})
-        self.assertEqual(done.stdout, "true nil;true 24054;true 24054;true 30000;true 41000;true 52000;true nil;warn",
+        self.assertEqual(done.stdout, "true nil;true 24054;true 24054;true 30000;true 41000;true 52000;true;nil true;true nil;warn",
                          done.stderr)
 
     def test_polls_fill_in_what_a_slow_load_missed(self):
@@ -3361,6 +3412,108 @@ class HttpsStreams(PlayerTestCase):
         run_bridge("toggle")
         self.assertNotIn(0, [b["position"] for b in self.writes("/sync/update_episode")[before:] if b["uuid"] == EP_1])
 
+    def test_an_https_stream_from_a_host_without_ranges_that_drops_is_not_finished(self):
+        # Strict review 6: FFmpeg can't reconnect such a stream, and an https
+        # drop logs no short-end line: judged by how far mpv read.
+        self.fake["noranges"] = {EP_1}
+        self.fake["cut"] = {EP_1: len(self.audio) // 5}
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.assert_broke(self.settled())
+
+    def test_an_https_stream_from_a_host_without_ranges_that_stalls_is_not_finished(self):
+        self.fake["hang"] = {EP_1: len(self.audio) // 5}
+        self.fake["hangNoRanges"] = True
+        self.fake["hangFor"] = 8
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.assert_broke(self.settled())
+
+    def test_an_https_host_without_ranges_still_ends_properly(self):
+        self.fake["noranges"] = {EP_1}
+        bridge.save_prefs({"volume": 0, "speed": 3.0})
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.settled()
+        self.assertEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+
+    def test_an_m4a_that_cant_play_without_ranges_is_never_marked_played(self):
+        # Its index is at the back, and the host can't seek there: mpv stops
+        # at 0:00 having read nothing. Not the end.
+        self.fake["noranges"] = {EP_1}
+        self.fake["media"] = {EP_1: encode(["-f", "lavfi", "-i", "sine=duration=60", "-c:a", "aac", "-b:a", "32k"], ".m4a")}
+        self.fake["episodes"][EP_1].update(duration=60, url=self.tls_base + "/audio/%s.m4a" % EP_1)
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.assert_broke(self.settled())
+
+    def test_a_reconnect_that_works_plays_on_to_a_real_end(self):
+        # The link drops and comes back: FFmpeg's reconnect reads on, so the
+        # line it logged is old news and the real end is the end.
+        self.fake["cut"] = {EP_1: len(self.audio) // 5}
+        self.fake["cutHeal"] = True
+        bridge.save_prefs({"volume": 0, "speed": 3.0})
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.settled()
+        self.assertEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+
+    def test_a_reconnect_that_works_near_the_end_plays_on_to_it(self):
+        self.fake["cut"] = {EP_1: len(self.audio) - 20000}  # within READ_PAST_CUT of the end
+        self.fake["cutHeal"] = True
+        self.fake["progress"][EP_1] = 24
+        self.fake["status"][EP_1] = bridge.STATUS_IN_PROGRESS
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.settled()
+        self.assertEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+
+    def stall_then_phone(self, **hang):
+        self.fake["hang"] = {EP_1: len(self.audio) // 5}
+        self.fake.update(hang)
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: (lambda v: v if v["buffering"] and v["position"] > 3 else None)(run_bridge("player")["data"]),
+                      timeout=40)
+        time.sleep(3)  # stuck longer than STALL_AFTER (2 s here)
+        self.fake["progress"][EP_1] = 25  # you carried on with the phone
+
+    def test_pausing_a_stalled_stream_never_rewinds_the_phone(self):
+        # Strict review 6: the pause (and Stop, Next, a switch, the sleep
+        # guard) pushed where the stalled stream got stuck.
+        with mock.patch.object(bridge, "STALL_AFTER", 2):
+            self.stall_then_phone(hangFor=60)
+            run_bridge("pause")
+            self.assertEqual(self.fake["progress"][EP_1], 25)
+            run_bridge("stop")
+            self.assertEqual(self.fake["progress"][EP_1], 25)
+
+    def test_after_a_stall_heals_pocket_casts_is_asked_first(self):
+        with mock.patch.object(bridge, "STALL_AFTER", 2):
+            self.stall_then_phone(hangFor=12, hangResume=True)  # longer than the 6 s cached
+            view = self.wait_for(lambda: (lambda v: v if not v["buffering"] and v["playing"] else None)(run_bridge("player")["data"]),
+                                 timeout=30)
+            run_bridge("player")
+            self.assertGreater(run_bridge("player")["data"]["position"], 24)  # it followed the phone
+            run_bridge("pause")
+            self.assertGreaterEqual(self.fake["progress"][EP_1], 25)
+
+    def test_a_break_after_a_long_stall_pushes_nothing(self):
+        # No poll sees the stall (it falls between two): the break's own push
+        # must still know the position is stale.
+        with mock.patch.object(bridge, "STALL_AFTER", 2):
+            self.fake["hang"] = {EP_1: len(self.audio) // 5}
+            self.fake["hangFor"] = 12
+            self.login()
+            self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+            with bridge.Mpv.connect() as player:
+                self.wait_for(lambda: player.get("paused-for-cache") is True, timeout=30)
+                time.sleep(3)
+                self.fake["progress"][EP_1] = 25  # you carried on with the phone
+                self.wait_for(lambda: player.get("eof-reached") is True, timeout=40)
+            self.assert_broke(self.settled())
+            self.assertEqual(self.fake["progress"][EP_1], 25)
+
     def test_a_stalled_https_stream_never_rewinds_the_phone(self):
         # The host stops sending and keeps the connection open: mpv waits.
         # You carry on with the phone; the laptop used to push the stall
@@ -3394,6 +3547,18 @@ class StalledStream(PlayerTestCase):
         patcher = mock.patch.object(bridge, "MPV_EXTRA_ARGS", ("--ao=null", "--network-timeout=3"))
         patcher.start()
         self.addCleanup(patcher.stop)
+
+    def test_a_host_without_ranges_that_goes_silent_is_not_finished(self):
+        # Strict review 6: no reconnect, and a timeout logs no short-end line.
+        self.fake["hang"] = {EP_1: len(self.audio) // 5}
+        self.fake["hangNoRanges"] = True
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        view = self.wait_for(lambda: (lambda v: v if v.get("streamBroke") or v.get("ended")
+                                      or (v["item"] or {}).get("uuid") != EP_1 else None)(run_bridge("player")["data"]),
+                             timeout=90)
+        self.assertTrue(view.get("streamBroke"), view)
+        self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
 
     def test_a_stream_that_stalls_part_way_is_not_finished(self):
         self.fake["hang"] = {EP_1: len(self.audio) // 5}
@@ -3430,7 +3595,10 @@ class Round5Units(TempHome):
                 sock = bridge.connect_feed_host("127.0.0.1", server.getsockname()[1], False)
             with sock:
                 self.assertEqual(sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE), 1)
-                self.assertLessEqual(sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE), 30)
+                # A dead path fails within about a minute.
+                idle, interval, count = (sock.getsockopt(socket.IPPROTO_TCP, getattr(socket, name))
+                                         for name in ("TCP_KEEPIDLE", "TCP_KEEPINTVL", "TCP_KEEPCNT"))
+                self.assertLessEqual(idle + interval * count, 75)
         finally:
             server.close()
 
@@ -3482,6 +3650,35 @@ class Round5Units(TempHome):
         with self.assertRaises(bridge.ApiError):
             bridge.mark_needs_reauth(bridge.load_auth())
         self.assertTrue(bridge.load_auth()["needs_reauth"])
+
+    def test_a_notification_carries_the_text_as_text(self):
+        # Omarchy's OSD refuses a third-party plugin: errors with the panel
+        # closed go out as desktop notifications. The text is one argument
+        # after `--` (one beginning with a dash is still text), capped.
+        sent = []
+        with mock.patch.object(bridge, "trusted_tool", lambda name: "/usr/bin/" + name), \
+                mock.patch.object(bridge.subprocess, "run", lambda argv, **kw: sent.append(argv)), \
+                mock.patch.object(bridge, "out", lambda data: None):
+            bridge.cmd_notify(argparse.Namespace(text="--exec rm  -rf\nnow"))
+            bridge.cmd_notify(argparse.Namespace(text="x" * 1000))
+        self.assertEqual(sent[0], ["/usr/bin/notify-send", "--app-name=Legato", "--urgency=normal", "--", "Legato",
+                                   "--exec rm -rf now"])
+        self.assertEqual(len(sent[1][-1]), bridge.NOTIFY_MAX)
+
+    def test_stats_never_get_in_the_way(self):
+        # A stats file that can't be written (a folder in its place) is left
+        # alone; counting off writes nothing at all.
+        bridge.save_prefs({"stats": False})
+        bridge.add_stats(listened=10)
+        stats_file = os.path.join(os.environ["XDG_STATE_HOME"], "omarchy-legato", "stats.json")
+        self.assertFalse(os.path.exists(stats_file))
+        bridge.save_prefs({"stats": True})
+        os.makedirs(stats_file)
+        bridge.add_stats(finished=1)  # raises nothing
+
+    def test_the_limits_that_matter(self):
+        self.assertLess(bridge.SLEEP_GUARD_DEADLINE, 15)  # logind waits 15 s at most here
+        self.assertLessEqual(bridge.READ_TO_END, 8192)    # a break that close to the end would count as it
 
     def test_no_outro_without_a_listed_length(self):
         # Pocket Casts lists no duration: mpv's can't be checked, so the

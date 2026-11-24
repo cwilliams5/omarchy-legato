@@ -13,10 +13,18 @@
 -- every end, break or not (M reads 18446744073709551615, unknown), so that
 -- one is ignored.
 --
+-- On a host without byte ranges FFmpeg can't reconnect, and an https drop or
+-- a timeout logs neither line; the bridge judges those by how far mpv read.
+--
+-- It also times stalls: mpv waiting for data while it should be playing
+-- (`paused-for-cache`), as seen when the property changes (no timer). A long
+-- one is an interruption to the bridge, like a pause.
+--
 -- `user-data/legato` holds, for the current file: `watching` (this script
--- runs; a player started by an older Legato has nothing) and `cut`, the
--- byte offset N of the latest such line. It is reset at the start of each
--- file. Nothing else is read or changed.
+-- runs; a player started by an older Legato has nothing), `cut` (the byte
+-- offset N of the latest such line), `stallSince` (when the stall now under
+-- way began, os.time()) and `lastStall` ({since, ended} of the last one). It
+-- is reset at the start of each file. Nothing else is read or changed.
 
 local UNKNOWN = "18446744073709551615"
 local state = { watching = true }
@@ -40,6 +48,17 @@ end
 mp.register_event("start-file", function()
   state = { watching = true }
   publish()
+end)
+
+mp.observe_property("paused-for-cache", "bool", function(_, waiting)
+  if waiting and not state.stallSince then
+    state.stallSince = os.time()
+    publish()
+  elseif not waiting and state.stallSince then
+    state.lastStall = { since = state.stallSince, ended = os.time() }
+    state.stallSince = nil
+    publish()
+  end
 end)
 
 mp.enable_messages("warn")
