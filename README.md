@@ -84,7 +84,8 @@ by Nine Point Labs (MIT). What's new compared to the original:
 - **Listening stats,** for fun: how long you've listened on this computer,
   and how much time speed, Trim Silence, skipping forward and the shows'
   intro and outro skips saved you (the chart button in the panel's header,
-  or `a`). Counted on this computer only and never sent anywhere.
+  or `a`). Counted on this computer only and never sent anywhere; the
+  Settings page turns counting off and clears what's there.
 
   <img src="media/stats.png" width="470" alt="The Listening stats page: 1 d 14 h listened on this computer, 1 d 3 h saved, split into playback speed, Trim Silence, skipping forward and skipped intros and outros, and 63 episodes finished">
 
@@ -298,8 +299,9 @@ so `omarchy bar set io.github.cwilliams5.legato <key> <value>` works too.
 | `pauseOnSleep` | `true` | Pause and save your place before the computer sleeps |
 
 The player keeps its own choices (volume, speed, Trim Silence, Volume
-Boost, the video window's place, Always on top and Transparency, and
-whether episodes from your local network may play) in
+Boost, the video window's place, Always on top and Transparency, whether
+episodes from your local network may play, and whether listening stats are
+counted) in
 `~/.local/state/omarchy-legato/prefs.json`. Change them from the panel, the
 video window's menu or the Settings page.
 
@@ -335,7 +337,8 @@ it. The player's own choices, your sign-in and your listening stats stay.
   password never is. Signing out deletes them.
 - Your listening stats are counted on this computer only, in
   `~/.local/state/omarchy-legato/stats.json` (readable only by you), and
-  never sent anywhere.
+  never sent anywhere. The Settings page turns counting off and deletes
+  them.
 - Only `api.pocketcasts.com` gets your token. Episode lists and artwork come
   from Pocket Casts' public hosts without it, and audio streams through mpv
   from each show's own server.

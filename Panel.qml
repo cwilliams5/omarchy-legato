@@ -587,6 +587,9 @@ Panel {
         onVideoPinnedRequested: function(pinned) { if (root.service) root.service.setVideoPinned(pinned ? "on" : "off") }
         localFeeds: !!root.service && root.service.localFeeds
         onLocalFeedsRequested: function(on) { if (root.service) root.service.setLocalFeeds(on) }
+        statsCounting: !root.service || root.service.statsCounting
+        onStatsCountingRequested: function(on) { if (root.service) root.service.setStatsCounting(on) }
+        onStatsClearRequested: if (root.service) root.service.clearStats()
         onBackRequested: root.setSettings(false)
         onChangeRequested: function(key, value) {
           var change = {}

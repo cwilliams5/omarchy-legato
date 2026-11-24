@@ -9,7 +9,7 @@ import "Model.js" as Model
 // skipping and a show's intro and outro skips. The bridge counts them while
 // playing (no timer of its own) and keeps them only here, in
 // ~/.local/state/omarchy-legato/stats.json; the service reads them when this
-// page opens.
+// page opens. The Settings page turns counting off and clears them.
 Column {
   id: root
 
@@ -72,8 +72,11 @@ Column {
       width: parent.width
       textFormat: Text.PlainText
       wrapMode: Text.WordWrap
-      text: root.counted ? "listened on this computer since " + Model.fmtDay(root.stats.since)
-                         : "listened on this computer: counting starts with the next episode you play"
+      text: root.stats && root.stats.counting === false
+        ? (root.counted ? "listened on this computer since " + Model.fmtDay(root.stats.since) + ". Counting is off (Settings, g)."
+                        : "Counting is off (Settings, g).")
+        : root.counted ? "listened on this computer since " + Model.fmtDay(root.stats.since)
+                       : "listened on this computer: counting starts with the next episode you play"
       color: root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall

@@ -1849,6 +1849,27 @@ class ListeningCount(TempHome):
         self.count(state, 910.0, 615.0)               # another episode: a new count, nothing added
         self.assertEqual(bridge.load_stats(), {})
 
+    def test_counting_can_be_turned_off_and_cleared(self):
+        # For people who'd rather nothing was kept: a player choice (it
+        # survives the plugin being disabled), and a clear that deletes the file.
+        bridge.add_stats(listened=60)
+        self.assertFalse(run_bridge("stats", "off")["data"]["counting"])
+        self.assertIs(bridge.load_prefs()["stats"], False)
+        state = self.fresh()
+        self.count(state, 100.0, 10.0)
+        self.count(state, 130.0, 60.0)
+        bridge.add_stats(intro=12, finished=1)
+        self.assertEqual(bridge.load_stats().get("listened"), 60)  # nothing added while off
+        self.assertNotIn("intro", bridge.load_stats())
+        cleared = run_bridge("stats", "clear")["data"]
+        self.assertEqual((cleared["listened"], cleared["since"], cleared["counting"]), (0.0, 0, False))
+        self.assertFalse(os.path.exists(os.path.join(os.environ["XDG_STATE_HOME"], "omarchy-legato", "stats.json")))
+        self.assertTrue(run_bridge("stats", "on")["data"]["counting"])
+        bridge.add_stats(intro=12)
+        self.assertEqual(bridge.load_stats()["intro"], 12)
+        self.assertTrue(bridge.player_view({}, {}, {})["statsCounting"])
+        self.assertFalse(bridge.player_view({}, {}, {"stats": False})["statsCounting"])
+
     def test_stats_read_while_a_poll_holds_the_lock(self):
         # Review finding: behind a slow poll the page failed with "busy".
         bridge.add_stats(listened=60)
@@ -1859,7 +1880,8 @@ class ListeningCount(TempHome):
 
     def test_the_stats_command_reads_them_back(self):
         self.assertEqual(run_bridge("stats")["data"], {"listened": 0.0, "speed": 0.0, "trim": 0.0, "skipping": 0.0,
-                                                       "intro": 0.0, "outro": 0.0, "finished": 0, "since": 0})
+                                                       "intro": 0.0, "outro": 0.0, "finished": 0, "since": 0,
+                                                       "counting": True})
         bridge.add_stats(listened=60, intro=12)
         bridge.add_stats(finished=1)
         data = run_bridge("stats")["data"]

@@ -32,7 +32,8 @@ var PRIVACY = "No telemetry and no servers of Legato's own: it talks only to Poc
   + "app; a local check lets mpv reach only public addresses (your local network too, if you allow "
   + "it in Settings) and never this computer. Your login tokens, email and account ID are kept in ~/.local/state/omarchy-legato/auth.json, "
   + "readable only by you (0600), next to the episode loaded, the player's settings, your listening "
-  + "stats (counted here, never sent) and a 10-minute list of your shows; signing out deletes the tokens. Cover art is cached in "
+  + "stats (counted here, never sent; Settings turns them off and clears them) and a 10-minute list of "
+  + "your shows; signing out deletes the tokens. Cover art is cached in "
   + "~/.cache/omarchy-legato/art, and the panel's settings in ~/.config/omarchy/shell.json."
 
 // "0.1.0" from manifest.json's text, or "" when it can't be read.

@@ -65,6 +65,14 @@ test("the stats page opens from the header, `a` and closes like the others; it r
   assert.match(panel, /if \(service\) service\.loadStats\(\)/)  // read when the page opens
   assert.match(service, /call\(\["stats"\]/)
   assert.doesNotMatch(view, /\bTimer\b/)
+  // Counting can be turned off and cleared on the Settings page.
+  const settings = fs.readFileSync(path.join(ROOT, "SettingsView.qml"), "utf8")
+  assert.match(settings, /objectName: "statsCounting"[\s\S]*?onClicked: root\.statsCountingRequested\(!root\.statsCounting\)/)
+  assert.match(settings, /objectName: "statsClear"[\s\S]*?if \(!root\.confirmClear\) \{ root\.confirmClear = true; return \}[\s\S]*?root\.statsClearRequested\(\)/)
+  assert.match(panel, /onStatsCountingRequested: function\(on\) \{ if \(root\.service\) root\.service\.setStatsCounting\(on\) \}/)
+  assert.match(panel, /onStatsClearRequested: if \(root\.service\) root\.service\.clearStats\(\)/)
+  assert.match(service, /call\(\["stats", on \? "on" : "off"\]/)
+  assert.match(service, /call\(\["stats", "clear"\]/)
   // A poll after mpv reports a seek tells the bridge, so the jump isn't time saved.
   assert.match(service, /message\.event === "playback-restart"\) _seekedSincePoll = true/)
   assert.match(service, /if \(_seekedSincePoll\) \{ args\.push\("--seeked"\); _seekedSincePoll = false \}/)

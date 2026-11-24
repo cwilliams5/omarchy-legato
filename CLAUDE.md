@@ -81,7 +81,7 @@ what the API lists, or touch the user's Hyprland config.
     schema in manifest.json drives the Settings page); the player's own
     choices in the bridge's `prefs.json` (`volume`, `speed`, `trim`,
     `boost`, `videoGeometry`, `videoPinned`, `videoTransparency`,
-    `localFeeds`)
+    `localFeeds`, `stats`)
   - state `$XDG_STATE_HOME/omarchy-legato/` (auth.json, playback.json,
     prefs.json, podcasts-cache.json, stats.json, lock, prefs.lock,
     auth.lock; all 0600, folder 0700)
@@ -245,7 +245,10 @@ docs/PLAN.md         what's left to build
   counted, and a poll after mpv's `playback-restart` (`--seeked`, from the
   service) counts only the time and the speed's share. Skip-forward, intro
   and outro skips and finished episodes are added where they happen. Never
-  sent anywhere; no timer of its own.
+  sent anywhere; no timer of its own. Counting can be turned off (prefs.json
+  `stats`, the Settings page, `bridge stats on|off`: a player choice, so it
+  survives the plugin being disabled) and cleared (`bridge stats clear`,
+  under the state lock so a poll can't write the old numbers back).
 - **Before sleep:** while an episode is loaded, the service runs
   `systemd-inhibit --what=sleep --mode=delay … setpriv --pdeathsig TERM
   legato-bridge sleepguard`. The guard waits on `dbus-monitor` for logind's

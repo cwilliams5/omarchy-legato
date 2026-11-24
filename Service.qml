@@ -97,6 +97,8 @@ Item {
   readonly property bool videoPinned: !player || player.videoPinned !== false
   // Episodes served from the local network (a home media server): off unless chosen.
   readonly property bool localFeeds: !!player && player.localFeeds === true
+  // Listening stats are counted unless turned off (prefs.json, Settings page).
+  readonly property bool statsCounting: !player || player.statsCounting !== false
   readonly property bool hasVideo: playerActive && player.hasVideo === true
   readonly property bool videoOn: playerActive && player.video === true
 
@@ -889,6 +891,23 @@ Item {
     call(["videopin", value], function(result) {
       if (!result.ok) { root.reportError(result.error); return }
       root.optimistic({ videoPinned: result.data.videoPinned })
+    })
+  }
+
+  // Listening stats: counting on or off, and clearing what's counted. Both
+  // answer with the stats as they now are, for the Stats page.
+  function setStatsCounting(on) {
+    call(["stats", on ? "on" : "off"], function(result) {
+      if (!result.ok) { root.reportError(result.error); return }
+      root.stats = result.data
+      root.optimistic({ statsCounting: result.data.counting })
+    })
+  }
+
+  function clearStats() {
+    call(["stats", "clear"], function(result) {
+      if (!result.ok) { root.reportError(result.error); return }
+      root.stats = result.data
     })
   }
 

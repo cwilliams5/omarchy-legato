@@ -2023,11 +2023,21 @@ def load_stats():
     return load_state("stats.json")
 
 
+def stats_counting(prefs):
+    """Whether listening stats are counted (prefs.json `stats`; on unless
+    turned off on the Settings page). A player choice, not a widget setting,
+    so turning it off survives the plugin being disabled."""
+    return prefs.get("stats") is not False
+
+
 def add_stats(**seconds):
     """Add to the listening stats, kept only here (stats.json, 0600; nothing
-    is sent anywhere). Callers hold the state lock. A stats file that can't be
-    read or written is left alone: stats never get in the way of playback."""
+    is sent anywhere), unless counting is off. Callers hold the state lock. A
+    stats file that can't be read or written is left alone: stats never get
+    in the way of playback."""
     try:
+        if not stats_counting(load_prefs()):
+            return
         stats = load_stats()
         if not isinstance(stats.get("since"), (int, float)):
             stats["since"] = int(time.time())
@@ -2242,6 +2252,7 @@ def player_view(snap, state, prefs, load_failed=False):
         "videoTransparency": video_transparency(prefs),
         "videoPinned": video_pinned(prefs),
         "localFeeds": local_feeds_allowed(prefs),
+        "statsCounting": stats_counting(prefs),
         "hasVideo": active and has_video(snap),
         "video": active and video_shown(snap),
         "item": episode or None,
@@ -3571,14 +3582,24 @@ def cmd_stop(args):
 
 
 def cmd_stats(args):
-    """The listening stats counted on this computer (stats.json). No lock:
+    """The listening stats counted on this computer (stats.json), after an
+    optional change: `on` / `off` (counting, in prefs.json) or `clear`
+    (deletes stats.json, under the state lock so a poll counting at that
+    moment can't write the old numbers back). A plain read takes no lock:
     writes replace the file whole (rename), so a read sees one or the other,
     and the page isn't kept waiting behind a slow poll."""
+    if args.value in ("on", "off"):
+        with prefs_update() as prefs:
+            prefs["stats"] = args.value == "on"
+    elif args.value == "clear":
+        with StateLock():
+            drop_state("stats.json")
     stats = load_stats()
     number = lambda value: float(value) if isinstance(value, (int, float)) else 0.0
     view = {key: number(stats.get(key)) for key in STATS_KEYS}
     view["finished"] = int(number(stats.get("finished")))
     view["since"] = int(stats["since"]) if isinstance(stats.get("since"), (int, float)) else 0
+    view["counting"] = stats_counting(load_prefs())
     out(view)
 
 
@@ -3704,7 +3725,8 @@ def build_parser():
     sub.add_parser("sleepguard").set_defaults(fn=cmd_sleepguard)
     sub.add_parser("next").set_defaults(fn=cmd_next)
     p = sub.add_parser("stop"); p.add_argument("--if-paused", action="store_true"); p.set_defaults(fn=cmd_stop)
-    sub.add_parser("stats").set_defaults(fn=cmd_stats)
+    p = sub.add_parser("stats"); p.add_argument("value", nargs="?", choices=("on", "off", "clear"))
+    p.set_defaults(fn=cmd_stats)
 
     p = sub.add_parser("mark"); p.add_argument("state", choices=("played", "unplayed")); p.add_argument("uuid")
     p.add_argument("--podcast", required=True); p.set_defaults(fn=cmd_mark)

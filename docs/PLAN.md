@@ -386,6 +386,11 @@ history on other submissions). Fixed, each with a failing-first test:
   empty workspace: a window with no_screen_share (Bitwarden) blacks out
   screenshots of its whole workspace, panels on top included. GitHub's
   social card is uploaded by hand from media/social-preview.png.
+- [x] H9 Stats can be turned off and cleared (Cody: some privacy-minded
+  users won't want them): prefs.json `stats` (a player choice, so "off"
+  survives disabling the plugin, unlike a widget setting), the Settings
+  page's Listening stats section (On/Off; Clear asks for a second click),
+  `bridge stats on|off|clear`; the Stats page says when counting is off.
 - [ ] H6 Ship 1.1.0 (a minor version: the stats are a feature) with the `ship-update` skill (marketplace verification
   request, Cody approves the filing).
 
