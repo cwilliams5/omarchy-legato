@@ -401,7 +401,9 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   an `IpcHandler` with `enabled: false` registered, and the first handler
   of a target wins (the shell logs "another handler is registered" for the
   second). Each panel made an idle Service for shells without service
-  support; it's a Loader now, active only then.
+  support; it's a Loader now, active only then, and only from the turn
+  after loading (BarWidget hands the panel its bar just after loading it,
+  so until then a shared service can't be seen).
 - **Qt 6.12** adds a QtQuick `Color` type: a bare `Color.x` in plugin QML no
   longer reaches `qs.Commons`' Color and renders black. The original has 7
   such references (PLAN A2).

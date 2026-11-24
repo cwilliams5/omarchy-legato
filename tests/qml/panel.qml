@@ -110,6 +110,9 @@ Item {
   // A second panel sharing the first one's service (as a second screen's).
   QtObject { id: sharingBar; property var shell: ({ serviceFor: function(id) { return panel.service } }) }
   Component { id: panelMaker; Legato.Panel { bar: sharingBar; settings: ({}) } }
+  // As BarWidget does it: the panel loads first, the bar is handed over just after.
+  Component { id: barlessMaker; Legato.Panel { settings: ({}) } }
+  property bool lateFallback: false
 
   readonly property var stats: ({ listened: 3600, speed: 600, trim: 120, skipping: 60, intro: 30, outro: 15,
                                   finished: 4, since: 1789300000, counting: true })
@@ -125,6 +128,7 @@ Item {
       top.check("a panel gone while showing Stats counts it off",
                 top.destroyed && service.statsPagesOpen === 0 && service.pagesOpen === 0 && service.openPanels === 0,
                 top.destroyed + " " + service.statsPagesOpen + " " + service.pagesOpen + " " + service.openPanels)
+      top.check("a panel handed its bar just after loading never made an idle copy", !top.lateFallback, top.lateFallback)
       Qt.exit(top.failures)
     }
   }
@@ -353,6 +357,11 @@ Item {
     // and takes it off when it goes away while showing it.
     var other = panelMaker.createObject(top)
     check("the second panel shares the service", other.service === service, other.service === service)
+    var late = barlessMaker.createObject(top)
+    var lateLocal = find(late, function(i) { return i.objectName === "localService" })
+    if (lateLocal.item !== null) top.lateFallback = true  // made while loading
+    lateLocal.loaded.connect(function() { top.lateFallback = true })  // or later
+    late.bar = sharingBar
     var otherLocal = find(other, function(i) { return i.objectName === "localService" })
     check("and makes no idle copy of it (it would take the legato IPC target)",
           otherLocal && otherLocal.active === false && otherLocal.item === null, otherLocal && otherLocal.item)

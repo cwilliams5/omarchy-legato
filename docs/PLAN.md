@@ -770,7 +770,10 @@ sends a size but no byte ranges.
   before pausing: now it pauses first. Test (the lock held).
 - [x] SR55 (low) Each panel's idle fallback Service registered the `legato`
   IPC target too (the shell logged it at every start; first wins): now
-  made only without a shared service. Test.
+  made only without a shared service, and not before the bar has handed
+  itself over (BarWidget sets it just after loading the panel: a first
+  fix still made the copy in that moment; checked live, the warning is
+  gone and the shell's service answers). Tests for both orders.
 - [x] SR56 (low) A page opened over an open right-click menu (a, i, g):
   closes it now. The nothing-more message as a statement; "counting
   starts as you listen" after Clear; README and CLAUDE.md (helpers in
@@ -831,7 +834,7 @@ sends a size but no byte ranges.
   by reading to the size; a stall of 15 s is an interruption, like a
   pause; errors go out as notifications (Omarchy's OSD never took them);
   About fits with its license open; one service per shell answers IPC.
-  218 Python + 36 node tests; 162 of 162 mutants killed. Round 7 next.
+  218 Python + 36 node tests; 163 of 163 mutants killed. Round 7 next.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

@@ -12,11 +12,11 @@ python3 -B tests/mutate.py .       # all of them, about 90 minutes
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (162 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (163 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
 it.
 
-## The set (162; strict review rounds 1 to 6, 2026-11-25)
+## The set (163; strict review rounds 1 to 6, 2026-11-25)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
@@ -109,7 +109,8 @@ caught each mutant. By area:
   snapshot), `seekable` caught only by an M4A whose index is at the back
   (pointed there), and a stall-then-break test that polled during the
   stall (now it doesn't). Final: 162 of 162 killed (218 Python tests, 36
-  node).
+  node); then one more for the fallback service made before the bar's
+  handover (found live after the commit): 163 of 163.
 - Equivalent and left out: dropping `after > before` from the skip count
   (`add_stats` ignores values that aren't positive).
 

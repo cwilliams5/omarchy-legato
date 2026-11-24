@@ -35,7 +35,10 @@ Panel {
   function pushSettings() { if (service) service.settings = settings }
   onSettingsChanged: pushSettings()
   onServiceChanged: pushSettings()
-  Component.onCompleted: pushSettings()
+  Component.onCompleted: {
+    pushSettings()
+    Qt.callLater(function() { root.settled = true })  // see localService
+  }
 
   readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
   readonly property color accent: Commons.Color.accent
@@ -365,11 +368,14 @@ Panel {
 
   // Made only when the shell has no service to share: an idle copy would
   // still register the `legato` IPC target, and whichever registers first
-  // takes it (the shell log warned of the second at every start).
+  // takes it (the shell log warned of the second at every start). Not
+  // before the bar has handed itself over (BarWidget injects it just after
+  // loading this panel): until then there's no telling.
+  property bool settled: false
   Loader {
     id: localService
     objectName: "localService"
-    active: root.sharedService === null
+    active: root.settled && root.sharedService === null
     sourceComponent: Service {}
   }
 
