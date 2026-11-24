@@ -77,9 +77,27 @@ Item {
     running.forEach(function(p) { p.finish(0, JSON.stringify({ ok: false, code: "busy", error: error }), "") })
     return running.length
   }
+  // One episode on Up Next, for the keys that act on the highlighted row.
+  readonly property var episode: ({ type: "episode", uuid: "aaaaaaaa-0000-0000-0000-000000000001",
+                                    podcast: "bbbbbbbb-0000-0000-0000-000000000001", name: "An episode",
+                                    show: "A show", duration: 100, playedUpTo: 10, status: 2 })
   function settle() {
-    // Every other call answered as harmlessly as possible.
-    Processes.started.filter(function(p) { try { return p.running } catch (e) { return false } }).forEach(function(p) { p.finish(0, JSON.stringify({ ok: true, data: {} }), "") })
+    // Signed in, with one episode on Up Next; every other call answered as
+    // harmlessly as possible. (An empty `status` would sign the panel out,
+    // and every key check would pass for that reason alone.) Each call by
+    // its own command: an answer can start another (a list's reload).
+    for (var round = 0; round < 5; round++) {
+      var running = Processes.started.filter(function(p) { try { return p.running } catch (e) { return false } })
+      if (running.length === 0) return
+      running.forEach(function(p) {
+        var at = -1
+        for (var i = 0; i < p.command.length; i++) if (String(p.command[i]).indexOf("legato-bridge") >= 0) at = i
+        var words = p.command.slice(at + 1).join(" ")
+        var data = words === "status" ? { authenticated: true, mpv: "/usr/bin/mpv", socket: "", python: "3.14" }
+                 : words === "up-next" ? { items: [top.episode] } : {}
+        p.finish(0, JSON.stringify({ ok: true, data: data }), "")
+      })
+    }
   }
 
   Legato.Panel { id: panel; settings: ({}) }
@@ -132,7 +150,11 @@ Item {
     keys.textKey("a", 0)
     check("a closes it again", !panel.showStats && !statsView.visible && service.statsPagesOpen === 0, panel.showStats)
 
-    // Before its first read the page follows the service's switch.
+    // Before its first read the page follows the service's switch: On,
+    // until the player says otherwise.
+    service.player = { active: false }
+    service.stats = null
+    check("counting reads On before anything is known", service.statsCounting === true, service.statsCounting)
     service.player = { active: false, statsCounting: false }
     service.stats = null
     named("statsButton").clicked()
@@ -140,6 +162,20 @@ Item {
     service.player = { active: false }
     settle()
     keys.closeRequested()
+
+    // The harness is signed in with a row under the cursor, so the keys
+    // below really could act: Delete on the main view removes it.
+    service.loadUpNext(true)
+    settle()
+    check("signed in, an Up Next episode highlighted",
+          panel.authenticated && panel.cursorItem() && panel.cursorItem().uuid === top.episode.uuid,
+          panel.authenticated + " " + JSON.stringify(panel.cursorItem()))
+    keys.deleteRequested()
+    check("Delete on the main view removes the highlighted episode", calls("queue remove").length === 1,
+          calls("queue").length)
+    settle()
+    service.loadUpNext(true)
+    settle()
 
     // ...the Stats page opens from `a`, reads the stats, and shows them.
     keys.textKey("a", 0)
@@ -153,10 +189,16 @@ Item {
           service.statsPagesOpen + " " + service.pagesOpen)
 
     // While a page is open, the list's keys do nothing to the hidden list.
+    check("still signed in, the episode highlighted behind the page",
+          panel.authenticated && panel.cursorItem() && panel.cursorItem().uuid === top.episode.uuid,
+          panel.authenticated + " " + JSON.stringify(panel.cursorItem()) + " upNext " + JSON.stringify(service.upNext)
+          + " rows " + JSON.stringify(panel.rows) + " loading " + service.upNextLoading + " cursor " + panel.cursorIndex)
     keys.textKey("n", 0)
     keys.deleteRequested()
-    check("n does nothing behind the Stats page", calls("next").length === 0 && calls("queue").length === 0,
-          calls("next").length + " " + calls("queue").length)
+    keys.textKey("m", 0)
+    check("n, m and Delete do nothing behind the Stats page",
+          calls("next").length === 0 && calls("queue").length === 0 && calls("mark").length === 0,
+          calls("next").length + " " + calls("queue").length + " " + calls("mark").length)
 
     // While the page is open, each poll's answer brings a fresh read.
     service.applyPlayer({ active: true, playing: true, position: 10, duration: 100, item: null })
@@ -171,7 +213,7 @@ Item {
     // An error from playback reaches the OSD while a page hides the status line.
     top.summoned = []
     service.applyPlayer({ active: false, playing: false, streamBroke: true, item: null })
-    check("a broken stream is reported", service.actionError.indexOf("stopped part way") >= 0, service.actionError)
+    check("a broken stream is reported", service.actionError.indexOf("Stream dropped") >= 0, service.actionError)
     check("and reaches the OSD while a page is open", top.summoned.length === 1, JSON.stringify(top.summoned))
 
     // The switch and Clear reach the bridge. A read asked before the switch
@@ -207,9 +249,44 @@ Item {
 
     // The broken stream's two messages, and a host that can't start part way.
     service.applyPlayer({ active: false, playing: false, streamBroke: true, nothingMore: true, item: null })
-    check("nothing more arriving says how to mark it played", service.actionError.indexOf("mark it played") >= 0, service.actionError)
+    check("nothing more arriving asks to mark it played", service.actionError.indexOf("Mark it played") >= 0, service.actionError)
+    var said = [service.actionError]
     service.applyPlayer({ active: true, playing: true, position: 1, duration: 100, startedFromTop: true, item: null })
-    check("a host that can't start part way is said", service.actionError.indexOf("from the top") >= 0, service.actionError)
+    check("a host that can't start part way is said", service.actionError.indexOf("from top") >= 0, service.actionError)
+    said.push(service.actionError)
+    service.applyPlayer({ active: false, playing: false, streamBroke: true, item: null })
+    said.push(service.actionError)
+    service.applyPlayer({ active: false, playing: false, playerHung: true, item: null })
+    said.push(service.actionError)
+    // Omarchy's OSD shows one line of about 38 characters (325 px at its
+    // title size); longer is cut off, advice and all.
+    check("every playback message fits the OSD", said.every(function(m) { return m.length > 0 && m.length <= 38 }),
+          JSON.stringify(said))
+    settle()
+
+    // A poll dropped as stale (a change began meanwhile) still says its
+    // one-time messages: they're never sent again.
+    service.actionError = ""
+    service.refreshPlayer()
+    service._changeSerial++
+    answer("player", { active: false, playing: false, streamBroke: true, item: null })
+    check("a stale poll still reports a broken stream", service.actionError.indexOf("Stream dropped") >= 0, service.actionError)
+    settle()
+
+    // Two quick switches answered out of order: the later one wins. And a
+    // Clear answered after a later switch doesn't undo it.
+    service.setStatsCounting(true)
+    service.setStatsCounting(false)
+    answer("stats off", Object.assign({}, top.stats, { counting: false }))
+    answer("stats on", Object.assign({}, top.stats, { counting: true }))
+    check("a switch's late answer is ignored", service.statsCounting === false && named("statsCounting").text === "Off",
+          service.statsCounting + " " + named("statsCounting").text)
+    service.clearStats()
+    service.setStatsCounting(true)
+    answer("stats on", Object.assign({}, top.stats, { counting: true, listened: 5 }))
+    answer("stats clear", Object.assign({}, top.stats, { counting: false, listened: 0 }))
+    check("a Clear's late answer is ignored", statsView.stats.listened === 5 && service.statsCounting === true,
+          statsView.stats.listened + " " + service.statsCounting)
     settle()
 
     // Back, and closing, are counted off the service.

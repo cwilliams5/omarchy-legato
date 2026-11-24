@@ -522,16 +522,19 @@ Item {
   function reportPlayerProblems(view) {
     if (!view) return
     if (view.loadFailed === true) loadFailed("")
-    if (view.playerHung === true) reportError("The player stopped responding and was closed. Press play to carry on.")
-    // The stream broke off part way (the network or the episode's server
-    // went): not finished, the player is closed, play loads it again. If the
-    // reload got nothing at all, it may be the end, misjudged: say how to
-    // mark it played (the bridge never does that by itself).
-    if (view.nothingMore === true) reportError("Nothing more of this episode arrives. If it's done, mark it played (right-click it in Up Next).")
-    else if (view.streamBroke === true) reportError("Audio stopped part way. Press play to carry on.")
+    if (view.playerHung === true) reportError("Player stopped responding. Press play.")
+    // Every message here fits Omarchy's OSD on one line (about 38 characters:
+    // 325 px at its title size, measured) and the panel's status line; the
+    // README has the detail. The stream broke off part way (the network or
+    // the episode's server went): not finished, the player is closed, play
+    // loads it again. If the reload got nothing at all, it may be the end,
+    // misjudged: it asks you to mark it played (Up Next's right-click; the
+    // bridge never does that by itself).
+    if (view.nothingMore === true) reportError("Nothing more arrives. Mark it played?")
+    else if (view.streamBroke === true) reportError("Stream dropped. Press play to resume.")
     // A host that can't start part way: it plays from the top, and Legato
-    // sends no position until it passes where you were.
-    if (view.startedFromTop === true) reportError("This show's server can't start part way: playing from the top. Your place syncs again once it's passed.")
+    // sends no position until playback passes where you were.
+    if (view.startedFromTop === true) reportError("Server can't resume: playing from top")
   }
 
   // Where playback is now: the last read from mpv, carried forward by the

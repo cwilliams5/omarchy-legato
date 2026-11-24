@@ -119,6 +119,9 @@ Item {
     stats.stats = { listened: 0, speed: 0, trim: 0, skipping: 0, intro: 0, outro: 0, finished: 0, since: 0, counting: true }
     check("a fresh file says counting starts next", find(stats, "statsSince").text.indexOf("counting starts") >= 0,
           find(stats, "statsSince").text)
+    stats.stats = Object.assign({}, stats.stats, { counting: false })
+    check("off with nothing counted says it's off", find(stats, "statsSince").text === "Not counting: turned off below.",
+          find(stats, "statsSince").text)
 
     // A failure is shown on the page itself (the panel's status line is hidden).
     var error = find(stats, "statsError")

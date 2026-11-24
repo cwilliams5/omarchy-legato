@@ -179,17 +179,23 @@ devices.
 - **A cover isn't a video:** some feeds pack the episode's cover into the
   file as a video stream. Legato treats those episodes as audio.
 - **A host that can't start part way** (it serves no byte ranges): a
-  resume plays from the top, and Legato sends no position until playback
-  passes where you were, so your other devices aren't sent back; the panel
-  says so.
-- **A dropped stream near the end, on a host that sends no file size:**
-  when the audio stops part way, Legato tells that from the episode's end
-  by the file's size. Without one (rare: podcast hosts send it), it goes by
-  the episode's length, so a stop in the last tenth counts as the end and
-  marks the episode played. With no length either, every stop counts as the
-  end, as before 1.1. The other way round, such a file much shorter than
-  Pocket Casts lists never seems to end: Legato says nothing more arrives
-  and how to mark it played.
+  resume plays from the top ("Server can't resume: playing from top"), and
+  Legato sends no position until playback passes where you were, so your
+  other devices aren't sent back. A seek ahead doesn't land on such a host
+  either; seeking back doesn't sync until playback gets past your place.
+- **A dropped stream, on a host that sends no file size:** when the audio
+  stops part way ("Stream dropped. Press play to resume."), Legato knows it
+  broke because mpv's network layer reports a stream that ended short of
+  its size. Without a size (rare: podcast hosts send it), it goes by the
+  episode's length, so a stop in the last tenth counts as the end and
+  marks the episode played. With no length either, every stop counts as
+  the end, as before 1.1. The other way round, such a file much shorter
+  than Pocket Casts lists never seems to end: Legato says "Nothing more
+  arrives. Mark it played?" (right-click it in Up Next to do that).
+- **A show's skip-outro needs mpv to measure the file right:** it's
+  counted back from mpv's length for the file, so Legato leaves it off when
+  that disagrees with Pocket Casts' (some ad-stitched MP3s read far short),
+  and the episode plays to its end.
 
 ## Built on
 
@@ -358,7 +364,10 @@ it. The player's own choices, your sign-in and your listening stats stay.
   from each show's own server.
 - Legato runs its helper and mpv with a cleared environment and absolute
   paths. mpv only ever gets web addresses (`http` or `https`) and checks
-  every `https` certificate.
+  every `https` certificate. It loads none of your mpv config or scripts:
+  only Legato's own stream watcher (`bin/legato-watch.lua`, which reads
+  mpv's network error messages to tell a dropped stream from an episode's
+  end) and, if installed, mpv-mpris.
 - mpv fetches through a small local check that runs while it does: every
   connection, redirects included, goes only to public addresses (or, if you
   allow it, your local network), never to this computer, and the address is

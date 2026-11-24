@@ -8,40 +8,51 @@ and runs the tests meant to catch each. A mutation that passes them is a
 
 ```bash
 tests/run                          # first: a green baseline (a red one "kills" everything)
-python3 -B tests/mutate.py .       # all of them, about 45 minutes
+python3 -B tests/mutate.py .       # all of them, about an hour
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (113 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (137 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
 it.
 
-## The set (113; strict review rounds 1 to 3, 2026-11-24)
+## The set (137; strict review rounds 1 to 4, 2026-11-24)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
 (a red baseline would count everything as killed) and names the test that
 caught each mutant. By area:
 
-- **Broken stream vs the end**: the size first (read to the end, much
-  unread, the skip-outro and its slack), a size known earlier and lost, the
-  no-size margin and which durations count, polls filling in the record,
-  Play's own check (the path and size in its snapshot) and its reload.
+- **Broken stream vs the end**: the watcher's evidence (its cut, a
+  reconnect that read on, a size without a cut, the load's size, players
+  without the watcher, the property read at an end, the script loaded at
+  all) and the watcher's own Lua (unknown sizes, other components' lines,
+  the reset per file); the no-size margin, its outro and which durations
+  count; polls filling in the record; Play's own check and its reload.
+- **Where it starts and the floor**: at the listed end never "from the
+  top"; the skip-outro only when mpv's duration agrees; the floor from a
+  load and from the resume check's seek, lifted by a seek only from an
+  honoured start; nothing-more only just after an unseeked start.
 - **The broken stream's push and the resume after it**: after a long gap,
   while unconfirmed, before the check; Pocket Casts further on winning
   after the player closed, and a further unsent local position kept.
 - **Play's quick check and sign-in**: short only on Play, never cutting a
-  refresh short, the sleep guard's refresh, the 5 s value.
+  refresh short, no refresh before sleep, the deadline held while a
+  refresh is stored, the 5 s value.
 - **Listening stats**: the seek flag and its bound, the speed and Trim
   matches, the bounds, the gap, buffering, another file, a pause, errors,
   skips counted as gone (not as asked), the counts around pause, speed,
   switch and stop, the lock cap, off, clear and its lock, intro and outro.
-- **skip-taskbar**: the untag rule, the pin match, the rules sent before
-  the pin.
+- **skip-taskbar and the video rule**: the untag rule, the pin match, the
+  rules sent before the pin, o.window only once (run against Omarchy's
+  real helpers.lua).
 - **QML**: the round 2 fit reviewer's ten (keys behind the Stats page, its
   stats, height, visibility, the date, plain-text errors, the broken-stream
   report, the seek flag, the stats read, BarWidget's IPC) and the page
-  counts, against the real Panel and Service (`tests/qml/panel.qml`).
+  counts, against the real Panel and Service (`tests/qml/panel.qml`); round
+  4's: Delete and the keys behind a page (now signed in, with a control),
+  a stale poll's messages, late switch and Clear answers, the switch's
+  default, message lengths, the off-and-empty text.
 
 ## Results
 
@@ -67,6 +78,15 @@ caught each mutant. By area:
 - After round 3's fixes: 113 of 113 killed, on a green suite (171 Python
   tests, 36 node; the first run's baseline check caught a stale node
   pattern, which skipped its five mutants until fixed).
+- Round 4 (the reviewers' own): 18 of 31 real (fit; the QML 7 of 16), 8
+  of 12 (safety). Their survivors are in this set now as behaviour tests.
+  After round 4's fixes, this set's first run: 134 of 137, on a suite red
+  only from a test asserting the old start position; the three survivors
+  (the watcher's record unread or the watcher not loaded, caught only by a
+  break early enough for the length rule to agree; an outro longer than
+  the misread duration, which mpv refuses anyway) got a break near the end
+  and a 10 s outro. Final: 137 of 137 killed, on a green suite (188 Python
+  tests, 36 node).
 - Equivalent and left out: dropping `after > before` from the skip count
   (`add_stats` ignores values that aren't positive).
 

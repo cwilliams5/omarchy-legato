@@ -74,9 +74,11 @@ USER_AGENT = "legato/1.0 (+https://github.com/cwilliams5/omarchy-legato)"
 HTTP_TIMEOUT = 15
 # A sign-in refresh's own timeout: the resume check's short limit
 # (http_timeout) never applies to it, since a refresh cut short after Pocket
-# Casts answered could lose a rotated refresh token. Only the sleep guard
-# lowers it, with HTTP_TIMEOUT.
+# Casts answered could lose a rotated refresh token. (The sleep guard doesn't
+# refresh at all.)
 TOKEN_TIMEOUT = 15
+# False only in the sleep guard's push: no sign-in refresh there (refresh_tokens).
+REFRESH_ALLOWED = True
 ART_TIMEOUT = 8
 ART_WORKERS = 8
 ART_SIZE = 200
@@ -129,17 +131,17 @@ LISTEN_GAP_MAX = 300
 SEEKED_STRETCH_MAX = 40
 STATS_KEYS = ("listened", "speed", "trim", "skipping", "intro", "outro")
 # mpv sits at "end of file" both at an episode's real end and where its stream
-# broke off for good. Stopping more than this many seconds (or 1% of the
-# episode, if that's more) before the end, the show's skip-outro included, is
-# a broken stream, not the end...
-BROKE_SLACK = 10
-# ...unless mpv had read all but this much of the file (1% of it if that's
-# more): then the duration it estimated was a little long.
-BROKE_UNREAD_BYTES = 64 * 1024
-# With the file's size never known, an end counts only within this share of
-# the longest duration given (Pocket Casts', mpv's): podcast files and their
-# listed durations differ by a few minutes (ads inserted on the fly).
+# broke off for good (stream_broke). Its watcher (legato-watch.lua) records
+# where FFmpeg saw a sized stream end short; mpv having read this far past
+# that spot means a reconnect worked and the stream went on.
+READ_PAST_CUT = 64 * 1024
+# With no size from the host (or no watcher), an end counts only within this
+# share of the longest duration given (Pocket Casts', mpv's), or BROKE_SLACK
+# seconds if that's more: podcast files and their listed durations differ by
+# a few minutes (ads inserted on the fly). The same share decides whether
+# mpv's duration agrees with Pocket Casts' enough to skip a show's outro.
 NO_SIZE_MARGIN = 0.10
+BROKE_SLACK = 10
 # A load that started this far short of where it was asked couldn't start
 # part way (below_start).
 START_SLACK = 5
@@ -937,12 +939,21 @@ def refresh_tokens(auth):
             return current["access_token"]  # another call refreshed it
         auth.clear()
         auth.update(current)  # refresh the session as it is on disk now
-        status, payload = post_json("/user/token", {"grantType": "refresh_token",
-                                                    "refreshToken": auth.get("refresh_token", "")},
-                                    timeout=TOKEN_TIMEOUT)
-        if status == 200 and payload.get("accessToken"):
-            store_tokens(auth, payload)  # still the session on disk: checked above, under the lock
-            return auth["access_token"]
+        if not REFRESH_ALLOWED:
+            # Before sleep (pause_for_sleep): a refresh cut short by its 4 s
+            # limit after Pocket Casts rotated the refresh token would sign you
+            # out. The push waits; the next resume asks Pocket Casts (rule 2).
+            raise ApiError("network", "No sign-in refresh just before sleep")
+        # The call's deadline waits until the answer is stored: one landing
+        # between Pocket Casts' answer and the write would lose a rotated
+        # refresh token. TOKEN_TIMEOUT bounds the wait.
+        with deadline_held():
+            status, payload = post_json("/user/token", {"grantType": "refresh_token",
+                                                        "refreshToken": auth.get("refresh_token", "")},
+                                        timeout=TOKEN_TIMEOUT)
+            if status == 200 and payload.get("accessToken"):
+                store_tokens(auth, payload)  # still the session on disk: checked above, under the lock
+                return auth["access_token"]
         if status in (400, 401, 403):
             auth["needs_reauth"] = True
             save_auth(auth)
@@ -1328,7 +1339,7 @@ def up_next_remove(uuids):
 
 MPV_PROPERTIES = ("path", "pause", "time-pos", "duration", "volume", "speed", "eof-reached", "vid", "track-list", "af",
                   "idle-active", "paused-for-cache", "playlist-count", "stream-end")
-END_PROPERTIES = ("stream-pos", "stream-end", "file-local-options/end")
+END_PROPERTIES = ("stream-pos", "stream-end", "file-local-options/end", "user-data/legato")
 
 
 def runtime_dir(create=False):
@@ -1348,6 +1359,19 @@ def player_socket():
         return socket_path(create=True)
     except (OSError, ApiError):
         return ""
+
+
+def watch_script():
+    """Legato's stream watcher (bin/legato-watch.lua, next to this file), so
+    stream_broke has evidence of a break. Loaded only if it and every folder
+    above it belong to this user or root and nobody else can write them."""
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "legato-watch.lua")
+    try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return ""
+    except OSError:
+        return ""
+    return path if safe_chain(path, (0, os.geteuid())) else ""
 
 
 def mpris_script():
@@ -1621,7 +1645,8 @@ def mpv_gpu_env(root="/sys/class/drm"):
 def start_mpv(prefs):
     """Start the player detached (it outlives this script and the shell) and
     wait for its socket. mpv runs with --no-config so nothing from ~/.config/mpv
-    — scripts, ytdl hooks, profiles — is loaded into it."""
+    — scripts, ytdl hooks, profiles — is loaded into it: only Legato's own
+    stream watcher and, when installed system-wide, mpv-mpris."""
     mpv = trusted_tool("mpv")
     if not mpv:
         raise ApiError("no_mpv", "mpv is not installed — run: omarchy pkg add mpv")
@@ -1659,9 +1684,9 @@ def start_mpv(prefs):
     if filters:
         argv.append("--af=" + filters)
     argv.extend(MPV_EXTRA_ARGS)
-    script = mpris_script()
-    if script:
-        argv.append("--script=" + script)
+    for script in (watch_script(), mpris_script()):
+        if script:
+            argv.append("--script=" + script)
     # Its own session, so it is nobody's child for long: the bridge exits right
     # after this and mpv is reparented. Standard streams go to /dev/null; every
     # other descriptor here is close-on-exec.
@@ -1804,7 +1829,9 @@ def video_rule_lua(geometry, pinned=True, transparency=0):
     Omarchy's webcam overlay: that marks the app as floating on its own, so
     a floating workspace's open rule (which sizes every other new window to
     two thirds of the screen, centered) leaves it alone. Named, so adding it
-    again replaces it. A second rule turns off the floating workspace's title
+    again replaces it; o.window also records it in Omarchy's floating-app
+    list each time (no check for repeats), so after the first time (until a
+    config reload empties the list) it goes in as a plain rule. A second rule turns off the floating workspace's title
     bar for it (its buttons can't minimize or maximize a pinned window). Two
     more tag it `skip-taskbar` while it's pinned, a convention of Legato's
     own (Hyprland has none): a taskbar or window switcher that honors it
@@ -1825,7 +1852,10 @@ def video_rule_lua(geometry, pinned=True, transparency=0):
         move = '{ "(monitor_w-monitor_w*7/25-24)", "(monitor_h-monitor_w*63/400-60)" }'
     return ('local r = { name = "%(id)s", float = true, pin = %(pin)s, no_initial_focus = true, '
             'size = %(size)s, move = %(move)s } '
-            'if o and o.window then o.window("^%(id)s$", r) '
+            'local known = false '
+            'if o and o.floating_apps and o.floating_apps.class then '
+            'for _, p in ipairs(o.floating_apps.class) do if p == "^%(id)s$" then known = true end end end '
+            'if o and o.window and not known then o.window("^%(id)s$", r) '
             'else r.match = { class = "^%(id)s$" } hl.window_rule(r) end '
             'pcall(hl.window_rule, { name = "%(id)s-nobar", match = { class = "^%(id)s$" }, ["hyprbars:no_bar"] = true }) '
             'pcall(hl.window_rule, { name = "%(id)s-tags", match = { class = "^%(id)s$", pin = true }, tag = "+%(skip)s" }) '
@@ -2166,12 +2196,14 @@ def chip_item(item):
 
 
 def start_position(item, from_start=False):
+    """Where an episode starts: the top if asked or already played, else where
+    Pocket Casts has it. Even at (or past) its listed length: files often run
+    longer than listed (ads inserted on the fly), and starting such a one from
+    the top would push 0 to every device. One at its real end ends at once and
+    is marked played."""
     if from_start or item.get("status") == STATUS_PLAYED:
         return 0
-    position = as_int(item.get("playedUpTo"))
-    if item.get("duration") and position >= item["duration"] - FINISH_SLACK:
-        return 0
-    return position
+    return as_int(item.get("playedUpTo"))
 
 
 def show_skips(podcast_uuid):
@@ -2185,6 +2217,17 @@ def show_skips(podcast_uuid):
         if show.get("uuid") == podcast_uuid:
             return as_int(show.get("startFrom")), as_int(show.get("skipLast"))
     return 0, 0
+
+
+def outro_applies(listed, duration, position, skip_last):
+    """Whether a show's skip-outro (`end=-N`, counted back from mpv's own
+    duration) can be trusted for this file: only when mpv's duration agrees
+    with Pocket Casts' listed one (ads can make the file longer, never much
+    shorter). An MP3 mpv misreads short (no VBR header: 18 s of 60) would
+    otherwise end at once, a clean stop that is then the end: marked played,
+    and the next episode of the show the same."""
+    return (isinstance(duration, (int, float)) and not isinstance(duration, bool) and listed > 0
+            and duration >= listed * (1 - NO_SIZE_MARGIN) and position + skip_last < duration)
 
 
 def load_into_mpv(item, prefs, position, skip_last=0):
@@ -2202,14 +2245,13 @@ def load_into_mpv(item, prefs, position, skip_last=0):
         if item.get("show"):
             title = "%s — %s" % (title, item["show"])
         options = "start=%d,force-media-title=%s,pause=no" % (int(position), mpv_quote(title))
-        duration = as_int(item.get("duration"))
-        if skip_last and (not duration or position + skip_last < duration):
-            # The show's skip-outro: mpv ends the episode that much early, and
-            # the end is handled as any other (marked played, autoplay).
-            options += ",end=-%d" % skip_last
         player.command("loadfile", url, "replace", -1, options)
         player.wait_for_load()
         size, duration = player.get("stream-end"), player.get("duration")
+        if skip_last and outro_applies(as_int(item.get("duration")), duration, position, skip_last):
+            # The show's skip-outro: mpv ends the episode that much early, and
+            # the end is handled as any other (marked played, autoplay).
+            player.set("file-local-options/end", "-%d" % skip_last)
         return {"url": url, "size": size if isinstance(size, int) else None,
                 "duration": duration if isinstance(duration, (int, float)) else None,
                 "asked": int(position) if position > START_SLACK else None, "begun": float(position)}
@@ -2454,26 +2496,29 @@ def skip_last_of(value):
 def stream_broke(snap, state):
     """mpv (keep-open) sits with `eof-reached` on both at an episode's real end
     and where its stream broke off for good (the network went, the host hung
-    up; mpv retries for a while first). Only the first finishes the episode,
-    and calling a break the end is the worse mistake (it marks an unfinished
-    episode played on every device and starts the next), so where the
-    evidence is weak this leans towards a break. A real end misjudged leaves
-    the episode in progress: Play reloads it at its end, which stops again
-    and says to mark it played (stream_stopped); nothing is pushed back.
+    up or answered with an error page; mpv retries for a while first). Only
+    the first finishes the episode. Calling a break the end is the worse
+    mistake: it marks an unfinished episode played on every device and starts
+    the next. Judging it from mpv's numbers (sizes, positions, durations)
+    failed four strict reviews in a row on host shapes nobody had tried, so
+    the judgment rests on evidence:
 
-    1. The file's size, known now (the stream hasn't failed): read to its
-       end, the end; much unread, a break only if mpv's own duration (from
-       the file, not Pocket Casts' listing) also says the stop is short of
-       the end, the show's skip-outro allowed for (an M4A's index can sit
-       after its audio, unread).
-    2. The size known earlier for this file (`stream`: recorded at load,
-       filled in by polls) and gone now: a break; mpv drops it when the
-       stream fails.
-    3. The size never known (a host that sends none, or a break before any
-       poll learned it): compared with the longest duration given (Pocket
-       Casts', mpv's at load or now; mpv's own can be far short for an MP3
-       still arriving), it's the end only within NO_SIZE_MARGIN of it.
-    4. No size and no duration at all: the end, as before 1.1."""
+    1. The watcher (bin/legato-watch.lua, in every player since 1.1) records
+       FFmpeg's "Stream ends prematurely at N" for the file playing: the host
+       gave a size and the stream ended short of it. Recorded, and mpv read
+       no further (a reconnect that worked reads on): a break.
+    2. No such line, and the host gave a size: the end. A real end logs
+       nothing, whatever mpv's estimated duration says (an M4A's index after
+       its audio, a misread MP3, a show's skip-outro).
+    3. A host that gives no size (FFmpeg can't tell a cut from the end
+       there), or a player without the watcher (started by an older Legato):
+       compared with the longest duration given (Pocket Casts', mpv's at load
+       or since), it's the end only within NO_SIZE_MARGIN of it, the
+       skip-outro allowed for. With no duration at all, the end, as before 1.1.
+
+    A real end misjudged by 3 leaves the episode in progress: Play loads it
+    again at its end, which stops again and says to mark it played
+    (stream_stopped); nothing is pushed back."""
     if snap.get("eof-reached") is not True:
         return False
     position = snap.get("time-pos")
@@ -2481,29 +2526,24 @@ def stream_broke(snap, state):
         return False
     loaded = state.get("stream")
     loaded = loaded if isinstance(loaded, dict) and loaded.get("url") == snap.get("path") else {}
+
+    def number(value):
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+    watch = snap.get("user-data/legato")
+    if isinstance(watch, dict) and watch.get("watching") is True:
+        cut, read = watch.get("cut"), snap.get("stream-pos")
+        if number(cut) and not (number(read) and read > cut + READ_PAST_CUT):
+            return True
+        sizes = (snap.get("stream-end"), loaded.get("size"))
+        if any(number(size) and size > 0 for size in sizes):
+            return False
     skip = skip_last_of(snap.get("file-local-options/end"))
     durations = [d for d in (snap.get("duration"), loaded.get("duration"), (state.get("episode") or {}).get("duration"))
-                 if isinstance(d, (int, float)) and not isinstance(d, bool) and d > 0]
-    longest = max(durations) if durations else None
-    read, size = snap.get("stream-pos"), snap.get("stream-end")
-    if isinstance(size, int) and size > 0:
-        # The size is still known, so the stream hasn't failed (mpv drops it
-        # when it does). Read to its end: the end. Much unread is a break only
-        # if mpv's own duration, from the file, says the stop is short too:
-        # an M4A's index can sit after its audio (FFmpeg's default), and the
-        # show's skip-outro stops short on purpose.
-        if isinstance(read, int) and size - read <= max(BROKE_UNREAD_BYTES, size // 100):
-            return False
-        own = [d for d in (snap.get("duration"), loaded.get("duration"))
-               if isinstance(d, (int, float)) and not isinstance(d, bool) and d > 0]
-        if not own:
-            return True
-        length = max(own)
-        return position < length - skip - max(BROKE_SLACK, length / 100)
-    if isinstance(loaded.get("size"), int) and loaded["size"] > 0:
-        return True
-    if longest is None:
+                 if number(d) and d > 0]
+    if not durations:
         return False
+    longest = max(durations)
     return position < longest - skip - max(BROKE_SLACK, longest * NO_SIZE_MARGIN)
 
 
@@ -2512,7 +2552,7 @@ def below_start(state, position):
     (`stream`'s `asked`): a host that serves no byte ranges can't start part
     way, so mpv plays from the top. Pushing that would rewind every other
     device to it; nothing is pushed until playback passes the start (or you
-    seek, which clears it: cmd_seek)."""
+    seek from a start that was honoured: cmd_seek)."""
     record = state.get("stream")
     url = (state.get("episode") or {}).get("url")
     if not isinstance(record, dict) or record.get("url") != url:
@@ -2582,7 +2622,7 @@ def stream_stopped(state, prefs, position):
     # its end, misjudged: say how to mark it played (never done by itself).
     record = state.get("stream") or {}
     begun = record.get("begun") if isinstance(record, dict) else None
-    if isinstance(begun, (int, float)) and isinstance(position, (int, float)) and position - begun < 2:
+    if isinstance(begun, (int, float)) and isinstance(position, (int, float)) and 0 <= position - begun < 2:
         view["nothingMore"] = True
     return view
 
@@ -2657,6 +2697,12 @@ def check_server(state, prefs, player=None, quick=False):
                 finally:
                     if own:
                         player.close()
+            stream = state.get("stream")
+            if server > local + START_SLACK and isinstance(stream, dict) and stream.get("url") == episode.get("url"):
+                # A host without byte ranges can't seek ahead: mpv plays on
+                # from where it was. Nothing is pushed below Pocket Casts'
+                # position until playback gets there (below_start).
+                stream["asked"] = server
             state["position"] = float(server)
             state["lastSyncPos"] = float(server)
             episode["playedUpTo"] = server
@@ -3442,10 +3488,18 @@ def cmd_seek(args):
         with require_player() as player:
             prefs = load_prefs()
             count_listening(state, listen_snap(player), prefs)
+            before = player.get("time-pos")
             record = state.get("stream")
             if isinstance(record, dict):
-                record["asked"] = None  # a seek of yours: where it plays is where you mean it to
-            before = player.get("time-pos")
+                asked = record.get("asked")
+                if (isinstance(asked, (int, float)) and isinstance(before, (int, float))
+                        and before >= asked - START_SLACK):
+                    # It did start where it was asked (before any poll saw
+                    # so): a seek back from there is yours to sync. On a host
+                    # without byte ranges the floor stays (a seek there may
+                    # not land) until playback passes it.
+                    record["asked"] = None
+                record["begun"] = None  # a break after a seek isn't "nothing more arrives"
             # osd-msg-bar: the video window (if shown) shows where it went.
             if args.relative:
                 player.command("osd-msg-bar", "seek", float(args.seconds), "relative")
@@ -3460,8 +3514,9 @@ def cmd_seek(args):
             count_listening(state, listen_snap(player), prefs)
             playing = player.get("pause") is False and player.get("eof-reached") is not True
             if playing and ended_here(state):
-                # Dragged back from the end of an episode that ended here: mpv
-                # plays on from there, so it's in progress again.
+                # Dragged back from the end of an episode that ended here
+                # while mpv still played (it pauses itself at the end a
+                # moment later; paused, Play plays it again from here).
                 play_again(player, state, from_start=False)
             else:
                 # While paused, sync_now's rule decides: a seek right after
@@ -3567,9 +3622,11 @@ def wait_for_sleep(lines):
 
 
 def pause_for_sleep():
-    """Pause a playing episode and push its position, quickly."""
-    global HTTP_TIMEOUT, TOKEN_TIMEOUT
-    HTTP_TIMEOUT = TOKEN_TIMEOUT = SLEEP_PUSH_TIMEOUT
+    """Pause a playing episode and push its position, quickly: with the
+    current sign-in only (no refresh, REFRESH_ALLOWED)."""
+    global HTTP_TIMEOUT, REFRESH_ALLOWED
+    HTTP_TIMEOUT = SLEEP_PUSH_TIMEOUT
+    REFRESH_ALLOWED = False
     with StateLock(timeout=2):
         state = load_playback()
         player = Mpv.connect(timeout=1.0)
@@ -3904,8 +3961,27 @@ class DeadlinePassed(BaseException):
     (`except ApiError`, `except Exception`) must not swallow the deadline."""
 
 
+_DEADLINE = {"holding": False, "passed": False}
+
+
 def _deadline_passed(signum, frame):
+    if _DEADLINE["holding"]:
+        _DEADLINE["passed"] = True  # raised when the hold ends (deadline_held)
+        return
     raise DeadlinePassed()
+
+
+@contextlib.contextmanager
+def deadline_held():
+    """Within this, the call's deadline waits: it's raised on the way out."""
+    _DEADLINE["holding"] = True
+    try:
+        yield
+    finally:
+        _DEADLINE["holding"] = False
+        if _DEADLINE["passed"]:
+            _DEADLINE["passed"] = False
+            raise DeadlinePassed()
 
 
 def main(argv):

@@ -44,6 +44,7 @@ _loader.exec_module(bridge)
 
 PODCAST_A = "11111111-1111-1111-1111-111111111111"
 PODCAST_B = "22222222-2222-2222-2222-222222222222"
+OMARCHY_HELPERS = "/usr/share/omarchy/default/hypr/helpers.lua"
 EP_1 = "aaaaaaaa-0000-0000-0000-000000000001"
 EP_2 = "aaaaaaaa-0000-0000-0000-000000000002"
 EP_3 = "bbbbbbbb-0000-0000-0000-000000000003"
@@ -135,7 +136,10 @@ class Validation(unittest.TestCase):
     def test_start_position(self):
         self.assertEqual(bridge.start_position({"playedUpTo": 50, "duration": 100, "status": 2}), 50)
         self.assertEqual(bridge.start_position({"playedUpTo": 50, "duration": 100, "status": 3}), 0)
-        self.assertEqual(bridge.start_position({"playedUpTo": 99, "duration": 100, "status": 2}), 0)
+        # At or past the listed length, still in progress: from there (files
+        # run longer than listed; from the top would push 0 everywhere).
+        self.assertEqual(bridge.start_position({"playedUpTo": 99, "duration": 100, "status": 2}), 99)
+        self.assertEqual(bridge.start_position({"playedUpTo": 120, "duration": 100, "status": 2}), 120)
         self.assertEqual(bridge.start_position({"playedUpTo": 50, "duration": 100}, from_start=True), 0)
 
     def test_trim_levels_use_pocket_casts_values(self):
@@ -159,6 +163,31 @@ class Validation(unittest.TestCase):
         self.assertEqual(env.get("WAYLAND_DISPLAY"), "wayland-1")
         self.assertEqual(env.get("HYPRLAND_INSTANCE_SIGNATURE"), "abc_123")
         self.assertNotIn("LD_PRELOAD", env)
+
+    @unittest.skipUnless(os.path.exists("/usr/bin/lua5.4") and os.path.exists(OMARCHY_HELPERS), "needs lua5.4 and Omarchy")
+    def test_the_rule_registers_with_omarchy_once(self):
+        # Omarchy's o.window adds the app to its floating-app list on every
+        # call, with no check for repeats. Run the rule's Lua three times
+        # against Omarchy's real helpers (a stand-in `hl` records the rules;
+        # nothing reaches Hyprland): one entry, and every call still sends
+        # the named rules (the size and place can change).
+        with tempfile.TemporaryDirectory() as home:
+            rule = os.path.join(home, "rule.lua")
+            with open(rule, "w") as fh:
+                fh.write(bridge.video_rule_lua({"x": 10, "y": 20, "w": 300, "h": 170}, True, 0))
+            harness = (
+                'package.path = "/usr/share/omarchy/?.lua;" .. package.path '
+                'local sent = {} '
+                'hl = setmetatable({ window_rule = function(r) table.insert(sent, r.name) end }, '
+                '{ __index = function() return function() end end }) '
+                'require("default.hypr.helpers") '
+                'local chunk = assert(loadfile(os.getenv("RULE"))) '
+                'for i = 1, 3 do assert(chunk() == "ok") end '
+                'local names = {} for _, n in ipairs(sent) do if n == "legato-video" then names[#names + 1] = n end end '
+                'print(#o.floating_apps.class, #names)')
+            done = subprocess.run(["/usr/bin/lua5.4", "-e", harness], capture_output=True, text=True,
+                                  env={"HOME": home, "PATH": "/usr/bin", "RULE": rule}, cwd=home, timeout=10)
+        self.assertEqual(done.stdout.split(), ["1", "3"], done.stderr)
 
     def test_video_window_rule_and_geometry(self):
         default = bridge.video_rule_lua(None)
@@ -431,6 +460,23 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def trickle(self, data):
+        """Send `data` at the state's `rate` (bytes a second, like a real
+        link: mpv's duration estimate and cache then see it arrive), or all at
+        once."""
+        rate = self.state.get("rate")
+        if not rate:
+            self.wfile.write(data)
+            return
+        step = max(1, rate // 20)
+        try:
+            for at in range(0, len(data), step):
+                self.wfile.write(data[at:at + step])
+                self.wfile.flush()
+                time.sleep(0.05)
+        except OSError:
+            pass  # mpv let go (a seek, the player closed)
+
     def do_GET(self):
         s = self.state
         path = urllib.parse.urlsplit(self.path).path
@@ -453,10 +499,37 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 if cut is not None:
                     s.setdefault("cutServed", {})[name] = True
-                self.wfile.write(blob[:cut] if cut is not None else blob)
+                self.trickle(blob[:cut] if cut is not None else blob)
+                self.close_connection = True
+                return
+            if name in s.get("noranges", ()):
+                # A host that sends the size (Content-Length) but serves no
+                # byte ranges: mpv can't start part way, nor reconnect.
+                if cut is not None and s.setdefault("cutServed", {}).get(name):
+                    self.close_connection = True
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "audio/mpeg")
+                self.send_header("Content-Length", str(len(blob)))
+                self.end_headers()
+                if cut is not None:
+                    s.setdefault("cutServed", {})[name] = True
+                self.trickle(blob[:cut] if cut is not None else blob)
                 self.close_connection = True
                 return
             if cut is not None and s.setdefault("cutServed", {}).get(name):
+                if s.get("cutReply"):
+                    # The host is up but failing: mpv's reconnect gets an
+                    # error page (a CDN's 503, an expired link's 403), whose
+                    # length FFmpeg then reports as the file's size.
+                    page = b"<html><body><h1>Service Temporarily Unavailable</h1></body></html>"
+                    self.send_response(s["cutReply"])
+                    self.send_header("Content-Type", "text/html")
+                    self.send_header("Content-Length", str(len(page)))
+                    self.end_headers()
+                    self.wfile.write(page)
+                    self.close_connection = True
+                    return
                 # The network is gone: later requests (mpv reconnecting) get
                 # nothing at all.
                 self.close_connection = True
@@ -477,10 +550,10 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
                 # The stream breaks part way: the first `cut` bytes, then the
                 # connection drops.
                 s["cutServed"][name] = True
-                self.wfile.write(blob[first:min(cut, last + 1)])
+                self.trickle(blob[first:min(cut, last + 1)])
                 self.close_connection = True
                 return
-            self.wfile.write(blob[first:last + 1])
+            self.trickle(blob[first:last + 1])
             return
         if path.startswith("/podcast/full/"):
             uuid = path.rsplit("/", 1)[1]
@@ -595,12 +668,22 @@ def make_video(seconds):
 
 def encode(args, suffix):
     """A file ffmpeg makes from `args` (sources and options), as bytes."""
-    out = tempfile.mktemp(suffix=suffix)
-    subprocess.run(["/usr/bin/ffmpeg", "-loglevel", "error", "-y"] + args + [out], check=True)
-    with open(out, "rb") as fh:
-        blob = fh.read()
-    os.unlink(out)
-    return blob
+    with tempfile.TemporaryDirectory() as folder:
+        out = os.path.join(folder, "out" + suffix)
+        subprocess.run(["/usr/bin/ffmpeg", "-loglevel", "error", "-n"] + args + [out], check=True)
+        with open(out, "rb") as fh:
+            return fh.read()
+
+
+def make_stitched_mp3(ad_seconds=10, ad_rate="192k", body_seconds=50, body_rate="32k"):
+    """An MP3 as a dynamic-ad stitcher makes one: two parts at different
+    bitrates and no VBR header, so mpv estimates the duration from the first
+    frames' bitrate (18 s of 60 here)."""
+    ad = encode(["-f", "lavfi", "-i", "sine=frequency=880:duration=%d" % ad_seconds, "-b:a", ad_rate,
+                 "-write_xing", "0", "-id3v2_version", "0"], ".mp3")
+    body = encode(["-f", "lavfi", "-i", "sine=frequency=440:duration=%d" % body_seconds, "-b:a", body_rate,
+                   "-write_xing", "0", "-id3v2_version", "0"], ".mp3")
+    return ad + body
 
 
 def make_audio(seconds):
@@ -663,6 +746,7 @@ class PlayerTestCase(TempHome):
                             # The sleep guard lowers these for its own short
                             # process; here every test starts from the real ones.
                             ("HTTP_TIMEOUT", bridge.HTTP_TIMEOUT), ("TOKEN_TIMEOUT", bridge.TOKEN_TIMEOUT),
+                            ("REFRESH_ALLOWED", True),
                             # The fake server is on 127.0.0.1, which the feed
                             # proxy never fetches from: allow it here only.
                             # Playback still goes through a real FeedProxy.
@@ -996,14 +1080,34 @@ class EndToEnd(PlayerTestCase):
         self.wait_for(lambda: run_bridge("player")["data"]["position"] > 0.5)
         before = len(self.writes("/sync/update_episode"))
         self.assertTrue(bridge.pause_for_sleep())
-        # Everything it sends is quick, a sign-in refresh included.
-        self.assertEqual((bridge.HTTP_TIMEOUT, bridge.TOKEN_TIMEOUT), (bridge.SLEEP_PUSH_TIMEOUT,) * 2)
+        # Everything it sends is quick, and it never refreshes the sign-in.
+        self.assertEqual(bridge.HTTP_TIMEOUT, bridge.SLEEP_PUSH_TIMEOUT)
+        self.assertFalse(bridge.REFRESH_ALLOWED)
         self.assertFalse(run_bridge("player")["data"]["playing"])
         self.assertEqual(len(self.writes("/sync/update_episode")), before + 1)
         self.assertTrue(bridge.load_playback()["checkServer"])  # the next resume asks first
         # Already paused: nothing to do, nothing sent.
         self.assertFalse(bridge.pause_for_sleep())
         self.assertEqual(len(self.writes("/sync/update_episode")), before + 1)
+
+    def test_before_sleep_an_expired_sign_in_is_never_refreshed(self):
+        # A refresh cut short by the guard's 4 s limit after Pocket Casts
+        # rotated the refresh token would sign you out: no refresh, no push,
+        # and the next resume asks first.
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.wait_for(lambda: run_bridge("player")["data"]["position"] > 0.5)
+        auth = bridge.load_auth()
+        auth["expires_at"] = time.time() - 10
+        bridge.save_auth(auth)
+        bridge._AUTH = None
+        pushes, refreshes = len(self.writes("/sync/update_episode")), len(self.writes("/user/token"))
+        self.assertTrue(bridge.pause_for_sleep())
+        self.assertEqual(len(self.writes("/user/token")), refreshes)
+        self.assertEqual(len(self.writes("/sync/update_episode")), pushes)
+        self.assertFalse(run_bridge("player")["data"]["playing"])
+        self.assertTrue(bridge.load_playback()["checkServer"])
+        self.assertEqual(bridge.load_auth().get("refresh_token"), auth.get("refresh_token"))
 
     def test_a_hung_player_is_ended_and_replaced(self):
         self.login()
@@ -1040,6 +1144,28 @@ class EndToEnd(PlayerTestCase):
         auth = bridge.load_auth()
         auth["expires_at"] = time.time() - 10
         bridge.save_auth(auth)
+
+    def test_the_deadline_never_lands_between_a_refresh_and_its_write(self):
+        # The call's deadline (SIGALRM) arriving just after Pocket Casts
+        # answered a refresh must not lose the new tokens (a rotated refresh
+        # token would sign you out): it waits until they're stored.
+        self.login()
+        self.expire_tokens()
+        bridge._AUTH = None
+        real_post = bridge.post_json
+
+        def post(path, *args, **kwargs):
+            result = real_post(path, *args, **kwargs)
+            if path == "/user/token":
+                os.kill(os.getpid(), signal.SIGALRM)
+            return result
+        previous = signal.signal(signal.SIGALRM, bridge._deadline_passed)
+        try:
+            with mock.patch.object(bridge, "post_json", post), self.assertRaises(bridge.DeadlinePassed):
+                bridge.access_token(bridge.load_auth())
+        finally:
+            signal.signal(signal.SIGALRM, previous)
+        self.assertGreater(float(bridge.load_auth()["expires_at"]), time.time() + 60)
 
     def test_a_sign_out_during_a_token_refresh_stays_signed_out(self):
         # Marketplace review (#15655): a list call refreshing an expired token
@@ -1377,6 +1503,17 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
             self.assertLess(time.monotonic() - started, 3)
         self.assertTrue(bridge.load_playback().get("unconfirmed"))  # and nothing is pushed until it answers
         self.assertEqual(bridge.HTTP_TIMEOUT, usual)  # back to normal for everything else
+
+    def test_both_of_plays_requests_are_held_to_the_short_limit(self):
+        # Strict review 4: the episode's own record, the check's second
+        # request, hanging too.
+        self.play_then_pause()
+        self.fake["slow"] = {"/user/episode": 4}
+        with mock.patch.object(bridge, "RESUME_CHECK_TIMEOUT", 1):
+            started = time.monotonic()
+            self.assertTrue(run_bridge("resume")["data"]["playing"])
+            self.assertLess(time.monotonic() - started, 3)
+        self.assertTrue(bridge.load_playback().get("unconfirmed"))
 
     def test_the_check_during_playback_waits_the_full_timeout(self):
         # Review finding: the short limit is for a press of Play only. A poll's
@@ -1739,6 +1876,7 @@ class ShowSkips(PlayerTestCase):
         run_bridge("play", EP_1, "--podcast", PODCAST_A)
         self.wait_for(lambda: self.position() > 5.2)
         self.assertLess(self.position(), 11)
+        self.assertEqual(run_bridge("stats")["data"]["intro"], 0)  # nothing skipped, nothing saved
 
     def test_play_from_start_means_the_start(self):
         self.fake["showSettings"] = {PODCAST_A: {"autoStartFrom": 12, "autoSkipLast": 0}}
@@ -1794,6 +1932,8 @@ class BrokenStream(PlayerTestCase):
         pushed = [b for b in self.writes("/sync/update_episode") if b["uuid"] == EP_1]
         self.assertTrue(3 < pushed[-1]["position"] < 9)  # where it stopped, in progress
         self.assertEqual(pushed[-1]["status"], bridge.STATUS_IN_PROGRESS)
+        self.assertFalse(view.get("nothingMore"))  # it got somewhere: no advice to mark it played
+        self.assertFalse(bridge.load_playback().get("unsentBreak"))  # Pocket Casts has it
         # Reported once; the next poll is quiet.
         self.assertFalse(run_bridge("player")["data"].get("streamBroke"))
 
@@ -1812,6 +1952,117 @@ class BrokenStream(PlayerTestCase):
         self.assertEqual(view["item"]["uuid"], EP_1)
         self.playing_past(broke_at)
         self.assertTrue(self.mpv_running())
+
+    def test_after_a_break_that_was_sent_a_rewind_on_the_phone_wins(self):
+        # Rule 2 after a break whose push went through: Pocket Casts' answer
+        # wins, even when it's behind (you went back on the phone).
+        view = self.break_stream_and_wait()
+        self.assertTrue(view.get("streamBroke"))
+        self.fake["cut"] = {}
+        self.fake["progress"][EP_1] = 2
+        self.assertLess(run_bridge("toggle")["data"]["position"], 4)
+
+    def error_page_break(self, code):
+        # Strict review 4: the ordinary host (size, byte ranges), up but
+        # failing: mpv's reconnect gets an error page, whose length FFmpeg
+        # takes for the file's size. Not the end.
+        self.fake["cutReply"] = code
+        view = self.break_stream_and_wait()
+        self.assertTrue(view.get("streamBroke"), view)
+        self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+        self.assertEqual(self.fake["upnext"][0], EP_1)
+
+    def test_a_break_answered_by_a_503_page_is_not_the_end(self):
+        self.error_page_break(503)
+
+    def test_a_break_answered_by_a_403_page_is_not_the_end(self):
+        self.error_page_break(403)
+
+    def test_a_break_near_the_end_is_still_a_break(self):
+        # Within the last tenth, where the episode's length alone would say
+        # "the end": only the watcher's evidence tells the break.
+        self.fake["cut"] = {EP_1: int(len(self.audio) * 0.92)}
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        view = self.settled(EP_1)
+        self.assertTrue(view.get("streamBroke"), view)
+        self.assertGreater(view["position"], 25)
+        self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+        self.assertEqual(self.fake["upnext"][0], EP_1)
+
+    def test_a_break_on_a_sized_host_without_ranges_is_not_the_end(self):
+        # Strict review 4: such a host keeps its size after a break (FFmpeg
+        # can't reconnect), and an ad-stitched MP3's duration is misread.
+        media = make_stitched_mp3()
+        self.fake["media"] = {EP_1: media}
+        self.fake["episodes"][EP_1]["duration"] = 60
+        self.fake["noranges"] = {EP_1}
+        self.fake["cut"] = {EP_1: int(len(media) * 0.75)}
+        self.fake["rate"] = 40000
+        bridge.save_prefs({"volume": 0, "speed": 2.0})
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        view = self.settled(EP_1, timeout=60)
+        self.assertTrue(view.get("streamBroke"), view)
+        self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+        self.assertEqual(self.fake["upnext"][0], EP_1)
+
+    def test_an_ad_stitched_mp3_still_ends_properly(self):
+        # The same misread file played to its real end: the end.
+        self.fake["media"] = {EP_1: make_stitched_mp3()}
+        self.fake["episodes"][EP_1]["duration"] = 60
+        self.fake["progress"][EP_1] = 56
+        self.fake["status"][EP_1] = bridge.STATUS_IN_PROGRESS
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.settled(EP_1, timeout=40)
+        self.assertEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+
+    def test_a_break_past_the_listed_length_then_play_never_rewinds(self):
+        # Strict review 4: files run longer than listed (ads inserted on the
+        # fly). Play after a break past the listed length used to start from
+        # the top ("at the end means from the top") and push 0 everywhere.
+        media = make_audio(40)
+        self.fake["media"] = {EP_1: media}
+        self.fake["episodes"][EP_1]["duration"] = 30
+        self.fake["progress"][EP_1] = 25
+        self.fake["status"][EP_1] = bridge.STATUS_IN_PROGRESS
+        self.fake["cut"] = {EP_1: int(len(media) * 0.85)}
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.assertTrue(self.settled(EP_1, timeout=40).get("streamBroke"))
+        self.fake["cut"] = {}  # the network is back
+        view = run_bridge("toggle")["data"]
+        self.assertGreater(view["position"], 30)
+        time.sleep(1)
+        self.assertGreater(self.fake["progress"][EP_1], 30)
+        self.assertGreater(min(b["position"] for b in self.pushes_of(EP_1)), 24)
+
+    def pushes_of(self, uuid):
+        return [b for b in self.writes("/sync/update_episode") if b["uuid"] == uuid]
+
+    def test_a_skip_outro_show_with_a_misread_mp3_plays_on(self):
+        # Strict review 4 (and 1.0.2): the outro is counted back from mpv's
+        # duration, misread at 18 s of 60: a 20 s outro ended it at once and
+        # it was marked played, and so was the show's next episode; a 10 s one
+        # would end it at 8 s. The outro isn't applied when mpv's duration
+        # disagrees with Pocket Casts'.
+        media = make_stitched_mp3()
+        self.fake["media"] = {EP_1: media, EP_2: media}
+        for uuid in (EP_1, EP_2):
+            self.fake["episodes"][uuid]["duration"] = 60
+        self.fake["showSettings"] = {PODCAST_A: {"autoStartFrom": 0, "autoSkipLast": 10}}
+        self.fake["rate"] = 40000
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        for _ in range(12):
+            view = run_bridge("player")["data"]
+            time.sleep(0.25)
+        self.assertEqual((view["item"] or {}).get("uuid"), EP_1)
+        self.assertTrue(view["playing"])
+        self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+        with bridge.Mpv.connect() as player:
+            self.assertEqual(player.get("file-local-options/end"), "none")
 
     def test_play_pressed_before_a_poll_saw_the_break_carries_on_too(self):
         # Play arrives while mpv sits at the break and no poll has run: it
@@ -2047,18 +2298,94 @@ class BrokenStream(PlayerTestCase):
         self.assertGreaterEqual(self.fake["progress"][EP_1], 60)
         self.assertTrue(told)
 
-    def test_after_a_seek_of_yours_a_host_without_ranges_syncs_again(self):
+    def slow_host_without_ranges(self, at=60):
         self.fake["nosize"] = {EP_1}
+        self.fake["rate"] = 20000
         self.fake["media"] = {EP_1: encode(["-f", "lavfi", "-i", "sine=duration=90", "-c:a", "libmp3lame", "-b:a", "64k"], ".mp3")}
         self.fake["episodes"][EP_1]["duration"] = 90
-        self.fake["progress"][EP_1] = 60
+        self.fake["progress"][EP_1] = at
+        self.fake["status"][EP_1] = bridge.STATUS_IN_PROGRESS
+        self.login()
+
+    def test_a_seek_on_a_host_without_ranges_never_rewinds_the_others(self):
+        # Strict review 4: on a real (slow) host without ranges, a seek beyond
+        # what has arrived doesn't land; lifting the floor on any seek of
+        # yours pushed the from-the-top position at once.
+        self.slow_host_without_ranges(60)
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.wait_for(lambda: run_bridge("player")["data"]["position"] > 1)
+        run_bridge("seek", "60", "--episode", EP_1)  # the slider dragged to where you were
+        time.sleep(2)  # mpv gives up the seek and plays on near the top
+        self.assertLess(run_bridge("player")["data"]["position"], 30)
+        self.push_due()
+        run_bridge("player")
+        self.assertGreaterEqual(self.fake["progress"][EP_1], 60)
+        run_bridge("seek", "15", "--relative", "--episode", EP_1)  # and a skip forward
+        time.sleep(1)
+        run_bridge("pause")
+        self.assertGreaterEqual(self.fake["progress"][EP_1], 60)
+
+    def push_due(self):
+        state = bridge.load_playback()
+        state["lastSyncAt"] = time.time() - 31  # a periodic push is due
+        bridge.save_playback(state)
+
+    def test_a_seek_back_from_a_start_that_was_honoured_syncs(self):
+        # On a host that did start where asked, a seek back before any poll
+        # lifted the floor is yours: it syncs.
+        self.fake["progress"][EP_1] = 20
         self.fake["status"][EP_1] = bridge.STATUS_IN_PROGRESS
         self.login()
         run_bridge("play", EP_1, "--podcast", PODCAST_A)
-        self.wait_for(lambda: run_bridge("player")["data"]["position"] > 1)
-        run_bridge("seek", "3", "--relative", "--episode", EP_1)  # you chose where it plays
+        self.wait_for(lambda: run_bridge("player")["data"]["position"] > 20.5)
+        state = bridge.load_playback()
+        state["stream"]["asked"] = 20  # as if no poll had seen it start there yet
+        bridge.save_playback(state)
+        run_bridge("seek", "8", "--episode", EP_1)
         run_bridge("pause")
-        self.assertLess(self.fake["progress"][EP_1], 60)
+        self.assertLess(self.fake["progress"][EP_1], 12)
+
+    def test_the_resume_checks_seek_on_a_host_without_ranges_never_rewinds(self):
+        # Strict review 4: paused here near the top, the phone moved on to
+        # 60; Play seeks there, which such a host can't do: mpv plays on from
+        # the old spot, and the next push used to send it.
+        self.slow_host_without_ranges(0)
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.wait_for(lambda: run_bridge("player")["data"]["position"] > 1)
+        run_bridge("pause")
+        self.fake["progress"][EP_1] = 60  # the phone listened on
+        state = bridge.load_playback()
+        state["lastSyncAt"] = time.time() - 120  # the pause was a while ago
+        bridge.save_playback(state)
+        run_bridge("toggle")
+        time.sleep(2)  # mpv gives up the seek and plays on from the old spot
+        self.assertLess(run_bridge("player")["data"]["position"], 30)
+        self.push_due()
+        run_bridge("player")
+        run_bridge("pause")
+        self.assertGreaterEqual(self.fake["progress"][EP_1], 60)
+
+    def test_a_break_behind_where_the_load_began_isnt_nothing_more(self):
+        # Loaded at 30:00, skipped back, the link drops at 29:55: not "nothing
+        # more of it arrives" (that's for a reload that got nowhere).
+        url = self.base + "/audio/%s.mp3" % EP_1
+        state = {"episode": {"uuid": EP_1, "url": url}, "stream": {"url": url, "begun": 1800.0}}
+        with mock.patch.object(bridge, "push_position"):
+            self.assertFalse(bridge.stream_stopped(dict(state, lastSyncAt=time.time()), {}, 1795.0).get("nothingMore"))
+            self.assertTrue(bridge.stream_stopped(dict(state, lastSyncAt=time.time()), {}, 1800.5).get("nothingMore"))
+
+    def test_after_a_seek_a_reload_that_breaks_isnt_nothing_more(self):
+        # Loaded at 20, a seek of yours back to 20, and the link drops at
+        # 21.5: it got somewhere after your seek, not "nothing more arrives".
+        self.fake["progress"][EP_1] = 20
+        self.fake["status"][EP_1] = bridge.STATUS_IN_PROGRESS
+        self.fake["cut"] = {EP_1: int(len(self.audio) * 21.5 / 30)}
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        run_bridge("seek", "20", "--episode", EP_1)
+        view = self.settled(EP_1)
+        self.assertTrue(view.get("streamBroke"), view)
+        self.assertFalse(view.get("nothingMore"))
 
     def test_a_break_below_the_start_pushes_nothing(self):
         # The break's own push respects the floor too (a host without ranges).
@@ -2103,9 +2430,11 @@ class BrokenStream(PlayerTestCase):
 
     def test_how_a_break_is_told_from_the_end(self):
         url = "http://example.com/a.mp3"
+        watching = {"watching": True}
         def snap(**kw):
             base = {"eof-reached": True, "path": url, "time-pos": 1800.0, "duration": 3600.0,
-                    "stream-pos": None, "stream-end": None, "file-local-options/end": "none"}
+                    "stream-pos": None, "stream-end": None, "file-local-options/end": "none",
+                    "user-data/legato": watching}
             base.update(kw)
             return base
         def state(size=None, duration=None, listed=None):
@@ -2113,42 +2442,73 @@ class BrokenStream(PlayerTestCase):
             if listed:
                 st["episode"] = {"uuid": EP_1, "url": url, "duration": listed}
             return st
-        sized = {"stream-end": 100_000_000}
-        # 1. The size known now: read to its end is the end, whatever the
-        #    durations say (mpv can misread an MP3's at load); much unread is a break.
-        self.assertFalse(bridge.stream_broke(snap(**sized, **{"stream-pos": 99_950_000, "time-pos": 1200.0}), {}))
-        self.assertTrue(bridge.stream_broke(snap(**sized, **{"stream-pos": 40_000_000}), {}))
-        # With the size still known the stream hasn't failed, so a stop past
-        # mpv's own duration is the end, even one it misread (a real break of
-        # that file drops the size: step 2 below).
-        self.assertFalse(bridge.stream_broke(snap(**sized, **{"stream-pos": 40_000_000, "time-pos": 23.0, "duration": 18.4}), {}))
-        #    ...unless the show's skip-outro stopped it there, within 10 s or 1%:
-        outro = dict(sized, **{"stream-pos": 96_000_000, "file-local-options/end": "-105"})
-        self.assertFalse(bridge.stream_broke(snap(**outro, **{"time-pos": 3490.0}), {}))
-        self.assertFalse(bridge.stream_broke(snap(**outro, **{"time-pos": 3465.0}), {}))  # 30 s short: within 1% (36)
-        self.assertTrue(bridge.stream_broke(snap(**outro, **{"time-pos": 3450.0}), {}))   # 45 s short: a break
-        # 2. A size known earlier and gone now: a break (mpv drops it when the
-        #    stream fails), even with a duration that shrank to the position.
-        self.assertTrue(bridge.stream_broke(snap(), state(size=100_000_000)))
-        self.assertTrue(bridge.stream_broke(snap(duration=1801.0), state(size=100_000_000, duration=3600.0)))
-        self.assertTrue(bridge.stream_broke(snap(**{"time-pos": 23.0, "duration": 18.4}), state(size=1_000_000, duration=18.4)))
-        # 3. The size never known: against the longest duration given, with
-        #    a 10% margin. A no-size MP3's mpv duration is what has arrived.
+        cut = {"user-data/legato": {"watching": True, "cut": 40_000_000}}
+        # 1. The watcher saw FFmpeg's "Stream ends prematurely at N": a break,
+        #    whatever the size reads now (an error page's 70 bytes) or the
+        #    durations say (a misread MP3 "ending" at 23 s of 18.4).
+        self.assertTrue(bridge.stream_broke(snap(**cut, **{"stream-pos": 40_000_000}), {}))
+        self.assertTrue(bridge.stream_broke(snap(**cut, **{"stream-end": 70, "stream-pos": 39_990_000}), state(size=100_000_000)))
+        self.assertTrue(bridge.stream_broke(snap(**cut, **{"stream-end": 100_000_000, "time-pos": 23.0, "duration": 18.4}), {}))
+        self.assertTrue(bridge.stream_broke(snap(**cut, **{"time-pos": 3599.0}), {}))  # at "the end" by every number
+        #    ...unless mpv read on past it (a reconnect that worked), to a real end:
+        self.assertFalse(bridge.stream_broke(snap(**cut, **{"stream-end": 100_000_000, "stream-pos": 99_999_000}), {}))
+        # 2. No such line and the host gave a size: the end, whatever mpv's
+        #    estimates say (an M4A's index left unread, a misread MP3, an outro).
+        self.assertFalse(bridge.stream_broke(snap(**{"stream-end": 100_000_000, "stream-pos": 40_000_000}), {}))
+        self.assertFalse(bridge.stream_broke(snap(**{"time-pos": 23.0, "duration": 18.4}), state(size=1_000_000, listed=60)))
+        self.assertFalse(bridge.stream_broke(snap(**{"stream-end": 5000, "time-pos": 0.0, "file-local-options/end": "-20"}),
+                                             state(listed=60)))
+        # 3. No size from the host, or a player without the watcher: against
+        #    the longest duration given, with a 10% margin (or 10 s), the
+        #    skip-outro allowed for. A no-size MP3's mpv duration is what arrived.
         self.assertTrue(bridge.stream_broke(snap(**{"time-pos": 6.0, "duration": 6.0}), state(duration=1.1, listed=30)))
         self.assertFalse(bridge.stream_broke(snap(**{"time-pos": 28.0, "duration": 28.0}), state(duration=1.1, listed=30)))
         self.assertFalse(bridge.stream_broke(snap(**{"time-pos": 3300.0}), state(listed=3600)))  # 300 s short of 3600: within 10%
         self.assertTrue(bridge.stream_broke(snap(**{"time-pos": 3200.0}), state(listed=3600)))   # 400 s short: a break
-        self.assertTrue(bridge.stream_broke(snap(**{"time-pos": 6.0, "duration": 6.0}), {"episode": {"duration": 30}}))  # an old player: no record
+        self.assertFalse(bridge.stream_broke(snap(**{"time-pos": 2950.0, "file-local-options/end": "-300"}), state(listed=3600)))
+        self.assertTrue(bridge.stream_broke(snap(**{"time-pos": 2850.0, "file-local-options/end": "-300"}), state(listed=3600)))
+        old = {"user-data/legato": None, "stream-end": 100_000_000, "stream-pos": 40_000_000}
+        self.assertTrue(bridge.stream_broke(snap(**old, **{"time-pos": 6.0, "duration": 6.0}), {"episode": {"duration": 30}}))
+        self.assertFalse(bridge.stream_broke(snap(**old, **{"time-pos": 29.0, "duration": 30.0}), {}))
         # 4. Nothing to judge by: the end, as before 1.1.
         self.assertFalse(bridge.stream_broke({"eof-reached": True, "path": url, "time-pos": 50.0}, {}))
         # Another file's record doesn't count; not at an end, nothing to judge.
-        self.assertFalse(bridge.stream_broke(snap(**{"time-pos": 3500.0}), {"stream": {"url": "http://other/b.mp3", "size": 5}}))
+        self.assertTrue(bridge.stream_broke(snap(**{"time-pos": 6.0, "duration": 6.0}),
+                                            {"stream": {"url": "http://other/b.mp3", "size": 5}, "episode": {"duration": 30}}))
         self.assertFalse(bridge.stream_broke(snap(**{"eof-reached": False}), state(size=100)))
-        # Still sized, much unread, and no duration from mpv to check: a break.
-        self.assertTrue(bridge.stream_broke(snap(**sized, **{"stream-pos": 40_000_000, "duration": None}), {}))
-        # What the poll reads includes the file's size, at an end too.
-        self.assertIn("stream-end", bridge.MPV_PROPERTIES)
+        # What the poll reads includes the watcher's record, at an end.
+        self.assertIn("user-data/legato", bridge.END_PROPERTIES)
         self.assertIn("stream-pos", bridge.END_PROPERTIES)
+
+    def test_the_watcher_records_a_cut_short_stream(self):
+        # The watcher itself, in mpv's own Lua: FFmpeg's line for a sized
+        # stream is recorded (the latest), the one for a host that gave no
+        # size isn't, other messages aren't, and a new file starts clean.
+        lua = shutil.which("lua5.1") or shutil.which("luajit")
+        if not lua:
+            self.skipTest("no Lua 5.1 to run mpv's script in")
+        harness = r"""
+            local props, handlers = {}, {}
+            mp = { set_property_native = function(name, value) props[name] = value end,
+                   register_event = function(name, fn) handlers[name] = fn end,
+                   enable_messages = function(level) props.level = level end }
+            dofile(os.getenv("WATCH"))
+            local function show() local d = props["user-data/legato"] io.write(tostring(d.watching), " ", tostring(d.cut), ";") end
+            show()
+            handlers["log-message"]({ prefix = "ffmpeg", level = "error", text = "http: Stream ends prematurely at 24054, should be 120270\n" })
+            show()
+            handlers["log-message"]({ prefix = "ffmpeg", level = "error", text = "http: Stream ends prematurely at 99, should be 18446744073709551615\n" })
+            handlers["log-message"]({ prefix = "cplayer", level = "error", text = "Stream ends prematurely at 5, should be 9" })
+            show()
+            handlers["log-message"]({ prefix = "ffmpeg", level = "error", text = "http: Stream ends prematurely at 30000, should be 120270" })
+            show()
+            handlers["start-file"]({})
+            show()
+            io.write(props.level)
+        """
+        done = subprocess.run([lua, "-e", harness], capture_output=True, text=True, timeout=10,
+                              env={"WATCH": str(ROOT / "bin" / "legato-watch.lua"), "PATH": "/usr/bin"})
+        self.assertEqual(done.stdout, "true nil;true 24054;true 24054;true 30000;true nil;error", done.stderr)
 
     def test_polls_fill_in_what_a_slow_load_missed(self):
         url = "http://example.com/a.mp3"
@@ -2324,6 +2684,7 @@ class ListeningCount(TempHome):
         with mock.patch.object(bridge.time, "time", return_value=1_800_000_000):
             bridge.add_stats(listened=10)
         self.assertEqual(bridge.load_stats()["since"], 1_700_000_000)
+        self.assertEqual(run_bridge("stats")["data"]["since"], 1_700_000_000)  # what the page shows
 
     def test_a_speed_change_mid_stretch_drops_that_stretch(self):
         state = self.fresh()

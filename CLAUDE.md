@@ -120,6 +120,8 @@ LegatoMark.qml       the logo, drawn with QtQuick.Shapes (bar chip, panel)
 Model.js             pure helpers (formatting, rows, trusted executables, closed environments)
 About.js             About facts and text (version and license read from the repo at run time)
 bin/legato-bridge    the Python helper: one subcommand per call, one JSON object out
+bin/legato-watch.lua mpv script (Legato's mpv only): records FFmpeg's "Stream ends prematurely"
+                     for the file playing, stream_broke's evidence
 install.sh           copy a checkout into the plugin folder and enable it
 tests/run            all tests: tests/test_bridge.py (Python, real mpv vs a fake server,
                      and the offscreen QML pages in tests/qml/) and tests/model.test.cjs
@@ -170,8 +172,10 @@ docs/PLAN.md         what's left to build
    through closed-environment `Process` objects (tests enforce it); the
    password travels only on stdin; tokens are 0600; only
    `api.pocketcasts.com` gets the token; mpv runs with `--no-config
-   --ytdl=no --tls-verify=yes` (mpv's default is no verification) and only
-   ever gets http(s) URLs; covers reach Qt only as the bridge's checked,
+   --ytdl=no --tls-verify=yes` (mpv's default is no verification), loads
+   only Legato's watcher (`watch_script`: its file and folders owned by
+   this user or root, writable by nobody else) and a root-owned mpv-mpris,
+   and only ever gets http(s) URLs; covers reach Qt only as the bridge's checked,
    capped cache files (`file://`, never a web URL); every bridge call has an
    overall deadline (`BRIDGE_DEADLINE`, an exception no handler swallows);
    mpv fetches only through the feed proxy (`bridge proxy`, below), which
@@ -209,16 +213,17 @@ docs/PLAN.md         what's left to build
   top of Up Next; `playback.json`'s `atTop` records whether this machine's
   episode was put there, so a different top later means another device moved
   on.
-- **The end of an episode:** mpv (keep-open) doesn't pause there: it sits
-  with `pause` off and `eof-reached` on. The bridge's view says `ended`, not
-  `playing`, so the poll timer stops and the idle unload can close it.
+- **The end of an episode:** mpv (keep-open) stays loaded there with
+  `eof-reached` on, and pauses itself a moment later. The bridge's view says
+  `ended`, not `playing`, so the poll timer stops and the idle unload can
+  close it.
   `finish_current` marks it played and takes it off Up Next (each step on
   its own; whatever fails waits in `pendingFinish` and a later poll retries
   it, once a minute at most, for six hours), then autoplays. Play on an
   ended episode starts what was queued since (if autoplay was on) or plays
   it again (`play_again`, which pushes it as in progress itself, since
-  Pocket Casts would say "played" and stop it). Dragging back from the end
-  does the same.
+  Pocket Casts would say "played" and stop it). Dragged back from the end,
+  it waits there, paused; Play plays it again from there.
 - **Idle unload:** paused for `unloadAfterMinutes` (15), the player closes
   (`stop --if-paused`). The next play goes through `resume_last`, which asks
   Pocket Casts what to play.
@@ -227,37 +232,50 @@ docs/PLAN.md         what's left to build
 - **A stream that breaks off part way** (`stream_broke`): mpv retries, then
   sits at `eof-reached` where it got to, just as at a real end. Calling a
   break the end is the worse mistake (it marks an unfinished episode played
-  everywhere and starts the next), so where the evidence is weak the
-  judgment leans towards a break. The file's size, still known now, means
-  the stream hasn't failed: read to its end is the end, and much unread is
-  a break only if mpv's own duration (from the file) also says the stop is
-  short, the skip-outro allowed for (an M4A's index can sit after its
-  audio, unread; Pocket Casts' listed length can be longer than the file).
-  A size known earlier (`stream` in playback.json, recorded at load and
-  filled in by every poll, `learn_stream`) and gone now is a break: mpv
-  drops it when the stream fails. With the size never known, the longest
-  duration given (Pocket Casts', mpv's at load or since) decides, with a 10%
-  margin (`NO_SIZE_MARGIN`), since a no-size MP3's mpv duration is what has
-  arrived; with none at all it's the end, as before 1.1. `stream_stopped`
-  pushes the position (only if the last push is under `RECHECK_AFTER` old,
-  not while `unconfirmed` or `checkServer`, and not below the load's start;
+  everywhere and starts the next). Four strict-review rounds found host
+  shapes that fooled every judgment built from mpv's numbers (sizes,
+  positions, durations: an error page's length taken for the size, a host
+  without ranges keeping its size, misread MP3 durations, an M4A's index
+  left unread), so it rests on evidence: Legato's mpv script
+  (`bin/legato-watch.lua`) records FFmpeg's "Stream ends prematurely at N,
+  should be M" for the file playing (`user-data/legato`), logged whenever a
+  stream whose size the host gave ends short of it. Recorded, and mpv read
+  no further than N (`READ_PAST_CUT`; a reconnect that worked reads on): a
+  break. Not recorded, with a size from the host: the end. Only a host
+  that gives no size (FFmpeg logs the line at every end there, M unknown)
+  or a player without the watcher (an older Legato's) falls back to the
+  longest duration given (Pocket Casts', mpv's at load or since, `stream`
+  in playback.json, filled in by polls, `learn_stream`), with a 10% margin
+  (`NO_SIZE_MARGIN`) and the skip-outro allowed for; with no duration at
+  all it's the end, as before 1.1. `stream_stopped` pushes the position
+  (only if the last push is under `RECHECK_AFTER` old, not while
+  `unconfirmed` or `checkServer`, and not below the load's start;
   otherwise it sets `checkServer`, rule 2), closes the player and says so;
-  a reload that got nothing (the stop again where it began) says how to
-  mark the episode played, never doing it itself. Play loads it again from
-  Pocket Casts' position, or from this machine's further one if its push
-  failed within the hour (`unsentBreak`).
-- **A host without byte ranges** can't start part way: mpv plays from the
-  top. A load records where it was asked to start (`stream.asked`); below
+  a reload that got nothing (it stopped again within 2 s of where it began,
+  with no seek since) asks you to mark the episode played, never doing it
+  itself. Play loads it again from Pocket Casts' position, or from this
+  machine's further one if its push failed within the hour
+  (`unsentBreak`). Where it starts is never "from the top" because it's at
+  or past the listed length (`start_position`): files run longer than
+  listed (ads inserted on the fly), and that pushed 0 to every device.
+- **A host without byte ranges** can't start part way, nor seek ahead of
+  what has arrived: mpv plays from the top (or on from where it was). A
+  load records where it was asked to start (`stream.asked`), and so does
+  the resume check when it seeks ahead to Pocket Casts' position; below
   that, nothing is pushed (`below_start`: the poll, sync_now and the
-  break's push), so the others aren't rewound, until playback passes it or
-  you seek (cmd_seek clears it). The panel says so once (`startedFromTop`).
+  break's push), so the others aren't rewound, until playback passes it.
+  A seek of yours lifts it only if the start was honoured (mpv was there
+  before the seek, `cmd_seek`): on such a host a seek may not land. The
+  panel says so once (`startedFromTop`).
 - **The resume check on a press of Play** (`check_server(quick=True)`, from
   `resume_loaded`) waits `RESUME_CHECK_TIMEOUT` (5 s, longer if the name
   lookup is slow or an answer trickles in) per request, not
   `HTTP_TIMEOUT`: unanswered, the episode plays anyway (`unconfirmed`). A
   sign-in refresh due meanwhile (at most hourly) keeps its own
-  `TOKEN_TIMEOUT` (15 s; only the sleep guard lowers it): one cut short
-  after Pocket Casts answered could lose a rotated refresh token. So on a
+  `TOKEN_TIMEOUT` (15 s): one cut short after Pocket Casts answered could
+  lose a rotated refresh token. For the same reason the call's deadline
+  waits while a refresh is answered and stored (`deadline_held`), and the
+  sleep guard never refreshes (`REFRESH_ALLOWED`). So on a
   hanging network Play can wait 5 s per request, plus a due refresh. A
   poll's check takes the usual time, so a slow link still confirms and
   pushes.
@@ -284,8 +302,8 @@ docs/PLAN.md         what's left to build
   legato-bridge sleepguard`. The guard waits on `dbus-monitor` for logind's
   PrepareForSleep (a broadcast only: a signal sent straight to the monitor
   has a destination and is ignored), then pauses a playing episode, pushes
-  its position (4 s
-  deadline), sets `checkServer`, and exits, releasing the delay; the
+  its position (4 s deadline, with the current sign-in only: a refresh cut
+  short there could sign you out), sets `checkServer`, and exits, releasing the delay; the
   service starts a fresh guard 3 s later. A guard that fails instead
   waits longer each time (6 s, doubling) and after five failures in a row
   the service gives up and says so, until the next episode is loaded. A
@@ -316,7 +334,10 @@ docs/PLAN.md         what's left to build
   and skips show at once and go to the bridge as one seek 300 ms after the
   last step. A list reload asked for mid-load runs again when the load
   answers. Each show's skip intro/outro comes from the
-  subscriptions list (`start=` and `end=-N` on loadfile).
+  subscriptions list (`start=` on loadfile; the outro's `end=-N` set just
+  after the load, and only when mpv's duration agrees with Pocket Casts',
+  `outro_applies`: counted back from a misread MP3's 18 s of 60 it ended
+  at once, marked played, and the show's next episode the same).
 
 ## Platform facts this depends on (re-check after updates)
 
@@ -370,7 +391,10 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   second rule (`legato-video-untag`, `pin = false`, `-skip-taskbar`) takes
   it off; Transom re-reads windows on the `pin` event. The tags aren't in
   the o.window rule: o.window records every tag it's given in Omarchy's
-  floating-app lists. Runtime
+  floating-app lists. It records the class each call, with no check for
+  repeats, so the rule goes through o.window only while the class isn't in
+  `o.floating_apps.class` (emptied by a config reload), as a plain named
+  rule otherwise (tested against Omarchy's real helpers.lua). Runtime
   rules last until Hyprland reloads its config, so the bridge sends them
   each time the video opens and before each episode load while the video
   is on (mpv opens the next episode's video by itself). Size and position
@@ -396,13 +420,22 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   `PluginRegistry.setEnabled`), and the widget's settings with it; enabling
   adds a fresh `{ id }`. Legato's state folder (prefs, sign-in, stats) is
   untouched, even by `omarchy plugin remove`.
-- **mpv when a stream breaks** (tested 2026-11-23, mpv 0.41): it stalls
-  (`paused-for-cache`), retries for a few seconds, then sets `eof-reached`
-  at the break with `pause` still off; `stream-end` (the file size) reads
-  None from then on. At a real end it's known, and `stream-pos` stops short
-  of it by what follows the audio: about 100 bytes for an MP3 (a trailing
-  tag), the whole index for an M4A written without `+faststart` (about
-  175 bytes per second of audio).
+- **mpv when a stream breaks** (tested 2026-11-23/24, mpv 0.41, FFmpeg
+  9.0): it stalls (`paused-for-cache`), retries for a few seconds, then
+  sets `eof-reached` at the break, as at an end. What its numbers say
+  depends on the host: `stream-end` (the size) reads None after a refused
+  reconnect, the error page's length (70 bytes) after one answered with a
+  503 or 403, and stays the full size on a host without ranges (no
+  reconnect). What doesn't vary: FFmpeg logs `http: Stream ends
+  prematurely at N, should be M` (level error, prefix `ffmpeg`) for every
+  break of a stream whose size the host gave, and nothing at a real end
+  (MP3, an M4A with its index at the back, an ad-stitched MP3: probed with
+  mpv's log from its start). With no size, M reads 18446744073709551615 and
+  the line comes at every end. The failure happens as the cache fills,
+  often in the first second, before anything but a script loaded with mpv
+  could hear it. At a real end `stream-pos` stops short of the size by
+  what follows the audio: about 100 bytes for an MP3 (a trailing tag), the
+  whole index for an M4A written without `+faststart`.
 - **Dragging a widget off the Omarchy bar disables its plugin** (Omarchy
   4.5). The video window can sit right under the bar, so a drag meant for
   it can take Legato's chip off; `omarchy plugin enable
@@ -461,8 +494,9 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   and fetches offered text itself, unbounded (the marketplace reviewer
   blocks plugins on it): Legato has none.
 - **mpv at the end of a file** (`--keep-open=yes`): `eof-reached` turns
-  on but `pause` stays off (tested, mpv 0.41). Seeking back makes it play
-  on from there.
+  on, and `pause` a moment later (`--keep-open-pause` defaults to yes;
+  re-tested 2026-11-24, mpv 0.41: within half a second). Seeking back
+  leaves it paused there.
 - **The shell's `PanelKeyCatcher`** takes `x`, `X` and Delete as
   `deleteRequested` before `textKey` sees them (so `x` can't be a panel
   key); **`PanelSlider`'s wheel** reads a zero vertical delta (a sideways

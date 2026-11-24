@@ -593,6 +593,94 @@ real files, and an old no-ranges path rewinds other devices.
   for each; hyprctl stubbed for every player test; the duplicate mutant
   removed. tests/mutate.py now 113 mutations.
 
+### SR, round 4 (2026-11-24)
+
+reports kept outside the repo. Rules 2
+and 3, the push guards, the sign-in race, lock order, stats isolation and
+security hold. The break-vs-end judgment fails again, on new shapes, and
+four rounds have each found critical or high ones there: inferring "the
+stream broke" from mpv's numbers (size, position, durations) doesn't
+converge: the judgment now needs positive evidence (below).
+
+- [x] SR31 (critical) A host that answers mpv's reconnect with an error page
+  with a Content-Length (503, 403, 416): mpv reports the page's length as
+  the size, "read to its end", marked played (the ordinary host shape).
+  Fixed by the evidence approach (above): bin/legato-watch.lua and the new
+  stream_broke. Tests: 503 and 403 breaks end to end, the watcher's own Lua
+  (lua5.1, as mpv's), the judgment's unit cases.
+- [x] SR32 (high) A sized host without ranges keeps the size after a break;
+  a misread MP3 duration (ad-stitched, no VBR header) then says "end".
+  Fixed the same way (FFmpeg logs the short end there too). Test: the
+  reviewer's ad-stitched MP3 on a sized host without ranges, trickled, cut
+  at 3/4; and the same file played to its end is still the end.
+- [x] SR33 (high, also in 1.0.2) Skip-outro against a misread duration:
+  mpv stopped at 0:00, marked played; autoplay emptied the show's Up Next.
+  Fixed: `outro_applies` sets the outro just after the load only when mpv's
+  duration is within NO_SIZE_MARGIN of Pocket Casts' (or longer). Test: the
+  misread MP3 on a skip-outro show plays on, outro off; the existing outro
+  test still ends at the outro.
+- [x] SR34 (high) A break past Pocket Casts' listed length, then Play:
+  start_position's "at the end means from the top" pushes 0 everywhere.
+  Fixed: start_position no longer turns an in-progress position at or past
+  the listed length into 0 (it also fired after Stop or the idle unload,
+  since 1.0). An episode at its real end ends at once and is marked played.
+  Test: the reviewer's 40 s file listed as 30, broken at 34: Play carries
+  on past 30, nothing below 24 pushed.
+- [x] SR35 (high, rare) The start floor is lifted by any seek of yours,
+  even one a host without ranges can't make: dragging back pushed 0:01.
+  (The test asserting that rewind as intended is wrong.)
+  Fixed: a seek lifts the floor only if mpv was at or past the start before
+  it. The resume check's seek ahead now sets the floor too (the safety
+  reviewer's F5). Tests on a trickling host without ranges: a drag and a
+  skip, and the resume check's seek; both pushed 0:03 before. A seek back
+  from an honoured start still syncs (test).
+- [x] SR36 (medium) The three new messages don't fit the OSD (325 px) or
+  the status line (about 300 px): the advice is cut off.
+  Fixed: the four playback messages cut to 38 characters or fewer ("Stream
+  dropped. Press play to resume.", "Nothing more arrives. Mark it played?",
+  "Server can't resume: playing from top", "Player stopped responding.
+  Press play."); the detail is in the README. Test: panel.qml checks each
+  message's length as the service says it.
+- [x] SR37 (medium, tests) tests/qml/panel.qml answers `status` with {},
+  which signs its service out, so "keys behind the Stats page" can't fail.
+  Fixed: settle() answers status signed in and Up Next with an episode, by
+  command (a reload started inside an answer got the empty answer); a
+  control check that Delete on the main view does remove; n, m and Delete
+  behind the page. Removing either page guard now fails it (checked).
+- [x] SR38 (low) "Nothing more arrives" after any seek back; a resume
+  check's seek does nothing on a host without ranges; stale On/Off and
+  Clear answers; several Stats-page and bridge survivors (the reports).
+  Fixed: nothing-more only within 0 to 2 s of the load's start and never
+  after a seek; the resume check's seek floor (SR35); stale On/Off, Clear
+  and poll answers, the switch's default, the off-and-empty text, `since`
+  through the stats command, the intro not counted mid-episode, a
+  successful break push then a rewind on the phone, Play's second request
+  held to the short limit: tests for each (the code was right for most).
+  Also the sleep guard no longer refreshes the sign-in (REFRESH_ALLOWED)
+  and the call's deadline waits while a refresh is stored (deadline_held;
+  per-thread signal blocking didn't hold with the cover threads). The
+  tests' encode() uses a private folder.
+- [x] SR39 (low, pre-existing) Each o.window call appends a duplicate to
+  Omarchy's floating-app list.
+  Fixed: the rule goes through o.window only while Omarchy's list lacks the
+  class. Test: the rule's Lua run three times against Omarchy's real
+  helpers.lua (lua5.4, a stand-in hl): one entry (three before).
+
+Approach (chosen 2026-11-24 on a probe's evidence; Cody can still say
+otherwise): judge a break by positive evidence. Probe (mpv 0.41, its log
+from start, the suite's fake host): every break on a host that gives a size
+logs FFmpeg's `http: Stream ends prematurely at N, should be M` (reconnect
+accepted then closed; reconnect answered 503; a sized host without ranges);
+real ends (MP3, M4A with its index at the back, an ad-stitched MP3) log
+nothing; a host that gives no size logs it at every end with M =
+18446744073709551615 (unknown), so there the duration rule stays. A small
+mpv script (`bin/legato-watch.lua`) records the line per file in
+`user-data/legato`; the bridge reads it at the end. The service's socket
+can't do it: the break happens as the cache fills, often before it attaches.
+Also: no "at the end means from the top" for an episode in progress (SR34),
+the skip-outro only when mpv's duration agrees with Pocket Casts' (SR33),
+a seek lifts the floor only if the start was honoured (SR35).
+
 - [ ] H6 Ship 1.1.0 (a minor version: the stats are a feature) with the `ship-update` skill (marketplace verification
   request, Cody approves the filing).
 
@@ -623,6 +711,14 @@ real files, and an old no-ranges path rewinds other devices.
   ranges no longer rewinds other devices (the start floor); the unsent
   position kept an hour only. 171 Python + 36 node tests; 113 of 113
   mutants killed. Round 4 next.
+- 2026-11-24 (evening): round 4 (SR31-SR39) found the break-vs-end
+  judgment fooled again (an error page's length, a host without ranges, a
+  misread MP3 with a skip-outro) and a rewind to 0 after a break past the
+  listed length. A probe of mpv's log showed FFmpeg reports every break of
+  a sized stream and nothing at real ends, so the judgment now rests on
+  that (bin/legato-watch.lua). Messages fit the OSD; the panel test runs
+  signed in; the sleep guard never refreshes the sign-in. 188 Python + 36
+  node tests; 137 of 137 mutants killed. Round 5 next.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus
