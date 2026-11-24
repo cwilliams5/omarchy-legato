@@ -88,6 +88,11 @@ Item {
     check("listened", find(stats, "statsListened").text === "1 d 14 h", find(stats, "statsListened").text)
     check("time saved in total", find(stats, "statsSavedTotal").text === "1 d 3 h", find(stats, "statsSavedTotal").text)
     check("counting on: the switch says On", find(stats, "statsCounting").text === "On", find(stats, "statsCounting").text)
+    // Each row its own number: speed 19 h 10 min, Trim 6 h 48 min,
+    // skipping 51 min, intro + outro 21 min; 63 finished.
+    var rows = [0, 1, 2, 3].map(function(i) { return find(stats, "statsRowValue" + i).text })
+    check("each saved row shows its own time", rows.join("|") === "19 h 10 min|6 h 48 min|51 min|21 min", rows.join("|"))
+    check("episodes finished", find(stats, "statsFinished").text === "63", find(stats, "statsFinished").text)
 
     // Counting off: the page says so and the switch follows the bridge.
     stats.stats = Object.assign({}, stats.stats, { counting: false })

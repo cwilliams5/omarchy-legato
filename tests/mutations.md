@@ -8,15 +8,15 @@ and runs the tests meant to catch each. A mutation that passes them is a
 
 ```bash
 tests/run                          # first: a green baseline (a red one "kills" everything)
-python3 -B tests/mutate.py .       # all of them, about 30 minutes
+python3 -B tests/mutate.py .       # all of them, about 45 minutes
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (84 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (113 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
 it.
 
-## The set (84; strict review rounds 1 and 2, 2026-11-24)
+## The set (113; strict review rounds 1 to 3, 2026-11-24)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
@@ -57,6 +57,16 @@ caught each mutant. By area:
   with the redundant code they hit (a guard against learning at an end,
   and an `&& opened` closing already covers). Final: 84 of 84 killed, on a
   green suite (157 Python tests, 36 node).
+- Round 3 (the reviewers' own): 6 of 11 (safety; 2 equivalent), 21 of 29
+  (fit; 12 by behaviour, the rest by pattern). Their shapes are in this set
+  now, as behaviour tests: the start floor (hosts without ranges), the
+  M4A index and skip-outro ends, the unsent position's hour, rule 2 when
+  Pocket Casts is behind, and the QML (the Stats button, `a`, About over
+  Stats, the switch before a read, stale reads, error clearing, the seek
+  flag's reset, rows and Episodes finished).
+- After round 3's fixes: 113 of 113 killed, on a green suite (171 Python
+  tests, 36 node; the first run's baseline check caught a stale node
+  pattern, which skipped its five mutants until fixed).
 - Equivalent and left out: dropping `after > before` from the skip count
   (`add_stats` ignores values that aren't positive).
 

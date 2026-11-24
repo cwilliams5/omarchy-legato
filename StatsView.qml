@@ -134,6 +134,7 @@ Column {
     Item {
       id: savedRow
       required property var modelData
+      required property int index
       width: root.width
       height: rowLabel.implicitHeight
 
@@ -152,6 +153,7 @@ Column {
       }
       Text {
         id: rowValue
+        objectName: "statsRowValue" + savedRow.index
         anchors.right: parent.right
         anchors.baseline: rowLabel.baseline
         textFormat: Text.PlainText

@@ -369,8 +369,9 @@ history on other submissions). Fixed, each with a failing-first test:
   real end without a file size and a long duration could replay forever
   (only mpv's duration; a second stop at the same spot is the end); a
   failed poll lost the seek flag; the Stats page waited on the state lock.
-  Cody's home server sends Content-Range with the full size and serves MP4,
-  so his episodes' ends are judged by the file. The prediction's Low on
+  Cody's home server sends Content-Range with the full size and serves MP4;
+  one of his episodes, checked live, ended with all but 178 bytes read (its
+  index at the front). Since round 3 an index at the back is fine too. The prediction's Low on
   G14 (UUIDs in argv) is left as decided.
 - [x] H8 Media for 1.1.0 (Cody: no re-shoot, edit the button in). The
   header's Stats button was composited into media/hero.png, pages.png
@@ -530,12 +531,74 @@ safety, 2 of 21 fit).
   Cody's OK to use an empty workspace). tests/mutate.py checks a green
   baseline per test set and names the killing test.
 
+### SR, round 3 (2026-11-24)
+
+reports kept outside the repo. Breaks no
+longer mark episodes played on any host shape tried, and the sync rules,
+locks, cost and security hold. But the judgment now errs the other way on
+real files, and an old no-ranges path rewinds other devices.
+
+- [x] SR23 (high) An M4A with its index (moov) after the audio, FFmpeg's
+  default, never finished: `stream-pos` stops before the index, so "much
+  unread". Play then restarted it at 0:00 and pushed 0. Fix: with the size
+  still known (the stream didn't fail), much unread is a break only if
+  mpv's own duration also says the stop is short of the end.
+  Fixed: still sized, much unread is a break only if mpv's own duration
+  agrees. Test: a 10-minute M4A written without faststart, played to its
+  end, is marked played.
+- [x] SR24 (high) A skip-outro show whose file is a little shorter than
+  Pocket Casts lists looped at the end: only durations decided, against
+  the listed one. Fix: the same (mpv's own durations when the size is
+  known); a no-size host shorter than listed stays a stated limit.
+  Fixed the same way. Test: a 120 s file listed as 132 s with a 20 s outro
+  skip ends properly.
+- [x] SR25 (high) A host without byte ranges: mpv can't start part way, so
+  a resume played from 0:00 and the next poll pushed that over Pocket
+  Casts' further position, on every device (old code; the break's "press
+  play" leads into it). Fix: a load that couldn't start where asked sets a
+  floor; nothing below it is pushed until playback passes it.
+  Fixed: `stream.asked` and `below_start` guard the poll's push, sync_now
+  and the break's push until playback passes the start or you seek; the
+  panel says so once. Tests: no push below the start, a seek of yours syncs
+  again, the break's own push.
+- [x] SR26 (medium) resume_last kept an unsent local position with no age
+  limit. Fix: only one a break's failed push left, within an hour.
+  Fixed: `unsentBreak`, kept for `UNSENT_BREAK_KEPT` (an hour); Pocket
+  Casts further on wins. Tests for both, and for rule 2 when Pocket Casts
+  is behind (the phone rewound on purpose).
+- [x] SR27 (low) resume_loaded's break check didn't make sure mpv plays the
+  recorded episode. Fix: it checks, as the poll does.
+  Fixed and tested.
+- [x] SR28 (low) A reload that plays nothing (the same stop again) gave the
+  same message forever. Fix: it says nothing more arrives, and how to mark
+  the episode played; nothing is marked by itself.
+  Fixed: `nothingMore` and its message (right-click in Up Next marks it
+  played). Test.
+- [x] SR29 (low) Stats: a read answering after Off or Clear put the old
+  state back; one more fsynced write per poll; the broken-stream message
+  cut off in the status line; the README's cost line.
+  Fixed: reads issued before a change answer into nothing; stats.json
+  written without fsync; the message shortened; the README's cost line.
+- [x] SR30 Tests: QML behaviour instead of patterns for the Stats button,
+  `a` closing, About over Stats, page counts (a panel going away), error
+  clearing, the seek flag's reset, re-reads only for the Stats page, the
+  optimistic switch, each row's value, Episodes finished; bridge bounds
+  (no-Trim upper, stall slack), `since`, the count before a seek; rule 2
+  when Pocket Casts is behind (the phone rewound on purpose); hyprctl
+  stubbed for every player test; a duplicate mutant; M4A and skip-outro
+  media in the end tests. Claims: CLAUDE.md's stream-pos fact, "Play loads
+  from Pocket Casts' position", "durations aren't trusted alone", "10 s at
+  most"; README's limits.
+  Fixed: tests/qml/panel.qml has 37 checks (the shapes above); bridge tests
+  for each; hyprctl stubbed for every player test; the duplicate mutant
+  removed. tests/mutate.py now 113 mutations.
+
 - [ ] H6 Ship 1.1.0 (a minor version: the stats are a feature) with the `ship-update` skill (marketplace verification
   request, Cody approves the filing).
 
 ## Testing
 
-- `tests/run` before every commit: all suites, about 3 minutes, nothing on
+- `tests/run` before every commit: all suites, about 5 minutes, nothing on
   screen. Each new behavior gets an end-to-end test against the fake server
   (`tests/test_bridge.py`, `PlayerTestCase`; set `AUDIO_SECONDS` for longer
   audio, and the fake serves byte ranges).
@@ -554,6 +617,12 @@ safety, 2 of 21 fit).
   judged size first and towards a break when unsure; QML now tested with
   the real Panel and Service offscreen. 157 Python + 36 node tests; the
   mutation set (tests/mutate.py) 84 of 84 killed. Round 3 next.
+- 2026-11-24 (later): round 3 (SR23-SR30): an M4A with its index at the
+  back and a skip-outro show listed longer than its file now end properly
+  (a still-sized stream judged by mpv's own duration); a host without byte
+  ranges no longer rewinds other devices (the start floor); the unsent
+  position kept an hour only. 171 Python + 36 node tests; 113 of 113
+  mutants killed. Round 4 next.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

@@ -49,6 +49,24 @@ Item {
       } catch (e) { return false }
     })
   }
+  // The running bridge calls whose arguments are exactly `words` ("stats"
+  // is a read; "stats clear" isn't one).
+  function exactly(words) {
+    var want = String(words).trim()
+    return Processes.started.filter(function(p) {
+      try {
+        if (!p.running) return false
+        var at = -1
+        for (var i = 0; i < p.command.length; i++) if (String(p.command[i]).indexOf("legato-bridge") >= 0) at = i
+        return p.command.slice(at + 1).join(" ") === want
+      } catch (e) { return false }
+    })
+  }
+  function answerExactly(words, data) {
+    var running = exactly(words)
+    running.forEach(function(p) { p.finish(0, JSON.stringify({ ok: true, data: data }), "") })
+    return running.length
+  }
   function answer(word, data) {
     var running = calls(word)
     running.forEach(function(p) { p.finish(0, JSON.stringify({ ok: true, data: data }), "") })
@@ -66,10 +84,27 @@ Item {
 
   Legato.Panel { id: panel; settings: ({}) }
 
+  // A second panel sharing the first one's service (as a second screen's).
+  QtObject { id: sharingBar; property var shell: ({ serviceFor: function(id) { return panel.service } }) }
+  Component { id: panelMaker; Legato.Panel { bar: sharingBar; settings: ({}) } }
+
   readonly property var stats: ({ listened: 3600, speed: 600, trim: 120, skipping: 60, intro: 30, outro: 15,
                                   finished: 4, since: 1789300000, counting: true })
 
   Timer { interval: 50; running: true; onTriggered: top.run() }
+
+  property bool destroyed: false
+  Timer {
+    id: lastCheck
+    interval: 200
+    onTriggered: {
+      var service = panel.service
+      top.check("a panel gone while showing Stats counts it off",
+                top.destroyed && service.statsPagesOpen === 0 && service.pagesOpen === 0 && service.openPanels === 0,
+                top.destroyed + " " + service.statsPagesOpen + " " + service.pagesOpen + " " + service.openPanels)
+      Qt.exit(top.failures)
+    }
+  }
 
   function run() {
     var service = panel.service
@@ -90,11 +125,27 @@ Item {
     check("n on the main view asks for the next episode", calls("next").length === 1, calls("next").length)
     settle()
 
+    // The header's Stats button opens the page; `a` closes it again.
+    named("statsButton").clicked()
+    check("the header's Stats button opens the page", panel.showStats && statsView.visible, panel.showStats)
+    settle()
+    keys.textKey("a", 0)
+    check("a closes it again", !panel.showStats && !statsView.visible && service.statsPagesOpen === 0, panel.showStats)
+
+    // Before its first read the page follows the service's switch.
+    service.player = { active: false, statsCounting: false }
+    service.stats = null
+    named("statsButton").clicked()
+    check("before a read, the switch shows the player's choice", named("statsCounting").text === "Off", named("statsCounting").text)
+    service.player = { active: false }
+    settle()
+    keys.closeRequested()
+
     // ...the Stats page opens from `a`, reads the stats, and shows them.
     keys.textKey("a", 0)
     check("a opens the Stats page", panel.showStats && statsView.visible, panel.showStats + " " + statsView.visible)
-    check("the page asks the bridge for the stats", calls("stats").length === 1, calls("stats").length)
-    answer("stats", top.stats)
+    check("the page asks the bridge for the stats", exactly("stats").length === 1, exactly("stats").length)
+    answerExactly("stats", top.stats)
     check("the answer reaches the page", statsView.stats && statsView.stats.listened === 3600, JSON.stringify(statsView.stats))
     check("the card is sized to the Stats page",
           card.contentHeight === Math.min(statsView.implicitHeight + 32, 760), card.contentHeight + " vs " + (statsView.implicitHeight + 32))
@@ -109,25 +160,56 @@ Item {
 
     // While the page is open, each poll's answer brings a fresh read.
     service.applyPlayer({ active: true, playing: true, position: 10, duration: 100, item: null })
-    check("a poll while the page is open re-reads the stats", calls("stats").length === 1, calls("stats").length)
+    check("a poll while the page is open re-reads the stats", exactly("stats").length === 1, exactly("stats").length)
     fail("stats", "Another Pocket Casts action is still running")
     check("a failed read shows on the page", named("statsError").visible && statsView.error.indexOf("still running") >= 0,
           statsView.error)
+    service.applyPlayer({ active: true, playing: true, position: 10, duration: 100, item: null })
+    answerExactly("stats", top.stats)
+    check("a good read clears it", !named("statsError").visible && statsView.error === "", statsView.error)
 
     // An error from playback reaches the OSD while a page hides the status line.
     top.summoned = []
     service.applyPlayer({ active: false, playing: false, streamBroke: true, item: null })
-    check("a broken stream is reported", service.actionError.indexOf("stopped arriving") >= 0, service.actionError)
+    check("a broken stream is reported", service.actionError.indexOf("stopped part way") >= 0, service.actionError)
     check("and reaches the OSD while a page is open", top.summoned.length === 1, JSON.stringify(top.summoned))
 
-    // The switch and Clear reach the bridge.
+    // The switch and Clear reach the bridge. A read asked before the switch
+    // answers into nothing (it may have read the file before the change).
+    service.applyPlayer({ active: true, playing: true, position: 12, duration: 100, item: null })
     named("statsCounting").clicked()
     check("the switch asks the bridge", calls("stats off").length === 1, calls("stats off").length)
+    answerExactly("stats", Object.assign({}, top.stats, { listened: 999 }))
+    check("a read from before the switch is ignored", statsView.stats.listened !== 999, statsView.stats.listened)
     answer("stats off", Object.assign({}, top.stats, { counting: false }))
     check("and the page follows", named("statsCounting").text === "Off", named("statsCounting").text)
+    check("and so does the service's switch", service.statsCounting === false, service.statsCounting)
     named("statsClear").clicked()
     named("statsClear").clicked()
     check("Clear, confirmed, asks the bridge", calls("stats clear").length === 1, calls("stats clear").length)
+    settle()
+
+    // About replaces the Stats page; the counts follow, and About alone
+    // never re-reads the stats. Errors reach the OSD behind it too.
+    keys.textKey("i", 0)
+    check("About replaces the Stats page", panel.showAbout && !panel.showStats && !statsView.visible
+          && service.statsPagesOpen === 0 && service.pagesOpen === 1,
+          panel.showStats + " " + service.statsPagesOpen + " " + service.pagesOpen)
+    service.applyPlayer({ active: true, playing: true, position: 13, duration: 100, item: null })
+    check("no stats read behind About", exactly("stats").length === 0, exactly("stats").length)
+    top.summoned = []
+    service.reportError("x")
+    check("an error behind About reaches the OSD", top.summoned.length === 1, JSON.stringify(top.summoned))
+    keys.textKey("a", 0)
+    check("Stats replaces About", panel.showStats && !panel.showAbout && service.statsPagesOpen === 1 && service.pagesOpen === 1,
+          service.statsPagesOpen + " " + service.pagesOpen)
+    settle()
+
+    // The broken stream's two messages, and a host that can't start part way.
+    service.applyPlayer({ active: false, playing: false, streamBroke: true, nothingMore: true, item: null })
+    check("nothing more arriving says how to mark it played", service.actionError.indexOf("mark it played") >= 0, service.actionError)
+    service.applyPlayer({ active: true, playing: true, position: 1, duration: 100, startedFromTop: true, item: null })
+    check("a host that can't start part way is said", service.actionError.indexOf("from the top") >= 0, service.actionError)
     settle()
 
     // Back, and closing, are counted off the service.
@@ -135,7 +217,7 @@ Item {
     check("Esc leaves the page", !panel.showStats && !statsView.visible && service.statsPagesOpen === 0 && service.pagesOpen === 0,
           panel.showStats + " " + service.statsPagesOpen + " " + service.pagesOpen)
     service.applyPlayer({ active: true, playing: true, position: 11, duration: 100, item: null })
-    check("no re-read with the page closed", calls("stats").length === 0, calls("stats").length)
+    check("no re-read with the page closed", exactly("stats").length === 0, exactly("stats").length)
     keys.textKey("a", 0)
     settle()
     panel.close()
@@ -149,8 +231,24 @@ Item {
     check("the poll after a seek says so", calls("player --seeked").length === 1, calls("player").map(function(p) { return p.command.join(" ") }))
     fail("player", "busy")
     check("a failed poll keeps the seek for the next", service._seekedSincePoll === true, service._seekedSincePoll)
+    service.refreshPlayer()
+    answer("player", { active: true, playing: true, position: 20, duration: 100, item: null })
+    settle()
+    service.refreshPlayer()
+    check("after a good poll, the next says no seek", calls("player").length === 1 && calls("player --seeked").length === 0,
+          calls("player").map(function(p) { return p.command.join(" ") }))
     settle()
 
-    Qt.exit(failures)
+    // A second panel on the same service (another screen) counts its page,
+    // and takes it off when it goes away while showing it.
+    var other = panelMaker.createObject(top)
+    check("the second panel shares the service", other.service === service, other.service === service)
+    other.open()
+    other.setStats(true)
+    check("its Stats page is counted", service.statsPagesOpen === 1 && service.pagesOpen === 1,
+          service.statsPagesOpen + " " + service.pagesOpen)
+    other.Component.destruction.connect(function() { top.destroyed = true })
+    other.destroy()
+    lastCheck.start()  // destroy() takes effect on a later turn of the event loop
   }
 }

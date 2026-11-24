@@ -72,8 +72,9 @@ test("the stats page opens from the header, `a` and closes like the others; it r
   assert.match(panel, /onCountingRequested: function\(on\) \{ if \(root\.service\) root\.service\.setStatsCounting\(on\) \}/)
   assert.match(panel, /onClearRequested: if \(root\.service\) root\.service\.clearStats\(\)/)
   assert.match(panel, /error: root\.service \? root\.service\.statsError : ""/)
-  assert.match(service, /call\(\["stats", on \? "on" : "off"\], function\(result\) \{\s*root\.applyStats\(result\)\s*if \(result\.ok\) root\.optimistic\(\{ statsCounting: result\.data\.counting \}\)/)
-  assert.match(service, /call\(\["stats", "clear"\], function\(result\) \{ root\.applyStats\(result\) \}\)/)
+  // (The service's handling of these answers is run in tests/qml/panel.qml.)
+  assert.match(service, /call\(\["stats", on \? "on" : "off"\]/)
+  assert.match(service, /call\(\["stats", "clear"\]/)
   // A failure is kept for the page (never a blank page or a silent Clear).
   assert.match(service, /function applyStats\(result\) \{\s*if \(!result\.ok\) \{ root\.statsError = result\.error \|\| "[^"]+"; return \}\s*root\.statsError = ""\s*root\.stats = result\.data/)
   // The open page follows what's counted: re-read after each poll while open.

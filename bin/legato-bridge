@@ -140,6 +140,11 @@ BROKE_UNREAD_BYTES = 64 * 1024
 # the longest duration given (Pocket Casts', mpv's): podcast files and their
 # listed durations differ by a few minutes (ads inserted on the fly).
 NO_SIZE_MARGIN = 0.10
+# A load that started this far short of where it was asked couldn't start
+# part way (below_start).
+START_SLACK = 5
+# A break's position Pocket Casts never got is kept this long (resume_last).
+UNSENT_BREAK_KEPT = 3600
 # Extra mpv arguments; the test suite sets --ao=null here.
 MPV_EXTRA_ARGS = ()
 SPEEDS = (0.8, 1.0, 1.1, 1.2, 1.3, 1.5, 1.7, 2.0, 2.5, 3.0)
@@ -526,7 +531,7 @@ def read_file_at(held, name, limit, private):
         os.close(fd)
 
 
-def write_file_at(held, name, data, mode=0o600):
+def write_file_at(held, name, data, mode=0o600, sync=True):
     """Atomically replace `name` below `held` with `data`.
 
     The content goes into a fresh, unpredictably named temp file created with
@@ -553,7 +558,8 @@ def write_file_at(held, name, data, mode=0o600):
             view = memoryview(data)
             while view:
                 view = view[os.write(fd, view):]
-            os.fsync(fd)
+            if sync:
+                os.fsync(fd)
         finally:
             os.close(fd)
         os.rename(tmp, name, src_dir_fd=held.fd, dst_dir_fd=held.fd)
@@ -563,6 +569,8 @@ def write_file_at(held, name, data, mode=0o600):
         except OSError:
             pass
         raise
+    if not sync:
+        return  # (still written whole: the rename replaces the old file at once)
     try:
         os.fsync(held.fd)
     except OSError:
@@ -740,10 +748,10 @@ def load_state(name, limit=STATE_MAX_BYTES):
         return {}
 
 
-def save_state(name, data):
+def save_state(name, data, sync=True):
     blob = json.dumps(data, ensure_ascii=False).encode("utf-8")
     with state_dir(create=True) as held:
-        write_file_at(held, name, blob, 0o600)
+        write_file_at(held, name, blob, 0o600, sync)
 
 
 def drop_state(name):
@@ -2061,7 +2069,9 @@ def add_stats(**seconds):
             if isinstance(value, (int, float)) and value > 0:
                 before = stats.get(key)
                 stats[key] = round((float(before) if isinstance(before, (int, float)) else 0.0) + float(value), 3)
-        save_state("stats.json", stats)
+        # Not synced to disk: they're written each poll while playing, and a
+        # crash losing the last few seconds of them is no loss.
+        save_state("stats.json", stats, sync=False)
     except Exception:  # noqa: BLE001 (a DeadlinePassed isn't an Exception and still ends the call)
         pass
 
@@ -2201,7 +2211,8 @@ def load_into_mpv(item, prefs, position, skip_last=0):
         player.wait_for_load()
         size, duration = player.get("stream-end"), player.get("duration")
         return {"url": url, "size": size if isinstance(size, int) else None,
-                "duration": duration if isinstance(duration, (int, float)) else None}
+                "duration": duration if isinstance(duration, (int, float)) else None,
+                "asked": int(position) if position > START_SLACK else None, "begun": float(position)}
 
 
 def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_top=False):
@@ -2446,12 +2457,15 @@ def stream_broke(snap, state):
     up; mpv retries for a while first). Only the first finishes the episode,
     and calling a break the end is the worse mistake (it marks an unfinished
     episode played on every device and starts the next), so where the
-    evidence is weak this leans towards a break: a real end misjudged costs
-    a press of Play or a "mark played", not a lost place.
+    evidence is weak this leans towards a break. A real end misjudged leaves
+    the episode in progress: Play reloads it at its end, which stops again
+    and says to mark it played (stream_stopped); nothing is pushed back.
 
-    1. The file's size, known now: much of it unread is a break (unless the
-       show's skip-outro stopped it there on purpose); read to its end, the
-       end.
+    1. The file's size, known now (the stream hasn't failed): read to its
+       end, the end; much unread, a break only if mpv's own duration (from
+       the file, not Pocket Casts' listing) also says the stop is short of
+       the end, the show's skip-outro allowed for (an M4A's index can sit
+       after its audio, unread).
     2. The size known earlier for this file (`stream`: recorded at load,
        filled in by polls) and gone now: a break; mpv drops it when the
        stream fails.
@@ -2473,16 +2487,39 @@ def stream_broke(snap, state):
     longest = max(durations) if durations else None
     read, size = snap.get("stream-pos"), snap.get("stream-end")
     if isinstance(size, int) and size > 0:
+        # The size is still known, so the stream hasn't failed (mpv drops it
+        # when it does). Read to its end: the end. Much unread is a break only
+        # if mpv's own duration, from the file, says the stop is short too:
+        # an M4A's index can sit after its audio (FFmpeg's default), and the
+        # show's skip-outro stops short on purpose.
         if isinstance(read, int) and size - read <= max(BROKE_UNREAD_BYTES, size // 100):
-            return False  # read to its end
-        # Much unread. The show's skip-outro stops short on purpose.
-        return not (skip and longest is not None
-                    and position >= longest - skip - max(BROKE_SLACK, longest / 100))
+            return False
+        own = [d for d in (snap.get("duration"), loaded.get("duration"))
+               if isinstance(d, (int, float)) and not isinstance(d, bool) and d > 0]
+        if not own:
+            return True
+        length = max(own)
+        return position < length - skip - max(BROKE_SLACK, length / 100)
     if isinstance(loaded.get("size"), int) and loaded["size"] > 0:
         return True
     if longest is None:
         return False
     return position < longest - skip - max(BROKE_SLACK, longest * NO_SIZE_MARGIN)
+
+
+def below_start(state, position):
+    """True while playback sits short of where this load was asked to start
+    (`stream`'s `asked`): a host that serves no byte ranges can't start part
+    way, so mpv plays from the top. Pushing that would rewind every other
+    device to it; nothing is pushed until playback passes the start (or you
+    seek, which clears it: cmd_seek)."""
+    record = state.get("stream")
+    url = (state.get("episode") or {}).get("url")
+    if not isinstance(record, dict) or record.get("url") != url:
+        return False
+    asked = record.get("asked")
+    return (isinstance(asked, (int, float)) and isinstance(position, (int, float))
+            and position < asked - START_SLACK)
 
 
 def learn_stream(state, snap):
@@ -2500,6 +2537,13 @@ def learn_stream(state, snap):
     if (isinstance(duration, (int, float)) and duration > 0
             and not (isinstance(record.get("duration"), (int, float)) and record["duration"] >= duration)):
         record["duration"] = float(duration)  # the longest mpv has reported for it
+    position = snap.get("time-pos")
+    if isinstance(record.get("asked"), (int, float)) and isinstance(position, (int, float)):
+        if position >= record["asked"] - START_SLACK:
+            record["asked"] = None  # past where it was asked to start: pushes as usual
+        elif not record.get("toldStart"):
+            record["toldStart"] = True
+            state["tellStart"] = True  # said once (poll's view: startedFromTop)
     state["stream"] = record
 
 
@@ -2517,20 +2561,29 @@ def stream_stopped(state, prefs, position):
         recent = time.time() - float(state.get("lastSyncAt") or 0) < RECHECK_AFTER
         if not recent:
             state["checkServer"] = True
-        elif episode.get("uuid") and not state.get("unconfirmed") and not state.get("checkServer"):
+        elif (episode.get("uuid") and not state.get("unconfirmed") and not state.get("checkServer")
+                and not below_start(state, position)):
             try:
                 push_position(episode, position)
                 state["lastSyncAt"] = time.time()
                 state["lastSyncPos"] = float(position)
                 episode["playedUpTo"] = int(position)
             except ApiError:
-                pass  # resume_last carries on from state["position"], which Pocket Casts never got
+                # Pocket Casts never got it: the next Play carries on from
+                # here, within the hour (resume_last).
+                state["unsentBreak"] = {"uuid": episode.get("uuid"), "position": float(position), "at": time.time()}
     save_playback(state)
     player = Mpv.connect()
     if player:
         quit_mpv(player)
     view = player_view({}, state, prefs)
     view["streamBroke"] = True
+    # It stopped where this load began: nothing more of it arrives. It may be
+    # its end, misjudged: say how to mark it played (never done by itself).
+    record = state.get("stream") or {}
+    begun = record.get("begun") if isinstance(record, dict) else None
+    if isinstance(begun, (int, float)) and isinstance(position, (int, float)) and position - begun < 2:
+        view["nothingMore"] = True
     return view
 
 
@@ -2623,7 +2676,7 @@ def resume_loaded(player, state, prefs):
         return  # already playing (a media key got there first)
     if at_end:
         snap = {name: player.get(name) for name in ("eof-reached", "path", "time-pos", "duration") + END_PROPERTIES}
-        if stream_broke(snap, state):
+        if snap.get("path") == (state.get("episode") or {}).get("url") and stream_broke(snap, state):
             # Its stream broke off before a poll saw it: not the end (playing it
             # again from the top would push 0). Load it again from where it got to.
             stream_stopped(state, prefs, snap.get("time-pos"))
@@ -2751,6 +2804,8 @@ def poll(autoplay=True, seeked=False):
             # poll began), under their lock, so a toggle isn't undone.
             with prefs_update(save=False) as fresh:
                 heal_filters(fixer, snap, fresh)
+    if due and below_start(state, position):
+        due = False  # mpv couldn't start where asked: don't rewind the others to here
     if due and isinstance(position, (int, float)):
         try:
             push_position(episode, position)
@@ -2759,8 +2814,11 @@ def poll(autoplay=True, seeked=False):
             episode["playedUpTo"] = int(position)
         except ApiError:
             state["lastSyncAt"] = now  # try again next interval, not every poll
+    view = player_view(snap, state, prefs)
+    if state.pop("tellStart", None):
+        view["startedFromTop"] = True
     save_playback(state)
-    return player_view(snap, state, prefs)
+    return view
 
 
 def poll_after_change(state, prefs):
@@ -2794,9 +2852,10 @@ def sync_now(player, state, force=False):
     if not episode.get("uuid") or not isinstance(position, (int, float)):
         return
     state["position"] = float(position)
-    if player.get("eof-reached") is True or state.get("unconfirmed"):
-        # At the end (it's played), or on a resume Pocket Casts never
-        # confirmed: nothing is pushed until it answers (rule 2).
+    if player.get("eof-reached") is True or state.get("unconfirmed") or below_start(state, position):
+        # At the end (it's played), on a resume Pocket Casts never
+        # confirmed (nothing is pushed until it answers, rule 2), or short of
+        # where a host without ranges couldn't start (below_start).
         save_playback(state)
         return
     if not force:
@@ -3322,14 +3381,15 @@ def resume_last(prefs):
                 top = None
             if top and top["uuid"] != item["uuid"]:
                 item = None
-    if item and item.get("uuid") == episode.get("uuid"):
-        # Further than Pocket Casts has it, and never sent (its push failed:
-        # the network was down when the stream broke, say): carry on from
-        # there, as check_server keeps such a position for a paused player.
-        # Pocket Casts being further on wins, as always.
-        local = float(state.get("position") or 0)
-        if moved_since_push(state) and local > as_int(item.get("playedUpTo")):
-            item = dict(item, playedUpTo=int(local))
+    unsent = state.get("unsentBreak")
+    if (item and isinstance(unsent, dict) and unsent.get("uuid") == item.get("uuid")
+            and time.time() - float(unsent.get("at") or 0) < UNSENT_BREAK_KEPT
+            and isinstance(unsent.get("position"), (int, float))
+            and unsent["position"] > as_int(item.get("playedUpTo"))):
+        # The stream broke while Pocket Casts couldn't be told where it got to
+        # (stream_stopped): carry on from there, within the hour. Pocket Casts
+        # being further on (another device listened on) wins, as always.
+        item = dict(item, playedUpTo=int(unsent["position"]))
     if not item:
         item = next_in_up_next("")
     if not item:
@@ -3382,6 +3442,9 @@ def cmd_seek(args):
         with require_player() as player:
             prefs = load_prefs()
             count_listening(state, listen_snap(player), prefs)
+            record = state.get("stream")
+            if isinstance(record, dict):
+                record["asked"] = None  # a seek of yours: where it plays is where you mean it to
             before = player.get("time-pos")
             # osd-msg-bar: the video window (if shown) shows where it went.
             if args.relative:

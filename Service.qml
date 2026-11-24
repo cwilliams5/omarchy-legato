@@ -462,8 +462,12 @@ Item {
   property string statsError: ""
   property int statsPagesOpen: 0  // panels showing the Stats page (Panel.notePages)
   property int pagesOpen: 0       // panels showing any page (About, Settings, Stats)
+  // A read asked before a change (On/Off, Clear) answers into nothing: it
+  // may have read the file before the change was written.
+  property int _statsChanges: 0
   function loadStats() {
-    call(["stats"], function(result) { root.applyStats(result) })
+    var changes = _statsChanges
+    call(["stats"], function(result) { if (changes === root._statsChanges) root.applyStats(result) })
   }
   function applyStats(result) {
     if (!result.ok) { root.statsError = result.error || "Couldn't read the listening stats"; return }
@@ -520,8 +524,14 @@ Item {
     if (view.loadFailed === true) loadFailed("")
     if (view.playerHung === true) reportError("The player stopped responding and was closed. Press play to carry on.")
     // The stream broke off part way (the network or the episode's server
-    // went): not finished, the player is closed, play loads it again.
-    if (view.streamBroke === true) reportError("The episode's audio stopped arriving, so it wasn't marked played. Press play to carry on.")
+    // went): not finished, the player is closed, play loads it again. If the
+    // reload got nothing at all, it may be the end, misjudged: say how to
+    // mark it played (the bridge never does that by itself).
+    if (view.nothingMore === true) reportError("Nothing more of this episode arrives. If it's done, mark it played (right-click it in Up Next).")
+    else if (view.streamBroke === true) reportError("Audio stopped part way. Press play to carry on.")
+    // A host that can't start part way: it plays from the top, and Legato
+    // sends no position until it passes where you were.
+    if (view.startedFromTop === true) reportError("This show's server can't start part way: playing from the top. Your place syncs again once it's passed.")
   }
 
   // Where playback is now: the last read from mpv, carried forward by the
@@ -907,14 +917,17 @@ Item {
   // Listening stats: counting on or off, and clearing what's counted. Both
   // answer with the stats as they now are, for the Stats page.
   function setStatsCounting(on) {
+    var change = ++_statsChanges
     call(["stats", on ? "on" : "off"], function(result) {
+      if (change !== root._statsChanges) return  // a later change answers
       root.applyStats(result)
       if (result.ok) root.optimistic({ statsCounting: result.data.counting })
     })
   }
 
   function clearStats() {
-    call(["stats", "clear"], function(result) { root.applyStats(result) })
+    var change = ++_statsChanges
+    call(["stats", "clear"], function(result) { if (change === root._statsChanges) root.applyStats(result) })
   }
 
   function setLocalFeeds(on) {

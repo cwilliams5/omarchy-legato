@@ -145,7 +145,8 @@ Hyprland stay until it reloads its config: `hyprctl reload`, or log out.
 - **Paused or idle, Legato runs nothing on a timer.** Pause, resume, seeks
   and the end of an episode all arrive as events from mpv.
 - **While playing,** one short Python process every 30 seconds sends your
-  position to Pocket Casts (about 80 ms of CPU each).
+  position to Pocket Casts (about 80 ms of CPU each); with the Stats page
+  open, one more after each, to keep its numbers current.
 - **mpv** uses about 90 MB with an episode loaded and no CPU while paused,
   plus about 100 MB once its video window has been shown, until the player
   closes. After 15 minutes paused (`unloadAfterMinutes`), the player closes
@@ -177,12 +178,18 @@ devices.
   Episodes served from this computer itself never play.
 - **A cover isn't a video:** some feeds pack the episode's cover into the
   file as a video stream. Legato treats those episodes as audio.
+- **A host that can't start part way** (it serves no byte ranges): a
+  resume plays from the top, and Legato sends no position until playback
+  passes where you were, so your other devices aren't sent back; the panel
+  says so.
 - **A dropped stream near the end, on a host that sends no file size:**
   when the audio stops part way, Legato tells that from the episode's end
   by the file's size. Without one (rare: podcast hosts send it), it goes by
   the episode's length, so a stop in the last tenth counts as the end and
   marks the episode played. With no length either, every stop counts as the
-  end, as before 1.1.
+  end, as before 1.1. The other way round, such a file much shorter than
+  Pocket Casts lists never seems to end: Legato says nothing more arrives
+  and how to mark it played.
 
 ## Built on
 
