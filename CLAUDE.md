@@ -139,9 +139,15 @@ docs/PLAN.md         what's left to build
    if it moved since its last push *and* that push was under
    `RECHECK_AFTER` (90 s) ago; later, the next resume asks first. Nothing
    is pushed while a resume is unconfirmed (Pocket Casts couldn't be
-   asked: `checkServer` set while playing), not even on pause. An episode
-   that ended here is never pushed as in progress (only `play_again`
-   reopens it). Why: Pocket Casts keeps the last write, so re-sending an
+   asked: `checkServer` set while playing), not even on pause. A forced
+   push (a pause or a skip while playing, the sleep guard: `sync_now` with
+   `force`) needs the same: a stretch Pocket Casts confirmed (no
+   `checkServer` from an earlier pause or media-key resume; the pause sets
+   it for the next resume only after its push) and played here since its
+   last push under `RECHECK_AFTER` ago (not after an unguarded sleep). After
+   a long stall the position is `unconfirmed` until Pocket Casts answers.
+   An episode that ended here is never pushed as in progress (only
+   `play_again` reopens it). Why: Pocket Casts keeps the last write, so re-sending an
    old position rewinds the phone. The original did this; it was
    reproduced live on 2026-11-21 (phone at 25:00, rewound to 3:20 within
    12 seconds of resuming on the laptop). A fresh-eyes review found two
@@ -217,11 +223,15 @@ docs/PLAN.md         what's left to build
   nor a position that hasn't moved since the last push), at once on pause
   or seek; a resume asks first (rule 2). A stall of `STALL_AFTER` (15 s) or
   more (the watcher times mpv's `paused-for-cache`: `stallSince`,
-  `lastStall`; `stall_seen`) is an interruption, like a pause: nothing is
+  `stalls`; `stall_seen`) is an interruption, like a pause: nothing is
   pushed while it lasts nor by a pause, stop, next, switch, sleep or break
-  push meanwhile (`sync_now`, `stream_stopped`), and once it plays again
-  the poll asks Pocket Casts first (`stallHandled` marks it done). A
-  stalled stream used to push its stall over the phone you carried on with. Pocket Casts keeps the playing episode at the
+  push meanwhile (`sync_now`, `stream_stopped`), and the position is
+  `unconfirmed` until Pocket Casts answers: once it plays again the poll
+  asks first (`stallHandled` marks the stall done), and a pause before
+  that pushes nothing. The watcher keeps the last eight stalls, so a short
+  hiccup after a long one doesn't hide it. A periodic push that fails
+  twice in a row is said once (`pushFailures`, `syncFailed`). A stalled
+  stream used to push its stall over the phone you carried on with. Pocket Casts keeps the playing episode at the
   top of Up Next; `playback.json`'s `atTop` records whether this machine's
   episode was put there, so a different top later means another device moved
   on.
@@ -281,6 +291,14 @@ docs/PLAN.md         what's left to build
   (`unsentBreak`). Where it starts is never "from the top" because it's at
   or past the listed length (`start_position`): files run longer than
   listed (ads inserted on the fly), and that pushed 0 to every device.
+- **An end that proves nothing** (`end_unproven`): mpv at its end with
+  nothing played since the load (Pocket Casts' position past this copy of
+  the file: ad-stitched copies differ per request; also an end before
+  where it began) or far short of the listed length (`END_FAR_SHORT`, half:
+  an expired feed's placeholder clip). Not marked played: stream_stopped
+  with "Stream ends here: mark it played." An HLS episode (mpv's
+  `file-format` hls) goes by the length rule: its playlist's durations are
+  exact, and there's no one stream to measure.
 - **A host without byte ranges** can't start part way, nor seek ahead of
   what has arrived: mpv plays from the top (or on from where it was). A
   load records where it was asked to start (`stream.asked`), and so does
@@ -377,7 +395,9 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
 - **The web player has the same resume problem solved**: on window focus
   while paused it refreshes Up Next and in-progress and adopts the server's
   position unless a local save is pending ("user returned" in its bundle).
-  `check_server` follows the same rule.
+  `check_server` follows a similar rule: Pocket Casts' position wins,
+  except a local one this machine never got through that is further on,
+  and only within the hour (`UNSENT_BREAK_KEPT`).
 - **The iOS app pushes on pause**, subject to a server-set minimum gap
   between saves; right after pausing the phone, the server can lag a few
   seconds.
@@ -553,7 +573,8 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   (`InhibitDelayMaxUSec`); NetworkManager holds its own delay, so the network
   is still up for the push. Omarchy's own sleep monitor
   (`omarchy-system-sleep-monitor`) also listens with `dbus-monitor`. If the
-  guard misses a sleep, rule 2's gap check still catches it before any push.
+  guard misses a sleep, rule 2's gap check still catches it before any push
+  (the poll's, and sync_now's for a pause or skip before any poll).
 - **The Android app doesn't upload playback effects** (tested 2026-11-21,
   PLAN B4); a show's skip intro and outro (`autoStartFrom`,
   `autoSkipLast`) do reach the server.

@@ -785,6 +785,57 @@ sends a size but no byte ranges.
   reconnect. Left: the previous file's late log line can reach the next
   file (errs toward a break, recoverable).
 
+### SR, round 7 (2026-11-24)
+
+reports kept outside the repo. The fit
+reviewer found nothing critical or high; the safety reviewer three highs.
+
+- [x] SR58 (high, since 1.0) A forced push (a pause or skip while playing,
+  the sleep guard) ignored both "not yet checked" and the 90 s gap: a
+  media-key resume then a panel Pause, or a Pause after an unguarded sleep,
+  pushed the old place over the phone's. The pause set checkServer before
+  its own push. Fixed: forced pushes need a confirmed, recent stretch;
+  checkServer is set after the push. Tests (pause, skip).
+- [x] SR59 (high) A pause after a stall healed: the poll it brought fell
+  through to the paused push (SR50's test never ran that poll). Fixed: a
+  long stall marks the position `unconfirmed` until Pocket Casts answers.
+  Tests (the pause's poll, a pause after the heal, pushes resuming after
+  the check).
+- [x] SR60 (high, rare) An HLS episode whose segments stop was marked
+  played. Fixed: HLS (mpv's `file-format`) goes by the length rule (its
+  playlist is exact). Tests (segments stop; a real end).
+- [x] SR61 (medium; SR34 widened it) Pocket Casts' position past the end of
+  this machine's copy (ad-stitched copies differ): ended at once, marked
+  played. Also a placeholder clip far short of the listed length (low).
+  Fixed: `end_unproven` (nothing played since the load, or under half the
+  listed length): "Stream ends here: mark it played." Tests.
+- [x] SR62 (medium) Pushes failing mid-episode (Pocket Casts down, the
+  session expired) were never said. Fixed: two in a row are said once
+  ("Pocket Casts not reached: not synced"). Test.
+- [ ] SR63 (medium, since 1.0; fit) On a bar that replaces Omarchy's, the
+  facade has no service lookup: the panel's fallback and the shell's own
+  service both run (polls twice, two sleep guards, two IPC handlers,
+  errors notified twice). Documented in README Known limits. Plan: the
+  shell's service does nothing until a panel claims it, and the IPC
+  handler is made only by the instance in use.
+- [x] SR64 (low) The watcher kept only the latest stall: a hiccup after a
+  long stall hid it. Fixed: the last eight. Unit test.
+- [x] SR65 (low) A host with ranges and no size logged a reconnect at real
+  ends: no episode finished. Fixed: no size, the length rule decides.
+- [x] SR66 (low) check_server kept an unsent local position for ever: now
+  within the hour (UNSENT_BREAK_KEPT). Tests both ways (the "within" side
+  was a surviving mutant).
+- [x] SR67 (low, left) Signing out doesn't stop a poll already running; a
+  panel Pause can answer "busy" behind a slow poll. Both read-only
+  findings, recoverable.
+- [x] SR68 (low; fit) Keepalive's 20 s probes in README Resources; stale
+  Service comments; the keyboard claim narrowed (the pages take the mouse);
+  small screens in Known limits; round 6's dates. SR46 (the screenshot)
+  still open.
+- [x] SR69 (tests) Rule 4 and rule 8 run in the panel test (the timers and
+  a closed panel's notification), a healed stall that syncs again, test
+  players ended by their socket even when the bridge can't reach them.
+
 - [ ] H6 Ship 1.1.0 (a minor version: the stats are a feature) with the `ship-update` skill (marketplace verification
   request, Cody approves the filing).
 
@@ -830,11 +881,17 @@ sends a size but no byte ranges.
   deadline and never waits for the auth lock. The fake host now serves
   over TLS and can stall. 204 Python + 36 node tests; 150 of 150 mutants
   killed. Round 6 next.
-- 2026-11-25 (overnight): round 6 (SR49-SR57): hosts without ranges judged
+- 2026-11-24 (night): round 6 (SR49-SR57): hosts without ranges judged
   by reading to the size; a stall of 15 s is an interruption, like a
   pause; errors go out as notifications (Omarchy's OSD never took them);
   About fits with its license open; one service per shell answers IPC.
   218 Python + 36 node tests; 163 of 163 mutants killed. Round 7 next.
+- 2026-11-24 (late): round 7 (SR58-SR69): forced pushes need a confirmed,
+  recent stretch; a long stall leaves the position unconfirmed; HLS by
+  length; ends that prove nothing aren't marked played; failing pushes
+  said. Fit found no critical or high (a replacement bar's two services
+  left documented). 230 Python + 36 node tests; 179 of 179 mutants
+  killed. Round 8 next.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

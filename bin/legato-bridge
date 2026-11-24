@@ -139,10 +139,15 @@ READ_PAST_CUT = 64 * 1024
 # size says: mpv stops this close to it at a real end (about 100 bytes for an
 # MP3's trailing tag, 81 for an M4A) and far short at a break.
 READ_TO_END = 4096
+# Periodic pushes failing this many times in a row (a minute and more): said.
+PUSH_FAILURES_SAID = 2
 # Stuck this long (mpv buffering, nothing arriving), the stream counts as
 # interrupted, like a pause: its position isn't pushed (you may have carried
 # on with your phone meanwhile), and playing on asks Pocket Casts first.
 STALL_AFTER = 15
+# An end this far short of the length Pocket Casts lists proves nothing (a
+# placeholder clip): end_unproven.
+END_FAR_SHORT = 0.5
 # With no size from the host (or no watcher), an end counts only within this
 # share of the longest duration given (Pocket Casts', mpv's), or BROKE_SLACK
 # seconds if that's more: podcast files and their listed durations differ by
@@ -1348,7 +1353,7 @@ def up_next_remove(uuids):
 
 MPV_PROPERTIES = ("path", "pause", "time-pos", "duration", "volume", "speed", "eof-reached", "vid", "track-list", "af",
                   "idle-active", "paused-for-cache", "playlist-count", "stream-end", "user-data/legato")
-END_PROPERTIES = ("stream-pos", "stream-end", "file-local-options/end", "seekable")
+END_PROPERTIES = ("stream-pos", "stream-end", "file-local-options/end", "seekable", "file-format")
 
 
 def runtime_dir(create=False):
@@ -2523,8 +2528,9 @@ def stream_broke(snap, state):
        such line). The end only if mpv read to the size (READ_TO_END); short
        of it, or nothing read at all (an M4A whose index is at the back
        can't play there), a break.
-    3. A host that gives no size (FFmpeg can't tell a cut from the end), or a
-       player without the watcher (started by an older Legato, or refused by
+    3. A host that gives no size (FFmpeg can't tell a cut from the end, and
+       may log a reconnect at a real end too), an HLS playlist, or a player
+       without the watcher (started by an older Legato, or refused by
        watch_script): compared with the longest duration given (Pocket
        Casts', mpv's at load or since), it's the end only within
        NO_SIZE_MARGIN of it, the skip-outro allowed for. With no duration at
@@ -2545,17 +2551,19 @@ def stream_broke(snap, state):
         return isinstance(value, (int, float)) and not isinstance(value, bool)
 
     watch = snap.get("user-data/legato")
-    if isinstance(watch, dict) and watch.get("watching") is True:
+    # The size the host gave at load, else now (after a failed reconnect mpv
+    # can report an error page's length instead). An HLS episode (a playlist
+    # of segments) has no one stream to measure: its playlist's durations
+    # are exact, so the length rule judges it.
+    size = next((s for s in (loaded.get("size"), snap.get("stream-end")) if number(s) and s > 0), None)
+    hls = str(snap.get("file-format") or "").startswith("hls")
+    if isinstance(watch, dict) and watch.get("watching") is True and size is not None and not hls:
         read = snap.get("stream-pos")
-        # The size the host gave at load, else now (after a failed reconnect
-        # mpv can report an error page's length instead).
-        size = next((s for s in (loaded.get("size"), snap.get("stream-end")) if number(s) and s > 0), None)
-        to_end = number(read) and size is not None and 0 <= size - read <= READ_TO_END
+        to_end = number(read) and 0 <= size - read <= READ_TO_END
         cut = watch.get("cut")
         if number(cut) and not to_end and not (number(read) and read > cut + READ_PAST_CUT):
             return True
-        if size is not None:
-            return False if snap.get("seekable") is True else not to_end
+        return False if snap.get("seekable") is True else not to_end
     skip = skip_last_of(snap.get("file-local-options/end"))
     durations = [d for d in (snap.get("duration"), loaded.get("duration"), (state.get("episode") or {}).get("duration"))
                  if number(d) and d > 0]
@@ -2565,22 +2573,51 @@ def stream_broke(snap, state):
     return position < longest - skip - max(BROKE_SLACK, longest * NO_SIZE_MARGIN)
 
 
+def end_unproven(snap, state):
+    """An end that proves nothing: mpv reached it with nothing played since
+    the load began (Pocket Casts' position is past this machine's copy of the
+    file: ad-stitched copies differ per request), or far short of the length
+    Pocket Casts lists (a placeholder clip from an expired feed). Not marked
+    played: it stops, and asks you to (stream_stopped)."""
+    if snap.get("eof-reached") is not True:
+        return False
+    position = snap.get("time-pos")
+    if not isinstance(position, (int, float)):
+        return False
+    url = (state.get("episode") or {}).get("url")
+    record = state.get("stream")
+    begun = record.get("begun") if isinstance(record, dict) and record.get("url") == url else None
+    if isinstance(begun, (int, float)) and position - begun < 2:
+        return True  # (or ended before where it began: the file is shorter there)
+    listed = (state.get("episode") or {}).get("duration")
+    skip = skip_last_of(snap.get("file-local-options/end"))  # a show's skip-outro stops short on purpose
+    return isinstance(listed, (int, float)) and listed > 0 and position + skip < listed * END_FAR_SHORT
+
+
 def stall_seen(watch, state):
     """A stall of STALL_AFTER or more (the watcher times mpv's buffering):
-    "now" while it lasts, "ended" once it's over and not yet handled
-    (`stallHandled`, the end's time), else None."""
+    "now" while it lasts, "ended" once one is over and not yet handled
+    (`stallHandled`, the time it ended), else None."""
     if not isinstance(watch, dict):
         return None
     since = watch.get("stallSince")
     if isinstance(since, (int, float)) and time.time() - since >= STALL_AFTER:
         return "now"
-    last = watch.get("lastStall")
-    if isinstance(last, dict):
-        began, ended = last.get("since"), last.get("ended")
-        if (isinstance(began, (int, float)) and isinstance(ended, (int, float)) and ended - began >= STALL_AFTER
-                and ended > float(state.get("stallHandled") or 0)):
+    handled = float(state.get("stallHandled") or 0)
+    for stall in watch.get("stalls") or []:
+        if not isinstance(stall, dict):
+            continue
+        began, ended = stall.get("since"), stall.get("ended")
+        if (isinstance(began, (int, float)) and isinstance(ended, (int, float))
+                and ended - began >= STALL_AFTER and ended > handled):
             return "ended"
     return None
+
+
+def stalls_ended_by(watch):
+    """When the last stall the watcher knows of ended (stallHandled)."""
+    ends = [stall.get("ended") for stall in (watch or {}).get("stalls") or [] if isinstance(stall, dict)]
+    return max([e for e in ends if isinstance(e, (int, float))], default=0)
 
 
 def below_start(state, position):
@@ -2623,7 +2660,7 @@ def learn_stream(state, snap):
     state["stream"] = record
 
 
-def stream_stopped(state, prefs, position, stalled=False):
+def stream_stopped(state, prefs, position, stalled=False, unproven=False):
     """The episode's stream broke off part way (stream_broke): it's not
     finished. Where it got to is pushed (it was playing here, so this machine
     produced it) unless its resume is still unconfirmed or unchecked, or the
@@ -2658,7 +2695,7 @@ def stream_stopped(state, prefs, position, stalled=False):
     # its end, misjudged: say how to mark it played (never done by itself).
     record = state.get("stream") or {}
     begun = record.get("begun") if isinstance(record, dict) else None
-    if isinstance(begun, (int, float)) and isinstance(position, (int, float)) and 0 <= position - begun < 2:
+    if unproven or (isinstance(begun, (int, float)) and isinstance(position, (int, float)) and 0 <= position - begun < 2):
         view["nothingMore"] = True
     return view
 
@@ -2722,8 +2759,10 @@ def check_server(state, prefs, player=None, quick=False):
         pushed = float(state.get("lastSyncPos") or 0)
         local = float(state.get("position") or 0)
         # Keep a local position Pocket Casts never received (its push failed)
-        # when it is further on than what another device saved.
-        keep_local = moved_since_push(state) and local > server
+        # when it is further on than what another device saved, within the
+        # hour (a phone rewound on purpose later wins).
+        keep_local = (moved_since_push(state) and local > server
+                      and time.time() - float(state.get("lastSyncAt") or 0) < UNSENT_BREAK_KEPT)
         if abs(server - pushed) > DRIFT_SLACK and not keep_local:
             own = player is None
             player = player or Mpv.connect()
@@ -2758,10 +2797,14 @@ def resume_loaded(player, state, prefs):
         return  # already playing (a media key got there first)
     if at_end:
         snap = player.snapshot()
-        if snap.get("path") == (state.get("episode") or {}).get("url") and stream_broke(snap, state):
+        broke = snap.get("path") == (state.get("episode") or {}).get("url") and stream_broke(snap, state)
+        unproven = not broke and snap.get("path") == (state.get("episode") or {}).get("url") and end_unproven(snap, state)
+        if broke or unproven:
             # Its stream broke off before a poll saw it: not the end (playing it
             # again from the top would push 0). Load it again from where it got to.
-            stream_stopped(state, prefs, snap.get("time-pos"),
+            # (An end that proved nothing loads again too: if it stops at
+            # once again, the poll says the stream ends there.)
+            stream_stopped(state, prefs, snap.get("time-pos"), unproven=unproven,
                            stalled=bool(stall_seen(snap.get("user-data/legato"), state)))
             resume_last(prefs)
             return
@@ -2830,9 +2873,14 @@ def poll(autoplay=True, seeked=False):
     position = snap.get("time-pos")
     if isinstance(position, (int, float)):
         state["position"] = float(position)
-    if state.get("handledEnd") != episode.get("uuid") and stream_broke(snap, state):
-        # Not the end: the stream broke off. Say so; nothing is marked played.
-        return stream_stopped(state, prefs, position, stalled=bool(stall_seen(snap.get("user-data/legato"), state)))
+    if state.get("handledEnd") != episode.get("uuid"):
+        broke = stream_broke(snap, state)
+        unproven = not broke and end_unproven(snap, state)
+        if broke or unproven:
+            # Not the end: the stream broke off, or the end proves nothing.
+            # Say so; nothing is marked played.
+            return stream_stopped(state, prefs, position, unproven=unproven,
+                                  stalled=bool(stall_seen(snap.get("user-data/legato"), state)))
     if snap.get("eof-reached") is True and state.get("handledEnd") != episode.get("uuid"):
         outro = skip_last_of(snap.get("file-local-options/end"))
         if outro:
@@ -2855,12 +2903,14 @@ def poll(autoplay=True, seeked=False):
     if stall:
         # Stuck for a while (the link went quiet): an interruption, like a
         # pause. Nothing is pushed while it lasts (you may carry on with your
-        # phone meanwhile), and playing on after it asks Pocket Casts first.
+        # phone meanwhile), nor after it until Pocket Casts has been asked
+        # (`unconfirmed`: a pause meanwhile pushes nothing either).
         state["checkServer"] = True
+        state["unconfirmed"] = True
         if stall == "now":
             save_playback(state)
             return player_view(snap, state, prefs)
-        state["stallHandled"] = snap["user-data/legato"]["lastStall"]["ended"]
+        state["stallHandled"] = stalls_ended_by(snap.get("user-data/legato"))
     if snap.get("pause") is True:
         # Whoever paused it (this panel, a media key, playerctl), the next
         # resume asks Pocket Casts first.
@@ -2911,9 +2961,13 @@ def poll(autoplay=True, seeked=False):
             state["lastSyncAt"] = now
             state["lastSyncPos"] = float(position)
             episode["playedUpTo"] = int(position)
+            state.pop("pushFailures", None)
         except ApiError:
             state["lastSyncAt"] = now  # try again next interval, not every poll
+            state["pushFailures"] = int(state.get("pushFailures") or 0) + 1
     view = player_view(snap, state, prefs)
+    if state.get("pushFailures") == PUSH_FAILURES_SAID:
+        view["syncFailed"] = True  # said once per run of failures
     if state.pop("tellStart", None):
         view["startedFromTop"] = True
     save_playback(state)
@@ -2937,8 +2991,8 @@ def moved_since_push(state):
 def sync_now(player, state, force=False):
     """Push the current position right away, if this machine produced it.
 
-    `force`: it was just playing here, from where Pocket Casts confirmed (a
-    pause, or a seek while playing). Otherwise (stop, next, switching
+    `force`: it was just playing here (a pause, or a seek while playing),
+    pushed if that stretch was confirmed by Pocket Casts and recent. Otherwise (stop, next, switching
     episodes, a seek while paused) a playing episode is pushed unless its
     resume is still unconfirmed (Pocket Casts couldn't be asked), and a
     paused one only if it moved since its last push and that push was
@@ -2953,8 +3007,10 @@ def sync_now(player, state, force=False):
     state["position"] = float(position)
     if stall_seen(player.get("user-data/legato"), state):
         # Where a stalled stream got stuck isn't news: you may have carried
-        # on with your phone meanwhile. The next resume asks first.
+        # on with your phone meanwhile. Nothing is pushed until Pocket Casts
+        # has been asked.
         state["checkServer"] = True
+        state["unconfirmed"] = True
         save_playback(state)
         return
     if player.get("eof-reached") is True or state.get("unconfirmed") or below_start(state, position):
@@ -2963,15 +3019,20 @@ def sync_now(player, state, force=False):
         # where a host without ranges couldn't start (below_start).
         save_playback(state)
         return
-    if not force:
-        if player.get("pause") is not False:
-            recent = time.time() - float(state.get("lastSyncAt") or 0) < RECHECK_AFTER
-            if not (moved_since_push(state) and recent):
-                save_playback(state)
-                return
-        elif state.get("checkServer"):
-            save_playback(state)  # playing, but not yet checked
+    recent = time.time() - float(state.get("lastSyncAt") or 0) < RECHECK_AFTER
+    if not force and player.get("pause") is not False:
+        # Paused: only if it moved since its last push, and that was recent.
+        if not (moved_since_push(state) and recent):
+            save_playback(state)
             return
+    elif state.get("checkServer") or not recent:
+        # Playing, or just paused from playing (`force`): only a stretch that
+        # Pocket Casts confirmed and that has played here since. Not after a
+        # resume nobody checked (a media key: `checkServer`), nor after a gap
+        # (the machine slept unguarded, the shell was down): another device
+        # may have moved on, and the next resume asks first.
+        save_playback(state)
+        return
     try:
         push_position(episode, position)
         state["lastSyncAt"] = time.time()
@@ -3537,10 +3598,11 @@ def cmd_toggle(args):
                         count_listening(state, listen_snap(player), prefs)
                         player.set("pause", True)
                         state["listening"] = {}
-                        state["checkServer"] = True
                         # Pausing what was already paused sends nothing new;
                         # an unconfirmed resume sends nothing (sync_now).
                         sync_now(player, state, force=playing)
+                        state["checkServer"] = True  # the next resume asks first
+                        save_playback(state)
                     else:
                         resume_loaded(player, state, prefs)
         if idle and args.action != "pause":
@@ -3720,8 +3782,9 @@ def pause_for_sleep():
             return True
         try:
             state = load_playback()
-            state["checkServer"] = True
-            sync_now(player, state, force=True)  # nothing if unconfirmed or stalled (sync_now)
+            sync_now(player, state, force=True)  # nothing if unconfirmed, unchecked or stalled (sync_now)
+            state["checkServer"] = True  # the next resume asks first
+            save_playback(state)
         finally:
             lock.__exit__(None, None, None)
     return True

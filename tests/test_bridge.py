@@ -482,6 +482,23 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         s = self.state
         path = urllib.parse.urlsplit(self.path).path
+        if path.startswith("/hls/"):
+            # An HLS episode: a playlist and its segments; from `hlsCutAt` on,
+            # segments fail (the network went).
+            name = path.rsplit("/", 1)[1]
+            segment = re.match(r"seg(\d+)\.ts$", name)
+            if segment and int(segment.group(1)) >= s.get("hlsCutAt", 10 ** 6):
+                self.send_response(403)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            blob = s["hls"][name]
+            self.send_response(200)
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(len(blob)))
+            self.end_headers()
+            self.wfile.write(blob)
+            return
         if path.startswith("/audio/"):
             # Byte ranges, as real podcast hosts serve them, so mpv can start
             # a freshly loaded episode part way through.
@@ -707,6 +724,16 @@ def encode(args, suffix):
             return fh.read()
 
 
+def make_hls(seconds):
+    """An HLS episode of `seconds`: its playlist and 3-second segments."""
+    with tempfile.TemporaryDirectory() as folder:
+        subprocess.run(["/usr/bin/ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "sine=duration=%d" % seconds,
+                        "-c:a", "aac", "-b:a", "32k", "-f", "hls", "-hls_time", "3", "-hls_playlist_type", "vod",
+                        "-hls_segment_filename", os.path.join(folder, "seg%d.ts"), os.path.join(folder, "out.m3u8")],
+                       check=True)
+        return {name: open(os.path.join(folder, name), "rb").read() for name in os.listdir(folder)}
+
+
 def make_stitched_mp3(ad_seconds=10, ad_rate="192k", body_seconds=50, body_rate="32k"):
     """An MP3 as a dynamic-ad stitcher makes one: two parts at different
     bitrates and no VBR header, so mpv estimates the duration from the first
@@ -813,6 +840,21 @@ class PlayerTestCase(TempHome):
                     player.command("quit")
                 except bridge.ApiError:
                     pass
+        # A player the bridge's own code can't reach (a mutant, a crash) still
+        # ends with its test: found by this test's socket in its command line.
+        mine = ("--input-ipc-server=" + os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/nonexistent"),
+                                                     "omarchy-legato", "mpv.sock")).encode()
+        for pid in filter(str.isdigit, os.listdir("/proc")):
+            try:
+                with open("/proc/%s/cmdline" % pid, "rb") as fh:
+                    words = fh.read().split(b"\0")
+            except OSError:
+                continue
+            if mine in words:
+                try:
+                    os.kill(int(pid), signal.SIGKILL)
+                except OSError:
+                    pass
 
     def mpv_running(self):
         player = bridge.Mpv.connect()
@@ -826,6 +868,9 @@ class PlayerTestCase(TempHome):
 
     def writes(self, path):
         return [body for p, body in self.fake["log"] if p == path]
+
+    def pushes_of(self, uuid):
+        return [b for b in self.writes("/sync/update_episode") if b["uuid"] == uuid]
 
     def login(self):
         result = run_bridge("login", stdin=json.dumps({"email": "me@example.com", "password": PASSWORD}))
@@ -1336,6 +1381,55 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         """What mpv-mpris does for a media key or playerctl: straight to mpv."""
         with bridge.Mpv.connect() as player:
             player.set("pause", paused)
+
+    def test_a_media_key_resume_then_a_panel_pause_pushes_nothing_unchecked(self):
+        # Strict review 7: the pause forced its push, past the check.
+        self.play_then_pause()
+        self.other_device(EP_1, 25)
+        self.mpv_set_pause(False)
+        time.sleep(1)
+        run_bridge("pause")
+        self.assertEqual(self.fake["progress"][EP_1], 25)
+
+    def test_a_pause_after_a_gap_pushes_nothing(self):
+        # The machine slept without the guard, the phone listened on; you wake
+        # it and press Pause before any poll: that position is old news.
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.position() > 0.5)
+        self.age_last_push(200)
+        self.other_device(EP_1, 25)
+        run_bridge("pause")
+        self.assertEqual(self.fake["progress"][EP_1], 25)
+        run_bridge("seek", "5", "--relative", "--episode", EP_1)  # a skip meanwhile: nothing either
+        self.assertEqual(self.fake["progress"][EP_1], 25)
+
+    def test_an_unsent_position_within_the_hour_wins_over_a_behind_one(self):
+        # Its push failed and the phone has an older position: this machine
+        # played further, and Pocket Casts never heard; it carries on here.
+        self.other_device(EP_1, 20)
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.position() > 26)
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        run_bridge("pause")
+        self.fake["fail"] = {}
+        self.other_device(EP_1, 12)  # an older place, well behind the last push
+        self.assertGreater(run_bridge("resume")["data"]["position"], 25)
+
+    def test_an_unsent_position_from_long_ago_loses_to_pocket_casts(self):
+        # Strict review 7: a local position Pocket Casts never got is kept
+        # over a behind one only within the hour; later, the phone's wins.
+        self.other_device(EP_1, 20)
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.position() > 22)
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        run_bridge("pause")  # its push fails: ~22 s unsent
+        self.fake["fail"] = {}
+        self.other_device(EP_1, 10)  # the phone went back, much later
+        self.age_last_push(bridge.UNSENT_BREAK_KEPT + 60)
+        self.assertLess(run_bridge("resume")["data"]["position"], 12)
 
     def test_a_media_key_resume_then_stop_pushes_nothing_unchecked(self):
         # Strict review 5: playing again by a media key (not yet checked with
@@ -1986,8 +2080,13 @@ class BrokenStream(PlayerTestCase):
         for episode in self.fake["episodes"].values():
             episode["duration"] = self.AUDIO_SECONDS
 
-    def break_stream_and_wait(self):
-        self.fake["cut"] = {EP_1: len(self.audio) // 5}  # about 6 s of 30
+    def break_stream_and_wait(self, at=0.2):
+        # A break at a fifth (about 6 s of 30) is also "far short of the
+        # listed length" (end_unproven); tests of the break evidence itself
+        # break past half, at double speed.
+        if at > 0.5:
+            bridge.save_prefs({"volume": 0, "speed": 2.0})
+        self.fake["cut"] = {EP_1: int(len(self.audio) * at)}
         self.login()
         self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
         return self.wait_for(lambda: (lambda v: v if v.get("streamBroke") or v.get("ended")
@@ -2039,7 +2138,7 @@ class BrokenStream(PlayerTestCase):
         # failing: mpv's reconnect gets an error page, whose length FFmpeg
         # takes for the file's size. Not the end.
         self.fake["cutReply"] = code
-        view = self.break_stream_and_wait()
+        view = self.break_stream_and_wait(at=0.6)
         self.assertTrue(view.get("streamBroke"), view)
         self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
         self.assertEqual(self.fake["upnext"][0], EP_1)
@@ -2049,6 +2148,70 @@ class BrokenStream(PlayerTestCase):
 
     def test_a_break_answered_by_a_403_page_is_not_the_end(self):
         self.error_page_break(403)
+
+    def test_an_hls_episode_whose_segments_stop_is_not_finished(self):
+        # Strict review 7: a playlist of segments has no one stream to
+        # measure; its playlist's exact durations judge it.
+        self.fake["hls"] = make_hls(30)
+        self.fake["hlsCutAt"] = 6  # about 18 s of 30 arrive: past half, so the length rule alone decides
+        bridge.save_prefs({"volume": 0, "speed": 2.0})
+        self.fake["episodes"][EP_1]["url"] = self.base + "/hls/%s/out.m3u8" % EP_1
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        view = self.settled(EP_1, timeout=60)
+        self.assertTrue(view.get("streamBroke"), view)
+        self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+
+    def test_an_hls_episode_still_ends_properly(self):
+        self.fake["hls"] = make_hls(30)
+        self.fake["episodes"][EP_1]["url"] = self.base + "/hls/%s/out.m3u8" % EP_1
+        self.fake["progress"][EP_1] = 26
+        self.fake["status"][EP_1] = bridge.STATUS_IN_PROGRESS
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.settled(EP_1, timeout=60)
+        self.assertEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+
+    def test_an_end_reached_at_once_proves_nothing(self):
+        # Strict review 7: Pocket Casts' position is past the end of this
+        # machine's copy (ad-stitched copies differ per request): it ends the
+        # moment it loads. Not marked played; it says the stream ends there.
+        self.fake["episodes"][EP_1]["duration"] = 40
+        self.fake["progress"][EP_1] = 35
+        self.fake["status"][EP_1] = bridge.STATUS_IN_PROGRESS
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        view = self.settled(EP_1)
+        self.assertTrue(view.get("nothingMore"), view)
+        self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+        self.assertEqual(self.fake["upnext"][0], EP_1)
+
+    def test_an_end_far_short_of_the_listed_length_proves_nothing(self):
+        # A placeholder clip from an expired feed: 30 s where Pocket Casts
+        # lists ten minutes. Not played, and nothing autoplays through it.
+        self.fake["episodes"][EP_1]["duration"] = 600
+        bridge.save_prefs({"volume": 0, "speed": 3.0})
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        view = self.settled(EP_1)
+        self.assertTrue(view.get("nothingMore"), view)
+        self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+
+    def test_failing_pushes_are_said_once(self):
+        # Strict review 7: Pocket Casts down mid-episode: the polls answered
+        # "ok" and nothing was ever shown.
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: run_bridge("player")["data"]["position"] > 1)
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        said = []
+        for _ in range(4):
+            state = bridge.load_playback()
+            state["lastSyncAt"] = time.time() - 31
+            bridge.save_playback(state)
+            said.append(bool(run_bridge("player")["data"].get("syncFailed")))
+        self.assertEqual(said, [False, True, False, False])
+        self.fake["fail"] = {}
 
     def test_a_break_near_the_end_is_still_a_break(self):
         # Within the last tenth, where the episode's length alone would say
@@ -2110,9 +2273,6 @@ class BrokenStream(PlayerTestCase):
         self.assertGreater(self.fake["progress"][EP_1], 30)
         self.assertGreater(min(b["position"] for b in self.pushes_of(EP_1)), 24)
 
-    def pushes_of(self, uuid):
-        return [b for b in self.writes("/sync/update_episode") if b["uuid"] == uuid]
-
     def test_a_skip_outro_show_with_a_misread_mp3_plays_on(self):
         # Strict review 4 (and 1.0.2): the outro is counted back from mpv's
         # duration, misread at 18 s of 60: a 20 s outro ended it at once and
@@ -2139,7 +2299,8 @@ class BrokenStream(PlayerTestCase):
     def test_play_pressed_before_a_poll_saw_the_break_carries_on_too(self):
         # Play arrives while mpv sits at the break and no poll has run: it
         # must not be taken for an end and replayed from the top.
-        self.fake["cut"] = {EP_1: len(self.audio) // 5}
+        self.fake["cut"] = {EP_1: int(len(self.audio) * 0.6)}  # past half: the break evidence alone decides
+        bridge.save_prefs({"volume": 0, "speed": 2.0})
         self.login()
         self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
         with bridge.Mpv.connect() as player:
@@ -2523,7 +2684,11 @@ class BrokenStream(PlayerTestCase):
         self.assertTrue(bridge.stream_broke(snap(**cut, **{"stream-pos": 40_000_000}), {}))
         self.assertTrue(bridge.stream_broke(snap(**cut, **{"stream-end": 70, "stream-pos": 39_990_000}), state(size=100_000_000)))
         self.assertTrue(bridge.stream_broke(snap(**cut, **{"stream-end": 100_000_000, "time-pos": 23.0, "duration": 18.4}), {}))
-        self.assertTrue(bridge.stream_broke(snap(**cut, **{"time-pos": 3599.0}), {}))  # at "the end" by every number
+        self.assertTrue(bridge.stream_broke(snap(**cut, **{"time-pos": 3599.0, "stream-end": 100_000_000,
+                                                           "stream-pos": 40_000_000}), {}))  # at "the end" by its duration
+        # With no size from the host a reconnect proves nothing (some log one
+        # at a real end): the length rule decides.
+        self.assertFalse(bridge.stream_broke(snap(**cut, **{"time-pos": 3599.0}), {}))
         #    ...unless mpv read on past it (a reconnect that worked), to a real end:
         self.assertFalse(bridge.stream_broke(snap(**cut, **{"stream-end": 100_000_000, "stream-pos": 99_999_000}), {}))
         # 2. No such line and the host gave a size: the end, whatever mpv's
@@ -2601,7 +2766,8 @@ class BrokenStream(PlayerTestCase):
             local since = d.stallSince
             observed["paused-for-cache"]("paused-for-cache", false)
             d = props["user-data/legato"]
-            io.write(tostring(d.stallSince), " ", tostring(d.lastStall.since == since and d.lastStall.ended >= since), ";")
+            local last = d.stalls[#d.stalls]
+            io.write(tostring(d.stallSince), " ", tostring(last.since == since and last.ended >= since), ";")
             handlers["start-file"]({})
             show()
             io.write(props.level)
@@ -3362,14 +3528,16 @@ class HttpsStreams(PlayerTestCase):
         self.assertEqual(self.fake["upnext"][0], EP_1)
 
     def test_an_https_stream_that_drops_part_way_is_not_finished(self):
-        self.fake["cut"] = {EP_1: len(self.audio) // 5}  # closed without close_notify
+        self.fake["cut"] = {EP_1: int(len(self.audio) * 0.6)}  # past half  # closed without close_notify
+        bridge.save_prefs({"volume": 0, "speed": 2.0})
         self.login()
         self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
         self.assert_broke(self.settled())
 
     def test_an_https_stream_whose_reconnect_gets_a_503_is_not_finished(self):
-        self.fake["cut"] = {EP_1: len(self.audio) // 5}
+        self.fake["cut"] = {EP_1: int(len(self.audio) * 0.6)}  # past half
         self.fake["cutReply"] = 503
+        bridge.save_prefs({"volume": 0, "speed": 2.0})
         self.login()
         self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
         self.assert_broke(self.settled())
@@ -3416,15 +3584,17 @@ class HttpsStreams(PlayerTestCase):
         # Strict review 6: FFmpeg can't reconnect such a stream, and an https
         # drop logs no short-end line: judged by how far mpv read.
         self.fake["noranges"] = {EP_1}
-        self.fake["cut"] = {EP_1: len(self.audio) // 5}
+        self.fake["cut"] = {EP_1: int(len(self.audio) * 0.6)}  # past half
+        bridge.save_prefs({"volume": 0, "speed": 2.0})
         self.login()
         self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
         self.assert_broke(self.settled())
 
     def test_an_https_stream_from_a_host_without_ranges_that_stalls_is_not_finished(self):
-        self.fake["hang"] = {EP_1: len(self.audio) // 5}
+        self.fake["hang"] = {EP_1: int(len(self.audio) * 0.6)}  # past half
         self.fake["hangNoRanges"] = True
         self.fake["hangFor"] = 8
+        bridge.save_prefs({"volume": 0, "speed": 2.0})
         self.login()
         self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
         self.assert_broke(self.settled())
@@ -3480,12 +3650,25 @@ class HttpsStreams(PlayerTestCase):
 
     def test_pausing_a_stalled_stream_never_rewinds_the_phone(self):
         # Strict review 6: the pause (and Stop, Next, a switch, the sleep
-        # guard) pushed where the stalled stream got stuck.
+        # guard) pushed where the stalled stream got stuck. Review 7: and the
+        # poll the pause sets off.
         with mock.patch.object(bridge, "STALL_AFTER", 2):
             self.stall_then_phone(hangFor=60)
             run_bridge("pause")
+            run_bridge("player")  # the poll mpv's pause event brings
             self.assertEqual(self.fake["progress"][EP_1], 25)
             run_bridge("stop")
+            self.assertEqual(self.fake["progress"][EP_1], 25)
+
+    def test_a_pause_after_a_stall_heals_pushes_nothing_unasked(self):
+        # Strict review 7: the stall ends, you pause before any poll asked:
+        # the poll the pause brings pushed the stale place.
+        with mock.patch.object(bridge, "STALL_AFTER", 2):
+            self.stall_then_phone(hangFor=12, hangResume=True)
+            with bridge.Mpv.connect() as player:
+                self.wait_for(lambda: player.get("paused-for-cache") is False, timeout=30)
+            run_bridge("pause")
+            run_bridge("player")
             self.assertEqual(self.fake["progress"][EP_1], 25)
 
     def test_after_a_stall_heals_pocket_casts_is_asked_first(self):
@@ -3495,8 +3678,30 @@ class HttpsStreams(PlayerTestCase):
                                  timeout=30)
             run_bridge("player")
             self.assertGreater(run_bridge("player")["data"]["position"], 24)  # it followed the phone
+            # Asked once: from then on it syncs as usual.
+            self.wait_for(lambda: (lambda v: v if v["playing"] and v["position"] > 26.5 else None)(run_bridge("player")["data"]))
+            state = bridge.load_playback()
+            state["lastSyncAt"] = time.time() - 31
+            bridge.save_playback(state)
+            before = len(self.pushes_of(EP_1))
+            run_bridge("player")
+            state = bridge.load_playback()
+            self.assertEqual(len(self.pushes_of(EP_1)), before + 1,
+                             {k: state.get(k) for k in ("checkServer", "unconfirmed", "stallHandled", "position", "lastSyncPos")})
             run_bridge("pause")
             self.assertGreaterEqual(self.fake["progress"][EP_1], 25)
+
+    def test_a_media_key_pause_after_a_stall_heals_pushes_nothing_unasked(self):
+        # The pause comes straight to mpv (no sync_now): only the poll knows
+        # the place is unconfirmed after the stall.
+        with mock.patch.object(bridge, "STALL_AFTER", 2):
+            self.stall_then_phone(hangFor=12, hangResume=True)
+            with bridge.Mpv.connect() as player:
+                self.wait_for(lambda: player.get("paused-for-cache") is False, timeout=30)
+                player.set("pause", True)
+            run_bridge("player")
+            run_bridge("player")
+            self.assertEqual(self.fake["progress"][EP_1], 25)
 
     def test_a_break_after_a_long_stall_pushes_nothing(self):
         # No poll sees the stall (it falls between two): the break's own push
@@ -3550,8 +3755,9 @@ class StalledStream(PlayerTestCase):
 
     def test_a_host_without_ranges_that_goes_silent_is_not_finished(self):
         # Strict review 6: no reconnect, and a timeout logs no short-end line.
-        self.fake["hang"] = {EP_1: len(self.audio) // 5}
+        self.fake["hang"] = {EP_1: int(len(self.audio) * 0.6)}  # past half
         self.fake["hangNoRanges"] = True
+        bridge.save_prefs({"volume": 0, "speed": 2.0})
         self.login()
         self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
         view = self.wait_for(lambda: (lambda v: v if v.get("streamBroke") or v.get("ended")
@@ -3679,6 +3885,18 @@ class Round5Units(TempHome):
     def test_the_limits_that_matter(self):
         self.assertLess(bridge.SLEEP_GUARD_DEADLINE, 15)  # logind waits 15 s at most here
         self.assertLessEqual(bridge.READ_TO_END, 8192)    # a break that close to the end would count as it
+
+    def test_a_long_stall_isnt_hidden_by_a_short_one(self):
+        # Strict review 7: the watcher kept only the latest stall, so a short
+        # hiccup after a long stall (before any poll) hid it.
+        now = time.time()
+        long_then_short = {"stalls": [{"since": now - 40, "ended": now - 20}, {"since": now - 5, "ended": now - 4}]}
+        self.assertEqual(bridge.stall_seen(long_then_short, {}), "ended")
+        self.assertEqual(bridge.stalls_ended_by(long_then_short), now - 4)
+        self.assertIsNone(bridge.stall_seen(long_then_short, {"stallHandled": now - 4}))  # handled
+        self.assertEqual(bridge.stall_seen({"stallSince": now - 20}, {}), "now")
+        self.assertIsNone(bridge.stall_seen({"stallSince": now - 3}, {}))  # a hiccup
+        self.assertIsNone(bridge.stall_seen({"stalls": [{"since": now - 6, "ended": now - 4}]}, {}))
 
     def test_no_outro_without_a_listed_length(self):
         # Pocket Casts lists no duration: mpv's can't be checked, so the

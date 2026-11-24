@@ -14,8 +14,8 @@ video window.
 
 Pause an episode here, carry on listening on your phone, come back: before
 Legato plays again it asks Pocket Casts where you got to, and picks up from
-there. It never sends an old position over a newer one, so your phone is
-never rewound. Audio plays through `mpv` in the background, with no browser
+there. It doesn't send an old position over a newer one, so your phone
+isn't rewound. Audio plays through `mpv` in the background, with no browser
 and no app window. *Legato* is the musical instruction to play notes
 smoothly, with no break between them.
 
@@ -91,9 +91,10 @@ by Nine Point Labs (MIT). What's new compared to the original:
 
   <img src="media/stats.png" width="470" alt="The Listening stats page: 1 d 14 h listened on this computer, 1 d 3 h saved, split into playback speed, Trim Silence, skipping forward and skipped intros and outros, and 63 episodes finished">
 
-- **Keyboard-friendly,** in the panel and in the video window (see
-  [Keys](#keys)), and scriptable through `omarchy-shell` for your own
-  keybindings.
+- **Keyboard-friendly,** in the panel's lists and player and in the video
+  window (see [Keys](#keys)), and scriptable through `omarchy-shell` for
+  your own keybindings. (The Settings and Stats pages' buttons take the
+  mouse.)
 - **Follows your Omarchy theme,** light or dark.
 
 ![The panel's In Progress, New releases and Podcasts tabs, and its Settings page](media/pages.png)
@@ -151,7 +152,9 @@ Hyprland stay until it reloads its config: `hyprctl reload`, or log out.
   open, one more after each, to keep its numbers current.
 - **While an episode is loaded,** two small helpers wait with no timer: the
   sleep guard (for the pause before sleep) and the feed proxy mpv fetches
-  through. They end with the player.
+  through. They end with the player. The proxy's connection to the show's
+  server is checked by the kernel every 20 seconds while idle (TCP
+  keepalive), so a dead link is noticed.
 - **mpv** uses about 90 MB with an episode loaded and no CPU while paused,
   plus about 100 MB once its video window has been shown, until the player
   closes. After 15 minutes paused (`unloadAfterMinutes`), the player closes
@@ -195,9 +198,14 @@ devices.
   the file straight through, to its size). Without a size from the host
   (rare: podcast hosts send it), a cut and the end look the same, so it
   goes by the episode's length, so a stop in the last tenth counts as the end and
-  marks the episode played. With no length either, every stop counts as
-  the end, as before 1.1. The other way round, such a file much shorter
-  than Pocket Casts lists never seems to end: Legato says "Stream ends
+  marks the episode played; a host that reconnects without one can also
+  take a real end for a break. With no length either, every stop counts as
+  the end, as before 1.1. An HLS episode (a playlist of segments) is
+  judged by its exact length the same way.
+- **An end that proves nothing isn't marked played:** an episode that ends
+  the moment it loads (Pocket Casts has you past the end of this copy of
+  the file: ad-stitched copies differ), or far short of the length Pocket
+  Casts lists (an expired feed's placeholder clip). Legato says "Stream ends
   here: mark it played." (right-click it in Up Next to do that).
 - **A show's skip-outro needs mpv to measure the file right:** it's
   counted back from mpv's length for the file, so Legato leaves it off when
@@ -205,14 +213,21 @@ devices.
   or Pocket Casts lists no length, and the episode plays to its end.
 - **A stream that stalls** (the link goes quiet; the panel shows it
   buffering): after 15 seconds it counts as an interruption, like a pause.
-  Legato sends no position while it lasts or when you pause or stop it, so
-  your phone keeps its place if you carry on there, and once it plays again
-  Pocket Casts is asked first. A link that dies outright is noticed within
+  Legato sends no position while it lasts, nor after it until Pocket Casts
+  has been asked (if you pause or stop it meanwhile, nothing), so your phone
+  keeps its place if you carry on there. A link that dies outright is noticed within
   about a minute and handled as a dropped stream; a server that keeps the
   connection open but sends nothing leaves it buffering until you stop it.
 - **Messages while the panel is closed** (a dropped stream, a load that
-  failed) come as desktop notifications: Omarchy's on-screen display takes
-  none from a plugin like Legato.
+  failed, Pocket Casts not answering for a minute or more of pushes) come
+  as desktop notifications: Omarchy's on-screen display takes none from a
+  plugin like Legato.
+- **On a bar that replaces Omarchy's,** the panel can't reach the shell's
+  copy of Legato's service, so it makes its own and two run (each poll
+  twice, errors notified twice). Omarchy's own bar, which hands it over,
+  is fine.
+- **On a screen under 760 pixels tall,** the Settings page and About with
+  its license open are taller than the panel can be.
 
 ## Built on
 
@@ -357,9 +372,12 @@ it. The player's own choices, your sign-in and your listening stats stay.
   and polls only while playing, once every 30 seconds, to send your
   position.
 - **Every resume asks Pocket Casts first** where you are, and its answer
-  wins. A paused position is sent only if it moved since the last send and
-  that send was under 90 seconds ago; anything older waits for the next
-  resume to ask. So a pause, stop or skip here never rewinds your phone.
+  wins. A position is sent only if it played here since Pocket Casts last
+  confirmed it, and recently: not after a resume nobody checked (a media
+  key), a sleep Legato missed, or a long stall, and a paused one only if it
+  moved since the last send under 90 seconds ago. Anything older waits for
+  the next resume to ask, so a pause, stop or skip here doesn't rewind your
+  phone.
 - **Before sleep,** a small guard holds a logind sleep delay while an
   episode is loaded. When the computer is about to sleep it pauses the
   episode, sends your position (within 4 seconds) and lets go.

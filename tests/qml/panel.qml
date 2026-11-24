@@ -295,6 +295,9 @@ Item {
     said.push(service.actionError)
     service.applyPlayer({ active: false, playing: false, playerHung: true, item: null })
     said.push(service.actionError)
+    service.applyPlayer({ active: true, playing: true, position: 2, duration: 100, syncFailed: true, item: null })
+    check("pushes failing are said", service.actionError.indexOf("not synced") >= 0, service.actionError)
+    said.push(service.actionError)
     // Omarchy's OSD shows one line of about 38 characters (325 px at its
     // title size); longer is cut off, advice and all.
     check("every playback message fits one line", said.every(function(m) { return m.length > 0 && m.length <= 38 }),
@@ -351,6 +354,30 @@ Item {
     service.refreshPlayer()
     check("after a good poll, the next says no seek", calls("player").length === 1 && calls("player --seeked").length === 0,
           calls("player").map(function(p) { return p.command.join(" ") }))
+    settle()
+
+    // Rule 4, run: the only repeating timers. Playing: the poll, and the
+    // slider's tick only with a panel open. Paused or idle: neither.
+    var timers = {}
+    for (var ti = 0; ti < service.data.length; ti++) {
+      var o = service.data[ti]
+      if (o && (o.objectName === "pollTimer" || o.objectName === "tickTimer")) timers[o.objectName] = o
+    }
+    service.applyPlayer({ active: true, playing: true, position: 30, duration: 100, item: null })
+    check("playing, panel closed: the poll runs, the tick doesn't",
+          timers.pollTimer && timers.pollTimer.running && !timers.tickTimer.running,
+          [timers.pollTimer && timers.pollTimer.running, timers.tickTimer && timers.tickTimer.running])
+    service.applyPlayer({ active: true, playing: false, position: 30, duration: 100, item: null })
+    check("paused: nothing on a timer", !timers.pollTimer.running && !timers.tickTimer.running,
+          [timers.pollTimer.running, timers.tickTimer.running])
+    service.applyPlayer({ active: false, playing: false, item: null })
+    check("idle: nothing on a timer", !timers.pollTimer.running && !timers.tickTimer.running,
+          [timers.pollTimer.running, timers.tickTimer.running])
+    settle()
+    // Rule 8: with the panel closed, an error goes out as a notification.
+    service.reportError("z")
+    check("with the panel closed, an error is sent as a notification", JSON.stringify(notices()) === "[\"z\"]",
+          JSON.stringify(notices()))
     settle()
 
     // A second panel on the same service (another screen) counts its page,

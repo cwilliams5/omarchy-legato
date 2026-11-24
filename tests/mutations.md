@@ -8,15 +8,15 @@ and runs the tests meant to catch each. A mutation that passes them is a
 
 ```bash
 tests/run                          # first: a green baseline (a red one "kills" everything)
-python3 -B tests/mutate.py .       # all of them, about 90 minutes
+python3 -B tests/mutate.py .       # all of them, about 100 minutes
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (163 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (179 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
 it.
 
-## The set (163; strict review rounds 1 to 6, 2026-11-25)
+## The set (179; strict review rounds 1 to 7, 2026-11-24)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
@@ -111,6 +111,14 @@ caught each mutant. By area:
   stall (now it doesn't). Final: 162 of 162 killed (218 Python tests, 36
   node); then one more for the fallback service made before the bar's
   handover (found live after the commit): 163 of 163.
+- Round 7 (the reviewers' own): 12 of 29 (fit), 6 of 8 (safety); their
+  gaps are tests now. This set after round 7's fixes, first run: 158 of
+  179 on a suite red in two tests (an old assertion; a skip-outro end the
+  new "far short" rule caught until it counted the outro), so 13 skipped;
+  of 8 survivors, 6 were masked by that rule (test breaks at a fifth of
+  the file are also "far short": the evidence tests now break past half),
+  one needed numbers outside the drift slack, one a media-key pause after
+  a healed stall. Final: 179 of 179 killed (230 Python tests, 36 node).
 - Equivalent and left out: dropping `after > before` from the skip count
   (`add_stats` ignores values that aren't positive).
 

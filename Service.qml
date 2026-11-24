@@ -13,8 +13,9 @@ Item {
 
   property var shell: null
   property var settings: ({})
-  // A widget-local instance, built only under a shell without service
-  // support, stays inert once a shared one exists.
+  // Whether this instance does anything (bridge calls, timers, the sleep
+  // guard). Every instance is the one in use: the shell's own, or a panel's
+  // fallback made only when the shell shares none (Panel.qml localService).
   property bool active: true
 
   readonly property string pluginDir: decodeURIComponent(Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "")).replace(/\/$/, "")
@@ -524,6 +525,9 @@ Item {
     if (!view) return
     if (view.loadFailed === true) loadFailed("")
     if (view.playerHung === true) reportError("Player stopped responding. Press play.")
+    // Its position pushes keep failing (Pocket Casts down, the session
+    // expired): said once per run of failures, or nobody would know.
+    if (view.syncFailed === true) reportError("Pocket Casts not reached: not synced")
     // Every message here fits the panel's status line (and a notification's
     // single line; about 38 characters); the README has the detail. The stream broke off part way (the network or the episode's
     // server went): not finished, the player is closed, play loads it again.
@@ -548,6 +552,8 @@ Item {
   // Move the panel's slider every second; with no panel open nothing shows
   // the position, so nothing ticks.
   Timer {
+    id: tickTimer
+    objectName: "tickTimer"
     interval: 1000
     repeat: true
     running: root.isPlaying && !root.buffering && root.panelOpen
@@ -563,6 +569,7 @@ Item {
   //      poll. Paused or idle, no process is started at all.
   Timer {
     id: pollTimer
+    objectName: "pollTimer"
     interval: 32000
     repeat: true
     running: root.active && root.isPlaying
@@ -1123,7 +1130,7 @@ Item {
   // ----------------------------------------------------------------- IPC --
 
   IpcHandler {
-    // Only the shared instance answers IPC; the per-panel fallback stays quiet.
+    // One per shell: the panel's fallback exists only without a shared one.
     enabled: root.active
     target: "legato"
 

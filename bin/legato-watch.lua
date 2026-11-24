@@ -23,8 +23,9 @@
 -- `user-data/legato` holds, for the current file: `watching` (this script
 -- runs; a player started by an older Legato has nothing), `cut` (the byte
 -- offset N of the latest such line), `stallSince` (when the stall now under
--- way began, os.time()) and `lastStall` ({since, ended} of the last one). It
--- is reset at the start of each file. Nothing else is read or changed.
+-- way began, os.time()) and `stalls` ({since, ended} of the last few, newest
+-- last: a long one is still there after a short one follows). It is reset
+-- at the start of each file. Nothing else is read or changed.
 
 local UNKNOWN = "18446744073709551615"
 local state = { watching = true }
@@ -55,7 +56,12 @@ mp.observe_property("paused-for-cache", "bool", function(_, waiting)
     state.stallSince = os.time()
     publish()
   elseif not waiting and state.stallSince then
-    state.lastStall = { since = state.stallSince, ended = os.time() }
+    local stalls = state.stalls or {}
+    table.insert(stalls, { since = state.stallSince, ended = os.time() })
+    if #stalls > 8 then
+      table.remove(stalls, 1)
+    end
+    state.stalls = stalls
     state.stallSince = nil
     publish()
   end
