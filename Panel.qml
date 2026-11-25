@@ -479,8 +479,10 @@ Panel {
       asynchronous: true
       smooth: true
       mipmap: true
-      sourceSize.width: 320
-      sourceSize.height: 320
+      // Decoded at twice the size shown (a 36 px row's cover, not 320 px of
+      // it for every row of every list).
+      sourceSize.width: Math.max(32, Math.ceil(art.width * 2))
+      sourceSize.height: Math.max(32, Math.ceil(art.height * 2))
       visible: false
       layer.enabled: true
     }
@@ -1292,7 +1294,10 @@ Panel {
 
             Repeater {
               id: rowsRepeater
-              model: root.rows
+              objectName: "rowsRepeater"
+              // Built while the panel is open: a closed panel (one per
+              // screen) holds no rows and no covers.
+              model: root.opened ? root.rows : []
 
               Item {
                 id: rowItem

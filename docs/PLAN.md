@@ -1136,6 +1136,77 @@ Fit (nothing critical or high):
   now equivalent (the poll's paused push needs no "ask first" after a
   pause, round 11) and dropped from the set.
 
+### SR, round 12 (2026-11-24)
+
+reports kept outside the repo.
+
+Safety: one high and four mediums, each a second door into a failure an
+earlier round closed at its first.
+
+- [x] SR129 (high) The resume check's seek past the end of this machine's
+  copy (ad-stitched copies differ) marked the episode played everywhere:
+  the seek never set `begun`, so `end_unproven` didn't apply. Fixed: the
+  check's seek is a new start. Test.
+- [x] SR130 (medium) A real end cut off mid-finish (the deadline, a reload)
+  was handled but never told nor retried: the pending entry is saved with
+  `handledEnd` now. Test (the deadline inside the push).
+- [x] SR131 (medium) Play with nothing loaded, after an end whose removal
+  failed, played the finished episode again from Up Next and pushed it in
+  progress: Play retries what's pending first and never picks an episode
+  that ended here. Test.
+- [x] SR132 (medium) A media-key stretch nobody asked about (Legato off),
+  paused again, was kept over a phone that went back, then pushed: the
+  first poll marks it `unconfirmed`. Test.
+- [x] SR133 (medium, reading) A push or check a poll had in flight when the
+  sleep guard released the suspend could complete after the wake: every
+  connection checks the boot clock against the monotonic one once
+  connected (`SleepAwareHTTP(S)Connection`), and the resume check drops an
+  answer read across a suspend. Tests (a whole call across a sleep, a
+  sleep during the connection itself, an answer read after one).
+- [x] SR134 (lows) Another episode's record is no answer (`user_episode`);
+  an empty show list isn't cached; the bridge refuses to mark or move the
+  loaded episode (only the panel did); a snapshot reads the position
+  before the path. Left as designed: Play at an end plays it again from
+  the top without asking (L3). The sleep guard's own "ask first" (a second
+  guard behind the poll's) now has a test of its own. Tests.
+
+Fit (nothing critical or high):
+
+- [x] SR122 (medium, cost; measured by the reviewer) A panel never opened
+  held its rows and covers on every screen (+21 to +79 MB), covers decoded
+  at 320 px for 36 px rows. Fixed: rows exist only while the panel is open
+  (and are let go when it closes); covers decode at twice the size shown.
+  Test. Left: the panel's fixed parts are still built at load (Omarchy's
+  own panels use KeyboardPanel's lazy `content:`; moving there means
+  reaching the page and list items through the loaded content: later).
+- [x] SR123 (medium, tests) 14 of the reviewer's 25 QML mutants survived:
+  a dormant spell longer than the settle, the dormancy delay's default, a
+  guard that gave up coming back for the next episode, WAYLAND_DISPLAY in
+  the bridge's environment, the marquee while paused, the list cache, the
+  slider's tick, the IPC status's live position, a signed-out refresh
+  with mpv running, two panels' and Stats pages' counts, a service swapped
+  under a panel. Tests for each.
+- [x] SR124 (low-medium) A touchpad scroll on the chip moved the volume per
+  event (one swipe: 50 to 90): deltas add up to notches now
+  (`Model.wheelSteps`, as Omarchy's Util.wheelSteps). Test.
+- [x] SR125 (low) A dormant copy dropped its callers' callbacks, so a late
+  list load across a bar swap left "Loading…" for good: a dormant call
+  answers "dormant" (and a dormant copy notifies nothing). Test.
+- [x] SR126 (low; L4, a round 11 regression) After an update from 1.0, the
+  kept 1.0 service never imports, and "safe until imported" kept autoplay
+  off and the player never unloading until a restart: before the import
+  the bridge leaves the choice to the caller (`setting_now` None). Test.
+- [x] SR127 (low; L5) "A disabled IpcHandler still registers its target":
+  false (checked with a throwaway instance); CLAUDE.md corrected (the
+  Loader makes it moot either way).
+- [x] SR128 (low) README: "take effect at once" narrowed to what does;
+  the keybind example's SUPER+ALT+L is Omarchy's (now SUPER+ALT+O);
+  uninstall stops mpv through the bridge (the keybind target needs the
+  chip); About's privacy text says when the position is sent. Two stale
+  Service comments. The resume check's path tests after the stray check
+  were redundant: removed, with their mutants; "an idle copy of the
+  service" is equivalent since round 11's latch.
+
 - [ ] SR46 (see round 5) Re-shoot media/stats.png with representative
   numbers, on an empty workspace, after the code is final.
 - [ ] H6 Ship 1.1.0 (a minor version: the stats are a feature) with the
@@ -1236,6 +1307,13 @@ Fit (nothing critical or high):
   of round 10's set: 293 of 294 (a redundant flag, removed). 296 Python +
   41 node tests; 322 mutations, the 39 new or changed all killed (the full
   run with round 12). Round 12 next.
+- 2026-11-24 (late night): round 12 (SR122-SR134): the resume check's seek
+  counts as a new start (a high); pending finishes saved with the end and
+  retried by Play; an unchecked media-key stretch never kept; nothing sent
+  across a suspend; panels hold no rows while closed; touchpad scrolls;
+  1.0's kept service no longer forces autoplay off. 309 Python + 43 node
+  tests; 352 mutations, the new and changed all killed (the full run with
+  round 13). Round 13 next.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

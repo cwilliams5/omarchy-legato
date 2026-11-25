@@ -1113,6 +1113,17 @@ class EndToEnd(PlayerTestCase):
         self.assertEqual((view["item"] or {}).get("uuid"), EP_1)
         self.assertNotIn(EP_2, [b["episode"]["uuid"] for b in self.writes("/up_next/play_now")])
 
+    def test_before_the_import_the_callers_choice_decides_autoplay(self):
+        # Strict review 12 (fit L4): after an update from 1.0, Omarchy keeps
+        # 1.0's service, which never imports the bar entry; the bridge kept
+        # autoplay off (and the player never unloading) until a restart.
+        # Before the import it follows the caller: 1.0's passes its entry's
+        # choice, 1.1's the safe one.
+        os.remove(os.path.join(self.home, ".local/state/omarchy-legato/settings.json"))
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.wait_for(lambda: (lambda v: v if v["item"] and v["item"]["uuid"] == EP_2 else None)(run_bridge("player")["data"]))
+
     def test_settings_json_decides_the_idle_unload_and_pause_before_sleep(self):
         run_bridge("settings", "set", "--", "unloadAfterMinutes", "0")
         self.login()
@@ -1342,6 +1353,125 @@ class EndToEnd(PlayerTestCase):
             player.set("pause", True)
         run_bridge("player")
         self.assertEqual(len(self.pushes_of(EP_1)), before)
+
+    def test_a_finish_cut_off_by_the_deadline_is_retried(self):
+        # Strict review 12 (M1): handledEnd was saved before the pending
+        # entry; a call cut off between (the deadline, a plugin reload)
+        # left the end handled and never told.
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        real = bridge.push_position
+        cut = []
+        def push(item, position, status=bridge.STATUS_IN_PROGRESS):
+            if status == bridge.STATUS_PLAYED and not cut:
+                cut.append(1)
+                raise bridge.DeadlinePassed()
+            return real(item, position, status)
+        with mock.patch.object(bridge, "push_position", push):
+            self.wait_for(lambda: bridge.load_playback().get("handledEnd") == EP_1
+                          or run_bridge("player", "--no-autoplay") and False)
+        state = bridge.load_playback()
+        self.assertEqual([p["uuid"] for p in state["pendingFinish"]], [EP_1])
+        state["pendingFinish"][0]["tried"] -= 60
+        bridge.save_playback(state)
+        run_bridge("player", "--no-autoplay")
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
+
+    def test_play_after_a_half_told_end_starts_the_next_episode(self):
+        # Strict review 12 (M2): the removal from Up Next failed at the end;
+        # Play with the player closed took the top of Up Next, the finished
+        # episode itself, and pushed it in progress.
+        self.fake["upnext"] = [EP_1, EP_2]
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.fake["fail"] = {"/up_next/remove": 1}
+        self.wait_for(lambda: self.fake["status"].get(EP_1) == bridge.STATUS_PLAYED
+                      or run_bridge("player", "--no-autoplay") and False)
+        self.assertIn(EP_1, self.fake["upnext"])
+        run_bridge("stop", "--if-paused")
+        before = len(self.pushes_of(EP_1))
+        view = run_bridge("toggle")["data"]
+        self.assertEqual((view["item"] or {}).get("uuid"), EP_2)
+        self.assertEqual(len(self.pushes_of(EP_1)), before)
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
+        self.assertNotIn(EP_1, self.fake["upnext"])  # the pending removal went through first
+
+    def test_play_after_a_half_told_end_skips_it_even_when_the_removal_fails_again(self):
+        # The retry's removal fails too: the finished episode stays on top of
+        # Up Next, and Play still starts the next one, pushing nothing for it.
+        self.fake["upnext"] = [EP_1, EP_2]
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.fake["fail"] = {"/up_next/remove": 1}
+        self.wait_for(lambda: self.fake["status"].get(EP_1) == bridge.STATUS_PLAYED
+                      or run_bridge("player", "--no-autoplay") and False)
+        run_bridge("stop", "--if-paused")
+        self.fake["fail"] = {"/up_next/remove": 1}
+        before = len(self.pushes_of(EP_1))
+        view = run_bridge("toggle")["data"]
+        self.assertEqual((view["item"] or {}).get("uuid"), EP_2)
+        self.assertEqual(len(self.pushes_of(EP_1)), before)
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
+
+    def test_a_call_that_spans_a_suspend_sends_nothing(self):
+        # Strict review 12 (M4): a push decided before a suspend and sent after
+        # it landed the pre-sleep place over the phone's newer one.
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.wait_for(lambda: run_bridge("player")["data"]["position"] > 1)
+        before = len(self.pushes_of(EP_1))
+        with mock.patch.object(bridge, "sleep_offset", lambda: bridge._SLEEP_BASE + 600):
+            result = run_bridge("pause")
+        self.assertEqual(len(self.pushes_of(EP_1)), before)
+        with bridge.Mpv.connect() as player:
+            self.assertIs(player.get("pause"), True)  # paused all the same
+        # A suspend during the connection itself (the TLS handshake, say):
+        # connected, nothing is sent.
+        real_connect = bridge.http_client.HTTPConnection.connect
+        offset = [bridge._SLEEP_BASE]
+        def connect_then_sleep(conn):
+            real_connect(conn)
+            offset[0] = bridge._SLEEP_BASE + 600
+        with mock.patch.object(bridge.http_client.HTTPConnection, "connect", connect_then_sleep), \
+                mock.patch.object(bridge, "sleep_offset", lambda: offset[0]):
+            with self.assertRaises(bridge.ApiError):
+                bridge.push_position({"uuid": EP_1, "podcast": PODCAST_A}, 3)
+        self.assertEqual(len(self.pushes_of(EP_1)), before)
+        # Pocket Casts itself is https: the same check there.
+        self.assertTrue(any(isinstance(h, bridge.SleepAwareHTTPSHandler) for h in bridge.build_opener().handlers))
+
+    def test_an_answer_read_across_a_suspend_isnt_applied(self):
+        # Asked before the sleep, answered after: from before it, so the
+        # resume stays unconfirmed (and pushes nothing) until a fresh answer.
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.wait_for(lambda: run_bridge("player")["data"]["position"] > 1)
+        run_bridge("pause")
+        real = bridge.user_episode
+        offset = [bridge._SLEEP_BASE]
+        def answered_after_a_sleep(uuid):
+            record = real(uuid)
+            offset[0] = bridge._SLEEP_BASE + 600
+            return record
+        with mock.patch.object(bridge, "user_episode", answered_after_a_sleep), \
+                mock.patch.object(bridge, "sleep_offset", lambda: offset[0]):
+            run_bridge("toggle")
+        self.assertTrue(bridge.load_playback().get("unconfirmed"))
+
+    def test_the_loaded_episode_isnt_marked_or_moved(self):
+        # Strict review 12 (L4): only the panel refused it.
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.assertEqual(run_bridge("mark", "played", EP_1, "--podcast", PODCAST_A).get("code"), "loaded")
+        self.assertEqual(run_bridge("queue", "remove", EP_1).get("code"), "loaded")
+        self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+
+    def test_the_sleep_guard_sets_ask_first_itself(self):
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.wait_for(lambda: run_bridge("player")["data"]["position"] > 0.5)
+        self.assertTrue(bridge.pause_for_sleep())
+        self.assertIs(bridge.load_playback().get("checkServer"), True)  # before any poll sees the pause
 
     def test_toggle_with_no_player_resumes_the_last_episode(self):
         self.login()
@@ -1836,6 +1966,48 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         time.sleep(1)
         run_bridge("pause")
         self.assertEqual(self.fake["progress"][EP_3], 25)
+
+    def test_a_resume_seeking_past_this_copys_end_never_marks_it_played(self):
+        # Strict review 12 (H1): an ad-stitched episode's copies differ: the
+        # phone got past the end of this one; the resume check's seek landed
+        # at its end, and the poll marked it played everywhere.
+        self.fake["episodes"][EP_1]["duration"] = 130  # listed; this copy runs 120 s
+        self.play_then_pause()
+        self.other_device(EP_1, 125)
+        run_bridge("toggle")
+        self.wait_for(lambda: run_bridge("player")["data"].get("streamBroke") or not self.mpv_running()
+                      or self.fake["status"].get(EP_1) == bridge.STATUS_PLAYED, timeout=20)
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_IN_PROGRESS)
+        self.assertIn(EP_1, self.fake["upnext"])
+
+    def test_a_media_key_stretch_nobody_asked_about_loses_to_the_phone(self):
+        # Strict review 12 (M3): played and paused by media keys while Legato
+        # was off; the phone went back meanwhile. Play kept the unchecked
+        # place over the phone's and pushed it.
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.position() > 5, timeout=30)
+        run_bridge("pause")  # pushed at about 5; the next resume asks first
+        self.mpv_set_pause(False)  # a media key, no poll
+        time.sleep(1.5)
+        self.mpv_set_pause(True)
+        self.other_device(EP_1, 2)  # the phone went back
+        run_bridge("player")  # Legato back: its first poll
+        run_bridge("toggle")
+        time.sleep(0.5)
+        run_bridge("pause")
+        self.assertLess(self.fake["progress"][EP_1], 5, [b["position"] for b in self.pushes_of(EP_1)])
+
+    def test_another_episodes_record_is_no_answer(self):
+        # Strict review 12 (L1): a mix-up returning another episode's record.
+        self.play_then_pause()
+        self.other_device(EP_1, 30)
+        other = json.dumps({"uuid": EP_2, "podcastUuid": PODCAST_A, "playedUpTo": 3, "playingStatus": 2}).encode()
+        self.fake["episodeReply"] = {EP_1: (200, other)}
+        run_bridge("toggle")
+        self.assertTrue(bridge.load_playback().get("unconfirmed"))
+        run_bridge("pause")
+        self.assertEqual(self.fake["progress"][EP_1], 30)
 
     def test_a_record_without_a_position_is_no_answer(self):
         # Strict review 11 (M3): read as 0, the resume check sought to 0 and
@@ -2999,6 +3171,19 @@ class BrokenStream(PlayerTestCase):
         self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
         self.assertNotIn(0, [b["position"] for b in self.writes("/sync/update_episode") if b["uuid"] == EP_1][1:])
 
+    def test_play_before_a_poll_reads_the_watchers_evidence(self):
+        # The cut past nine tenths: by length alone, about the end. Only the
+        # watcher's record (in Play's full snapshot) says it broke.
+        self.fake["cut"] = {EP_1: int(len(self.audio) * 0.93)}
+        bridge.save_prefs({"volume": 0, "speed": 2.0})
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        with bridge.Mpv.connect() as player:
+            self.wait_for(lambda: player.get("eof-reached") is True, timeout=30)
+        self.fake["cut"] = {}
+        run_bridge("toggle")
+        self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+
     def test_a_break_after_a_long_gap_pushes_nothing(self):
         # Review finding: the shell was down (or the machine slept unguarded)
         # while you carried on with the phone; the first poll afterwards sees
@@ -4020,7 +4205,7 @@ class SettingsFile(TempHome):
         self.assertEqual(view["path"], "~/.local/state/omarchy-legato/settings.json")
         self.assertFalse(os.path.exists(self.path()))  # reading writes nothing
         self.assertEqual(run_bridge("status")["data"]["settings"], view)
-        self.assertIs(bridge.setting_now("autoplay"), False)
+        self.assertIsNone(bridge.setting_now("autoplay"))  # before the import, the caller's choice decides
         run_bridge("settings", "import", "--", "{}")
         os.remove(self.path())
         view = run_bridge("settings")["data"]
@@ -4104,6 +4289,14 @@ class SettingsFile(TempHome):
         view = run_bridge("settings")["data"]
         self.assertFalse(view["writable"])
         self.assertIn("symbolic link", view["problem"])
+
+    def test_an_empty_show_list_isnt_kept(self):
+        # Strict review 12 (L2): cached ten minutes, it said "not followed"
+        # for every show.
+        with mock.patch.object(bridge, "api", lambda path, body=None: {"podcasts": []}):
+            self.assertEqual(bridge.subscriptions(force=True), [])
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".local/state/omarchy-legato/podcasts-cache.json")))
+        self.assertLess(bridge.MPV_PROPERTIES.index("time-pos"), bridge.MPV_PROPERTIES.index("path"))  # L5
 
     def test_the_bridge_acts_on_the_safe_value_when_it_cant_tell(self):
         with mock.patch.object(bridge, "settings_schema", side_effect=OSError("gone")):

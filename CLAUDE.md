@@ -14,12 +14,12 @@ Cody's work setup.
 
 Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
-(docs/PLAN.md phases H and SR: rounds 1-11 so far; the fit reviewer has
+(docs/PLAN.md phases H and SR: rounds 1-12 so far; the fit reviewer has
 found nothing critical or high since round 7, the safety reviewer still
-found a high in round 11, fixed). Cody, 2026-11-24: SR86 (settings in
+found a high in round 12, fixed). Cody, 2026-11-24: SR86 (settings in
 Legato's own file) and SR63 (one live service on a replacement bar) were
 folded into 1.1.0 before round 10, and the review loop runs for as long
-as rounds keep finding critical or high issues: round 12 next. Then push,
+as rounds keep finding critical or high issues: round 13 next. Then push,
 release, the stats screenshot re-shot, and the marketplace verification
 request last of all, each on Cody's go. Committed and installed on Cody's
 laptop at each round's end (`./install.sh`), not pushed. Listed on the Omarchy plugin marketplace on 2026-11-23
@@ -178,7 +178,10 @@ docs/PLAN.md         what's left to build
    device left off, follow it to a different episode, or stop if it finished
    everything. A local place further on is kept only if it played here
    confirmed and its push failed, never what played after a resume Pocket
-   Casts couldn't confirm (`unconfirmed`: that stretch is no news). This covers resumes the bridge didn't cause: a poll that sees
+   Casts couldn't confirm, nor a stretch that played and paused again with
+   nobody asking (a media key while Legato was off: the first poll marks
+   it `unconfirmed`); that stretch is no news. Another episode's record
+   (`user_episode` checks the uuid) is no answer. This covers resumes the bridge didn't cause: a poll that sees
    a pause sets `checkServer`, and a gap of `RECHECK_AFTER` (90 s) since the
    last push while playing (sleep, shell down) counts as a resume. Nothing
    is pushed until Pocket Casts has answered.
@@ -300,10 +303,14 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   `ended`, not `playing`, so the poll timer stops and the idle unload can
   close it.
   `finish_current` marks it played and takes it off Up Next (each step on
-  its own; whatever fails waits in `pendingFinish` and a later poll retries
-  it, once a minute at most, for six hours, reading the record first: one
-  moved from where this machine left it, `left`, means another device
-  carried on, and the entry is dropped), then autoplays. Play on an
+  its own; the entry goes into `pendingFinish` in the same save that marks
+  the end handled, so a call cut off while telling Pocket Casts leaves it
+  to retry; whatever fails is retried by a later poll, once a minute at
+  most, for six hours, or at once by Play with nothing loaded, reading the
+  record first: one moved from where this machine left it, `left`, means
+  another device carried on, and the entry is dropped), then autoplays.
+  Play with nothing loaded never picks an episode that ended here (its
+  removal from Up Next may be pending). Play on an
   ended episode starts what was queued since (if autoplay was on) or plays
   it again (`play_again`, which pushes it as in progress itself, since
   Pocket Casts would say "played" and stop it). Play at a real end no poll
@@ -400,7 +407,7 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   (`setpriv --pdeathsig KILL`); a SIGTERM still removes its
   `/tmp/legato-check-*` folder. Nothing leaves this computer.
 - **An end that proves nothing** (`end_unproven`): mpv at its end with
-  nothing played since the load (Pocket Casts' position past this copy of
+  nothing played since the load or the resume check's seek (`begun`; Pocket Casts' position past this copy of
   the file: ad-stitched copies differ per request; also an end before
   where it began) or far short of the listed length (`END_FAR_SHORT`, half:
   an expired feed's placeholder clip). Not marked played: stream_stopped
@@ -465,7 +472,13 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   waits longer each time (6 s, doubling) and after five failures in a row
   the service gives up and says so, until the next episode is loaded. A
   paused position that missed its push before a sleep is never pushed
-  blind afterwards (the next resume asks first).
+  blind afterwards (the next resume asks first), and no request goes out
+  across a suspend: each bridge call notes how far the boot clock is
+  ahead of the monotonic one when it starts (`sleep_offset`), every
+  connection checks it once connected, after the TLS handshake (a call
+  that slept sends nothing: a push or check a poll had in flight when the
+  guard let the machine sleep), and the resume check drops an answer
+  read across one.
 - **The feed proxy** (`bridge proxy`, `FeedProxy`): before each load,
   `ensure_feed_proxy` checks mpv's `http-proxy` answers our ping, or starts
   a proxy (a detached `legato-bridge proxy --watch-pid <mpv>`, its random
@@ -530,11 +543,12 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
 - **Quickshell's `Socket`** (path, connected, write, flush, SplitParser)
   carries the mpv events. Omarchy's OSD (`shell.summon("omarchy.osd", ..)`)
   answers false to a plugin like Legato (rule 8), with no log line.
-- **A disabled IpcHandler still registers its target.** Quickshell keeps
-  an `IpcHandler` with `enabled: false` registered, and the first handler
-  of a target wins (the shell logs "another handler is registered" for the
-  second). So the service's `legato` handler sits in a Loader, made only
-  while the service is `active`. Each panel makes a Service of its own only
+- **IPC handlers:** of two enabled `IpcHandler`s for one target, the first
+  wins (the shell logs "another handler is registered" for the second); a
+  disabled one doesn't register (tested 2026-11-24 with a throwaway
+  instance: its target is absent, and an enabled second handler answers).
+  The service's `legato` handler sits in a Loader, made only while the
+  service is `active`, so a dormant copy has none either way. Each panel makes a Service of its own only
   when it can't see the shell's (a Loader, active only then, and only
   from the turn after loading: BarWidget hands the panel its bar just
   after loading it, so until then a shared service can't be seen).
@@ -568,9 +582,10 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   one's ran on). A plugin reload destroys the service (1.1 has no
   keepLoaded), so an update or install.sh ends the bridge calls in flight.
   Safe by the path checks above (a play cut short starts over at the next
-  Play); the one cost left is a sign-in refresh cut in its last moment
-  (after Pocket Casts rotated the token, before it was stored): sign in
-  again. Omarchy reloads every plugin whenever any plugin's folder changes
+  Play) and by the pending finish saved before Pocket Casts is told (an
+  end cut short is retried); the one cost left is a sign-in refresh cut in
+  its last moment (after Pocket Casts rotated the token, before it was
+  stored): sign in again. Omarchy reloads every plugin whenever any plugin's folder changes
   (an update or install of any of them): rare, not never.
 - **Pocket Casts' shapes** (checked live 2026-11-24, read-only): every
   episode record (`/user/episode`) has `playedUpTo` as a number, unplayed
@@ -744,7 +759,10 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   is `legatoSettings` in manifest.json, not `barWidget.schema`: tools that
   read that (third-party settings apps) write the bar entry, so a form
   there would change nothing. Until the import has run, autoplay and the
-  idle unload stay off.
+  idle unload stay off in 1.1's service; the bridge then leaves the choice
+  to the caller (`setting_now` answers None), because Legato 1.0's service,
+  kept running through the update until the shell restarts, never imports
+  and passes the choice its bar entry holds.
 
 ## Working on it
 

@@ -76,8 +76,8 @@ Item {
     for (var name in (extra || {})) out[name] = extra[name]
     return out
   }
-  function status(settings) {
-    return { authenticated: false, mpv: "/usr/bin/mpv", socket: "", python: "3.14", settings: settings }
+  function status(settings, running) {
+    return { authenticated: false, mpv: "/usr/bin/mpv", socket: "", python: "3.14", settings: settings, running: running === true }
   }
 
   // The shell's own copy, made as the shell makes it (`active` not set).
@@ -128,7 +128,7 @@ Item {
       var steps = [top.dormantAtFirst, top.onAReplacementBar, top.onOmarchysBar, top.changes, top.brokenFile,
                    top.injectedLate, top.injectedLateSettled, top.importedOnce, top.problemsSaid,
                    top.handedOverLate, top.handedOverLateCheck, top.twoScreens, top.oneScreenGone, top.stillAwakeWithOne,
-                   top.claimingPanelGone, top.dormantAgain, top.claimedAgain, top.rebuildRelease, top.rebuildClaim, top.rebuiltStillAwake,
+                   top.claimingPanelGone, top.dormantAgain, top.dormantSpell, top.claimedAgain, top.rebuildRelease, top.rebuildClaim, top.rebuiltStillAwake,
                    top.tabOnOpen, top.reloadMakesNoCopy, top.reloadMakesNoCopyCheck,
                    top.neverStarts, top.neverStartsAnswered, top.oldServiceUpdate, top.oldServiceCheck]
       if (top.step >= steps.length) { stop(); Qt.exit(top.failures); return }
@@ -147,6 +147,8 @@ Item {
 
   function dormantAtFirst() {
     check("the shell's copy starts dormant", shellService.active === false, shellService.active)
+    check("and would wait seconds before going dormant again (a bar rebuilding its widgets)",
+          shellService.dormantAfterMs >= 1000, shellService.dormantAfterMs)
     check("and starts nothing", running().length === 0, running().length)
     check("and registers no legato IPC target", named(shellService, "ipcLoader").item === null, named(shellService, "ipcLoader").item)
     replacementPanel = panelMaker.createObject(top, {
@@ -330,7 +332,9 @@ Item {
     check("the bar handed over just after loading wakes the shell's copy", handedService.active === true
           && handedPanel.service === handedService, handedService.active)
     check("which reads its status", bridgeCalls("status").length >= 1, bridgeCalls("status").length)
-    running().forEach(function(p) { var a = argsOf(p); if (a && a[0] === "status") answer(p, status(view({}))) })
+    running().forEach(function(p) { var a = argsOf(p); if (a && a[0] === "status") answer(p, status(view({}), true)) })
+    check("signed out but mpv running: it reads the player too", bridgeCalls("player").length >= 1, bridgeCalls("player").length)
+    running().forEach(function(p) { var a = argsOf(p); if (a && a[0] === "player") answer(p, {}) })
   }
 
   // Omarchy's bar swapped for a replacement at run time: the panel that
@@ -346,6 +350,17 @@ Item {
     shellService.applyPlayer({ active: true, playing: false, position: 5, duration: 100, item: top.episodeItem, running: true })
     check("(the event socket connects)", named(shellService, "playerEvents").connected === true,
           named(shellService, "playerEvents").connected)
+    // Both panels open at once (each screen's): counted, not set.
+    builtinPanel.open(); secondPanel.open()
+    check("two panels open: counted as two", shellService.openPanels === 2, shellService.openPanels)
+    builtinPanel.setStats(true); secondPanel.setStats(true)
+    check("two Stats pages: counted as two", shellService.statsPagesOpen === 2 && shellService.pagesOpen === 2,
+          shellService.statsPagesOpen + " " + shellService.pagesOpen)
+    secondPanel.close()
+    check("one closed: one still open", shellService.openPanels === 1 && shellService.statsPagesOpen === 1,
+          shellService.openPanels + " " + shellService.statsPagesOpen)
+    builtinPanel.close()
+    running().forEach(function(p) { var a = argsOf(p); if (a && a[0] !== "notify" && a[0] !== "sleepguard") answer(p, a[0] === "status" ? status(view({})) : {}) })
   }
   function oneScreenGone() { secondPanel.destroy() }
   function stillAwakeWithOne() {
@@ -364,6 +379,22 @@ Item {
     check("and lets go of mpv's event socket", named(shellService, "playerEvents").connected === false,
           named(shellService, "playerEvents").connected)
     check("so one copy runs, the replacement bar's", local.active === true, local.active)
+    var before = running().length
+    var heard = null
+    shellService.call(["up-next"], function(result) { heard = result })
+    check("a dormant copy starts nothing", running().length === before, running().length - before)
+    var said = notices().length
+    shellService.reportError("an answer from before it went dormant")
+    check("nor says anything (a notification is a call too)", notices().length === said, notices().length - said)
+    top.dormantAnswer = function() { return heard }
+  }
+  property var dormantAnswer: null
+  // Dormant longer than the settle that follows its socket dropping (600 ms).
+  function dormantSpell() {
+    if (Date.now() - top.stepStarted < 700) return false
+    var heard = top.dormantAnswer()
+    check("and answers a call it won't make (or a loading flag stays set for good)",
+          heard && heard.ok === false && heard.code === "dormant", JSON.stringify(heard))
     againPanel = panelMaker.createObject(top, { bar: builtinBar, settings: {} })
   }
   function claimedAgain() {
@@ -409,6 +440,10 @@ Item {
   // panel goes: the panel makes no copy of its own meanwhile.
   function reloadMakesNoCopy() {
     swapPanel = panelMaker.createObject(top, { bar: swapBar, settings: {} })
+    var held = shellService.claims
+    swapBar.shell = ({ serviceFor: function(id) { return handedService } })  // the bar hands over another
+    check("a panel handed another service lets go of the first", shellService.claims === held - 1
+          && swapPanel.claimedService === handedService, shellService.claims + " of " + held)
     swapBar.shell = ({ serviceFor: function(id) { return null } })
   }
   function reloadMakesNoCopyCheck() {

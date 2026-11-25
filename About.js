@@ -24,7 +24,7 @@ var PRIVACY = "No telemetry and no servers of Legato's own: it talks only to Poc
   + "password is never stored. With your login token, api.pocketcasts.com then serves your Up Next, "
   + "in-progress and new episodes and your shows, and receives your changes: queueing, marking played, "
   + "and your listening position (episode, show, position, duration and played state), sent every 30 "
-  + "seconds while playing and when you pause, stop or switch. Episode lists come from "
+  + "seconds while playing and when you pause, skip, stop, switch or finish, or the computer sleeps. Episode lists come from "
   + "podcast-api.pocketcasts.com, podcasts.pocketcasts.com and cache.pocketcasts.com, and cover art "
   + "from static.pocketcasts.com, all without your token. Audio streams through mpv from each "
   + "podcast's own server (the address in its feed), which sees your IP address as with any podcast "

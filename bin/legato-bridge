@@ -615,6 +615,55 @@ class ResponseTooLarge(ApiError):
         super().__init__("too_large", "Pocket Casts sent a reply larger than %d bytes; it was refused" % limit)
 
 
+def sleep_offset():
+    """How far the boot clock (which counts suspend) has run ahead of the
+    monotonic one (which doesn't): it grows only while the machine sleeps."""
+    return time.clock_gettime(time.CLOCK_BOOTTIME) - time.monotonic()
+
+
+SLEEP_SLACK = 5  # seconds of suspend a call may span unnoticed
+_SLEEP_BASE = sleep_offset()
+
+
+def slept_since_start():
+    """Whether the machine slept since this call began. A push decided before
+    a suspend and sent after it would land the pre-sleep position over
+    whatever another device did meanwhile; an answer read across one is
+    from before it (the sleep guard's own push goes out before the sleep)."""
+    return sleep_offset() - _SLEEP_BASE > SLEEP_SLACK
+
+
+def check_not_slept():
+    if slept_since_start():
+        raise ApiError("slept", "The computer slept during this call: nothing was sent")
+
+
+class SleepAwareHTTPSConnection(http_client.HTTPSConnection):
+    """Connected (and, for https, through the TLS handshake: where a suspend
+    is most likely to catch a request), a call that slept meanwhile sends
+    nothing."""
+
+    def connect(self):
+        super().connect()
+        check_not_slept()
+
+
+class SleepAwareHTTPConnection(http_client.HTTPConnection):
+    def connect(self):
+        super().connect()
+        check_not_slept()
+
+
+class SleepAwareHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(SleepAwareHTTPSConnection, req, context=self._context)
+
+
+class SleepAwareHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(SleepAwareHTTPConnection, req)
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     """Never follow a redirect automatically: following one would copy the
     bearer token onto the new request and read the redirect body without a
@@ -634,10 +683,10 @@ def build_opener(allow_plain_http=False):
         urllib.request.HTTPDefaultErrorHandler(),
         NoRedirect(),
         urllib.request.HTTPErrorProcessor(),
-        urllib.request.HTTPSHandler(context=ssl.create_default_context()),
+        SleepAwareHTTPSHandler(context=ssl.create_default_context()),
     ]
     if allow_plain_http:  # the test suite's local server only
-        handlers.append(urllib.request.HTTPHandler())
+        handlers.append(SleepAwareHTTPHandler())
     for handler in handlers:
         opener.add_handler(handler)
     return opener
@@ -1223,10 +1272,11 @@ def subscriptions(force=False):
     payload = api("/user/podcast/list", {"v": 1})
     items = [p for p in (norm_podcast(x) for x in payload.get("podcasts") or []) if p]
     items.sort(key=lambda p: p.get("lastPublished") or "", reverse=True)
-    try:
-        save_state("podcasts-cache.json", {"at": time.time(), "items": items})
-    except (OSError, ApiError):
-        pass
+    if items:  # an empty list (an odd reply) isn't kept for ten minutes
+        try:
+            save_state("podcasts-cache.json", {"at": time.time(), "items": items})
+        except (OSError, ApiError):
+            pass
     return items
 
 
@@ -1267,7 +1317,8 @@ def user_episode(uuid):
         if err.status == 404 or err.code == "bad_response":
             return {}
         raise
-    return payload if payload.get("uuid") else {}
+    # Another episode's record (a mix-up on the way) is no answer about this one.
+    return payload if str(payload.get("uuid") or "").lower() == safe_uuid(uuid) else {}
 
 
 def record_expected(podcast_uuid):
@@ -1387,7 +1438,9 @@ def up_next_remove(uuids):
 
 # ---------------------------------------------------------------------- mpv
 
-MPV_PROPERTIES = ("path", "pause", "time-pos", "duration", "volume", "speed", "eof-reached", "vid", "track-list", "af",
+# time-pos before path: a file switched in between (another program's
+# OpenUri) leaves a path that isn't the recorded one, so nothing is pushed.
+MPV_PROPERTIES = ("time-pos", "path", "pause", "duration", "volume", "speed", "eof-reached", "vid", "track-list", "af",
                   "idle-active", "paused-for-cache", "playlist-count", "stream-end", "user-data/legato")
 END_PROPERTIES = ("stream-pos", "stream-end", "file-local-options/end", "seekable", "file-format", "ffmpeg-version",
                   "mpv-version")
@@ -2418,12 +2471,14 @@ def player_view(snap, state, prefs, load_failed=False):
     return view
 
 
-def next_in_up_next(skip_uuid):
+def next_in_up_next(skip):
+    """The first episode of Up Next but `skip` (a uuid, or a set of them)."""
+    skip = {skip} if isinstance(skip, str) else set(skip or ())
     episodes, sync = up_next_raw()
     titles = None
     for e in episodes:
         uuid = str((e or {}).get("uuid") or "").lower()
-        if uuid and uuid != skip_uuid:
+        if uuid and uuid not in skip:
             item = norm_episode(e, sync=sync.get(uuid))
             if not item:
                 continue
@@ -2454,18 +2509,22 @@ def finish_current(state, prefs, autoplay):
     state["handledEnd"] = uuid
     state["endedAutoplay"] = bool(autoplay)
     state["lastSyncAt"] = time.time()
-    save_playback(state)
     entry = {"uuid": uuid, "podcast": episode.get("podcast", ""), "duration": episode.get("duration"),
              "position": episode.get("duration") or state.get("position") or 0,
              # Where Pocket Casts had it from this machine: a retry that finds
              # it moved from there knows another device carried on.
              "left": float(state.get("lastSyncPos") or 0),
              "played": False, "removed": False, "at": time.time(), "tried": time.time()}
+    # Recorded as pending in the same save as handledEnd: a call cut off
+    # while telling Pocket Casts (the deadline, a plugin reload) leaves it
+    # to a later retry, not handled and forgotten.
+    state["pendingFinish"] = [p for p in state.get("pendingFinish") or [] if p.get("uuid") != uuid] + [entry]
+    save_playback(state)
     tell_finished(entry)
     if entry["removed"]:
         state["atTop"] = False  # off Up Next: no longer what Pocket Casts thinks is playing
-    if not (entry["played"] and entry["removed"]):
-        state["pendingFinish"] = [p for p in state.get("pendingFinish") or [] if p.get("uuid") != uuid] + [entry]
+    if entry["played"] and entry["removed"]:
+        state["pendingFinish"] = [p for p in state["pendingFinish"] if p.get("uuid") != uuid]
     save_playback(state)
     if not autoplay:
         return state
@@ -2498,7 +2557,7 @@ def tell_finished(entry):
     return entry
 
 
-def retry_pending_finish(state):
+def retry_pending_finish(state, force=False):
     """Tell Pocket Casts about episodes that ended here while it couldn't be
     reached, unless another device has spoken since: before marking one
     played, its record is read, and if it moved from where this machine
@@ -2513,7 +2572,7 @@ def retry_pending_finish(state):
     for entry in pending:
         if not isinstance(entry, dict) or not entry.get("uuid") or now - float(entry.get("at") or 0) > 6 * 3600:
             continue
-        if now - float(entry.get("tried") or 0) >= 60:
+        if force or now - float(entry.get("tried") or 0) >= 60:
             # At most once a minute: with the network down, each try holds
             # the state lock while its requests time out.
             entry["tried"] = now
@@ -3005,6 +3064,8 @@ def check_server(state, prefs, player=None, quick=False):
             record = user_episode(uuid)
     except ApiError:
         return "unverified", state
+    if slept_since_start():
+        return "unverified", state  # asked before a suspend: the answer is from before it
     if not record and (state.get("recordSeen") or record_expected(episode.get("podcast", ""))
                        or position_known_elsewhere(uuid)):
         # Pocket Casts knew this episode a moment ago, or keeps a record of all
@@ -3064,11 +3125,17 @@ def check_server(state, prefs, player=None, quick=False):
                     if own:
                         player.close()
             stream = state.get("stream")
-            if server > local + START_SLACK and isinstance(stream, dict) and stream.get("url") == episode.get("url"):
-                # A host without byte ranges can't seek ahead: mpv plays on
-                # from where it was. Nothing is pushed below Pocket Casts'
-                # position until playback gets there (below_start).
-                stream["asked"] = server
+            if isinstance(stream, dict) and stream.get("url") == episode.get("url"):
+                # Where it starts again: an end reached with nothing played
+                # since proves nothing (end_unproven), as after a load (this
+                # copy of an ad-stitched file can end before Pocket Casts'
+                # place: "Stream ends here", never marked played).
+                stream["begun"] = float(server)
+                if server > local + START_SLACK:
+                    # A host without byte ranges can't seek ahead: mpv plays
+                    # on from where it was. Nothing is pushed below Pocket
+                    # Casts' position until playback gets there (below_start).
+                    stream["asked"] = server
             state["position"] = float(server)
             state["lastSyncPos"] = float(server)
             episode["playedUpTo"] = server
@@ -3096,9 +3163,9 @@ def resume_loaded(player, state, prefs):
         resume_last(prefs)
         return
     if at_end:
-        snap = player.snapshot()
-        broke = snap.get("path") == (state.get("episode") or {}).get("url") and stream_broke(snap, state)
-        unproven = not broke and snap.get("path") == (state.get("episode") or {}).get("url") and end_unproven(snap, state)
+        snap = player.snapshot()  # the recorded file (the stray check above)
+        broke = stream_broke(snap, state)
+        unproven = not broke and end_unproven(snap, state)
         if broke or unproven:
             # Its stream broke off before a poll saw it: not the end (playing it
             # again from the top would push 0). Load it again from where it got to.
@@ -3108,7 +3175,7 @@ def resume_loaded(player, state, prefs):
                            stalled=bool(stall_seen(snap.get("user-data/legato"), state)))
             resume_last(prefs)
             return
-        if snap.get("path") == (state.get("episode") or {}).get("url") and not ended_here(state):
+        if not ended_here(state):
             # A real end no poll has handled yet: finished, as the poll would
             # (marked played, off Up Next). Playing it again from the top here
             # would push 0 over it. Play again plays it again.
@@ -3143,7 +3210,7 @@ def poll(autoplay=True, seeked=False):
     """Read mpv, sync the position to Pocket Casts when it's due, and handle an
     episode that just ended. Runs under the state lock. Autoplay needs the
     caller's yes and settings.json's (setting_now)."""
-    autoplay = autoplay and setting_now("autoplay") is True
+    autoplay = autoplay and setting_now("autoplay") is not False
     state = load_playback()
     prefs = load_prefs()
     player = Mpv.connect()
@@ -3220,6 +3287,12 @@ def poll(autoplay=True, seeked=False):
             return player_view(snap, state, prefs)
         state["stallHandled"] = stalls_ended_by(snap.get("user-data/legato"))
     was_checking = bool(state.get("checkServer"))
+    if snap.get("pause") is True and was_checking and not seeked and moved_since_push(state):
+        # Paused again after a stretch that played without anyone asking (a
+        # media key while Legato was off, or before any poll saw it): no
+        # news, and no local place to keep over Pocket Casts' answer
+        # (check_server's keep_local) until it has answered.
+        state["unconfirmed"] = True
     if snap.get("pause") is True:
         # Whoever paused it (this panel, a media key, playerctl), the next
         # resume asks Pocket Casts first.
@@ -3884,6 +3957,8 @@ def resume_last(prefs):
     since; then the top of Up Next is what plays, and the last episode is
     neither restarted nor queued again."""
     state = load_playback()
+    if state.get("pendingFinish"):
+        retry_pending_finish(state, force=True)  # an end Pocket Casts wasn't told of yet
     episode = state.get("episode") or {}
     item = None
     if episode.get("uuid") and state.get("handledEnd") != episode.get("uuid"):
@@ -3916,7 +3991,11 @@ def resume_last(prefs):
         # being further on (another device listened on) wins, as always.
         item = dict(item, playedUpTo=int(unsent["position"]))
     if not item:
-        item = next_in_up_next("")
+        # Not an episode that ended here (its removal from Up Next may still
+        # be pending): playing it from its sync data pushed it in progress.
+        ended = {state.get("handledEnd")} | {p.get("uuid") for p in state.get("pendingFinish") or []
+                                            if isinstance(p, dict)}
+        item = next_in_up_next(ended)
     if not item:
         raise ApiError("nothing_queued", "Up Next is empty — pick an episode to play")
     # The outgoing player is gone: nothing of it is pushed here (play_item
@@ -4511,18 +4590,24 @@ def settings_view(schema=None):
     # `stored`: nothing to copy in (a file is there, or the old bar entry was
     # copied once already: a settings.json deleted later means the defaults).
     stored = data is not None or not writable or imported
-    return {"values": values, "stored": stored, "writable": writable, "problem": problem, "path": settings_path()}
+    return {"values": values, "stored": stored, "writable": writable, "problem": problem, "path": settings_path(),
+            "waiting": waiting}
 
 
 def setting_now(key):
     """One setting as settings.json has it now. The bridge acts on the file,
     not on what a service last read, so a second service (a replacement bar
-    on two screens) or a hand edit can't make it act against it. Can't tell:
-    the safe value (SETTINGS_SAFE)."""
+    on two screens) or a hand edit can't make it act against it. Before the
+    old bar entry is copied in: None, and the caller's own choice decides
+    (Legato 1.0's service, kept running through the update until the shell
+    restarts, never imports; it passes the choice its bar entry holds; 1.1's
+    passes the safe one meanwhile). Can't tell: the safe value
+    (SETTINGS_SAFE)."""
     try:
-        return settings_view()["values"].get(key)
+        view = settings_view()
     except (ApiError, OSError):
         return SETTINGS_SAFE.get(key)
+    return None if view.get("waiting") else view["values"].get(key)
 
 
 def cmd_settings(args):
@@ -4577,9 +4662,24 @@ def cmd_settings(args):
     out(settings_view(schema))
 
 
+def refuse_loaded(uuid):
+    """Marking or moving the episode mpv has loaded would be undone by its next
+    push, or send the next resume after a new top of Up Next: refused (the
+    panel offers neither for it)."""
+    episode = load_playback().get("episode") or {}
+    if episode.get("uuid") != uuid:
+        return
+    player = Mpv.connect()
+    if player:
+        with player:
+            if player.get("path") == episode.get("url") and player.get("idle-active") is not True:
+                raise ApiError("loaded", "That's the episode loaded now: stop it first")
+
+
 def cmd_mark(args):
     uuid = safe_uuid(args.uuid)
     podcast = safe_uuid(args.podcast)
+    refuse_loaded(uuid)
     item = {"uuid": uuid, "podcast": podcast}
     if args.state == "played":
         push_position(item, 0, STATUS_PLAYED)
@@ -4594,6 +4694,7 @@ def cmd_mark(args):
 
 def cmd_queue(args):
     uuid = safe_uuid(args.uuid)
+    refuse_loaded(uuid)
     if args.where == "remove":
         up_next_remove([uuid])
         out({"uuid": uuid})

@@ -161,6 +161,17 @@ function fileUrl(path) {
 // Only the copy the bridge cached on disk (checked, size-capped): Qt's Image
 // never fetches anything from the network itself. No cached copy yet, the
 // placeholder shows.
+// Wheel deltas to steps, as Omarchy's Util.wheelSteps: one event at most one
+// notch (some mice report far more than 120 a notch), a touchpad's small
+// deltas added up, a change of direction starting over.
+function wheelSteps(accumulator, delta) {
+  delta = Math.max(-120, Math.min(120, Number(delta) || 0))
+  if (accumulator * delta < 0) accumulator = 0
+  var total = accumulator + delta
+  var steps = total < 0 ? Math.ceil(total / 120) : Math.floor(total / 120)
+  return { steps: steps, remainder: total - steps * 120 }
+}
+
 function artSource(item) {
   if (!item || !item.artPath) return ""
   return fileUrl(item.artPath)

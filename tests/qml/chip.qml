@@ -99,7 +99,8 @@ Item {
     onTriggered: {
       var steps = [top.handOver, top.awake, top.label, top.clicks, top.wheel, top.afterWheel,
                    top.sleepGuardSwitch, top.guardBackOff, top.socketRetries, top.staleStatus,
-                   top.noticesOnce, top.quietReloads, top.chipShapes, top.idleWheel, top.idleWheelCheck, top.marquee]
+                   top.noticesOnce, top.quietReloads, top.chipShapes, top.idleWheel, top.idleWheelCheck, top.marquee,
+                   top.touchpad, top.touchpadCheck, top.liveStatus, top.liveStatusCheck, top.guardBack]
       if (top.step >= steps.length) { stop(); Qt.exit(top.failures); return }
       if (top.waits === 0) top.stepStarted = Date.now()
       // A step returns false to wait for a debounced call (up to 2 s).
@@ -278,5 +279,50 @@ Item {
     chip.open()
     check("but not with the panel open over it", label && label.scrolling === false, label && label.scrolling)
     chip.close()
+    var paused = JSON.parse(JSON.stringify(long))
+    paused.playing = false
+    shared.applyPlayer(paused)
+    check("nor while paused", label && label.scrolling === false, label && label.scrolling)
+    shared.applySettings(top.settingsView)
+    var tick = find(shared, function(i) { return i.objectName === "tickTimer" })
+    check("the slider ticks once a second", tick && tick.interval >= 1000, tick && tick.interval)
+  }
+
+  // A touchpad's small deltas add up to a notch: one 5% step, not one per
+  // event (one swipe moved the volume 50 to 90).
+  function touchpad() {
+    answerAll(top.answers)
+    shared.applyPlayer(top.playing)
+    for (var i = 0; i < 3; i++) button.wheelMoved(30)  // 90 of a notch's 120
+    button.wheelMoved(40)                               // 130: one notch, 10 left
+  }
+  function touchpadCheck() {
+    if (Date.now() - top.stepStarted < 300) return false
+    var vol = volumes()
+    check("a touchpad swipe of one notch: one step", vol.length === 1 && argsOf(vol[0])[1] === "55",
+          vol.map(function(p) { return argsOf(p).join(" ") }).join("; "))
+    answerAll(top.answers)
+  }
+
+  // `legato status` (keybinds, scripts) says where playback is now, not
+  // where the panel last drew it (no panel open: no tick).
+  function liveStatus() {
+    shared.openPanels = 0
+    shared.applyPlayer(top.playing)  // at 100
+  }
+  function liveStatusCheck() {
+    if (Date.now() - top.stepStarted < 1300) return false
+    var ipc = find(shared, function(i) { return i.objectName === "ipcLoader" }).item
+    var position = JSON.parse(ipc.status()).position
+    check("the IPC status reports the live position", position >= 101, position)
+  }
+
+  // A sleep guard that gave up (five failures) tries again for the next
+  // episode.
+  function guardBack() {
+    shared._guardFailures = shared.guardMaxFailures
+    shared.applyPlayer({ active: false, playing: false, item: null })
+    shared.applyPlayer(top.playing)  // the next episode loaded
+    check("a new episode gets a sleep guard again", shared._guardFailures === 0, shared._guardFailures)
   }
 }

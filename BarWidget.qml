@@ -141,10 +141,15 @@ BarWidget {
       else if (b === Qt.RightButton) { if (root.service) root.service.skipForward() }
       else root.togglePanel()
     }
+    // A touchpad sends many small deltas: they add up to whole notches
+    // (Model.wheelSteps, as Omarchy's Util.wheelSteps), 5% each.
+    property real wheelRemainder: 0
     onWheelMoved: function(delta) {
       if (!root.service || !root.playerActive) return
-      if (delta > 0) root.service.nudgeVolume(5)
-      else if (delta < 0) root.service.nudgeVolume(-5)
+      var step = Model.wheelSteps(button.wheelRemainder, delta)
+      button.wheelRemainder = step.remainder
+      if (step.steps > 0) root.service.nudgeVolume(5)
+      else if (step.steps < 0) root.service.nudgeVolume(-5)
     }
 
     Row {

@@ -139,7 +139,7 @@ as it has saved your place.
 ## Uninstall
 
 ```bash
-omarchy-shell legato stop          # mpv runs on its own: stop it first
+~/.config/omarchy/plugins/io.github.cwilliams5.legato/bin/legato-bridge stop   # mpv runs on its own: stop it first
 omarchy plugin remove io.github.cwilliams5.legato
 rm -rf ~/.local/state/omarchy-legato ~/.cache/omarchy-legato   # sign-in tokens, playback state, stats, cover art
 ```
@@ -243,8 +243,8 @@ devices.
   of screens.
 - **Taking the chip off the bar, or disabling Legato, mid-episode** leaves
   the episode playing (mpv runs on its own), not synced and not paused
-  before sleep, until you stop it or Legato is back; then its first check
-  asks Pocket Casts before anything is sent.
+  before sleep, until you stop it or Legato is back; then the next Play
+  asks Pocket Casts, and its answer wins over what played meanwhile.
 - **Updating from 1.0:** restart the shell once afterwards (`omarchy
   restart shell`, or log out and in). Omarchy keeps 1.0's background part
   running through the update, so the panel says so and Settings and Stats
@@ -359,7 +359,7 @@ The `legato` commands are `playPause`, `next`, `skipBack`, `skipForward`,
 
 ```lua
 o.bind("SUPER + ALT + P", "Legato play/pause", { ipc = "legato.playPause" })
-o.bind("SUPER + ALT + L", "Legato panel", "omarchy-shell io.github.cwilliams5.legato toggle")
+o.bind("SUPER + ALT + O", "Legato panel", "omarchy-shell io.github.cwilliams5.legato toggle")
 ```
 
 ## Settings
@@ -368,9 +368,10 @@ The gear in the panel's header (or `g`) lists them all and saves changes as
 you make them, to `~/.local/state/omarchy-legato/settings.json`. From a
 script: `~/.config/omarchy/plugins/io.github.cwilliams5.legato/bin/legato-bridge
 settings set -- <key> <value>` (the value as JSON: `false`, `30`,
-`"podcasts"`). Autoplay, the idle unload's "never" and pause before sleep
-take effect at once (Legato's helper reads the file whenever it acts);
-the rest when the Settings page next opens or the shell restarts.
+`"podcasts"`). Turning autoplay or pause before sleep off, or the idle
+unload to never, takes effect at once (Legato's helper reads the file
+whenever it acts); everything else when the Settings page next opens or
+the shell restarts.
 Up to 1.0 they lived in the chip's entry in `~/.config/omarchy/shell.json`;
 1.1 copies them from there once, then no longer reads it, so `omarchy bar
 set` doesn't change them any more.

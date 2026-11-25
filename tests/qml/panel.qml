@@ -150,9 +150,13 @@ Item {
     var statsView = named("statsView")
     check("the panel's parts are there", keys && card && statsView, [!!keys, !!card, !!statsView])
 
+    check("closed, the panel holds no rows", named("rowsRepeater").count === 0, named("rowsRepeater").count)
     panel.open()
     settle()
     check("the Stats page is hidden at first", !statsView.visible, statsView.visible)
+    check("open, it has its rows", named("rowsRepeater").count > 0, named("rowsRepeater").count)
+    service.loadUpNextIfStale()
+    check("a list read a moment ago isn't read again", calls("up-next").length === 0, calls("up-next").length)
 
     // `n` moves on to the next episode on the main view...
     keys.textKey("n", 0)

@@ -252,7 +252,13 @@ Item {
 
   property int startWatchdogMs: 10000
   function call(args, callback, secret) {
-    if (!active) return null
+    if (!active) {
+      // Dormant (no panel holds the shell's copy): nothing runs, but the
+      // caller hears so, or its loading flag (a list, a poll) stays set
+      // for good after a bar swap.
+      if (callback) Qt.callLater(function() { callback({ ok: false, code: "dormant", error: "Legato isn't on a bar" }) })
+      return null
+    }
     if (python === "" && pythonError === "") {
       // Calls made before the interpreter is known wait for the probe.
       var queued = _queuedCalls
@@ -723,11 +729,12 @@ Item {
     onTriggered: root.syncPlayerEvents()
   }
 
-  // ---- Unload when idle. Paused this long, the player is closed: no
-  //      process left behind at all. Its position already reached Pocket
-  //      Casts when it paused, and the next play asks Pocket Casts where to
-  //      pick up, whichever device you listened on meanwhile. 0 keeps the
-  //      player loaded until you stop it.
+  // ---- Unload when idle. Paused this long, the player is closed, and its
+  //      helpers (the sleep guard, the feed proxy) end with it. Its position
+  //      went to Pocket Casts when it paused if the push rules allowed it,
+  //      and the next play asks Pocket Casts where to pick up, whichever
+  //      device you listened on meanwhile. 0 keeps the player loaded until
+  //      you stop it.
   readonly property int unloadAfterMinutes: {
     if (!settingsKnown) return 0
     var minutes = Number(setting("unloadAfterMinutes", 15))

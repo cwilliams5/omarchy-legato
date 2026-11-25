@@ -12,13 +12,13 @@ python3 -B tests/mutate.py .       # all of them, about 2 hours
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (322 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (352 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
 it. A mutation whose pattern no longer matches the code is reported STALE
 and fails the run (fix its pattern), as does one whose tests fail
 unmutated (SKIP).
 
-## The set (322; strict review rounds 1 to 11, 2026-11-24)
+## The set (352; strict review rounds 1 to 12, 2026-11-24)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
@@ -158,6 +158,15 @@ caught each mutant. By area:
   more masked by tiny numbers (a push at 1 hid a push at 0; a phone 2 s on
   sat inside the 3 s drift), and a fix of round 11's own that a test
   caught (Stop paused first counted an unchecked stretch as paused).
+- Round 11's full run: 320 of 322; both survivors were made equivalent by
+  round 11's own fixes (Play's path checks after the stray-file check; the
+  idle copy after the "had a shared service" latch): the redundant code
+  removed with them. Round 12 (the reviewers' own): 14 of 25 QML (fit)
+  survived, 2 of 10 (safety: a redundant second guard, now tested on its
+  own, and a near-equivalent). All listed now. On the way: a dormant
+  copy's reportError guard proved redundant (a notification is a call,
+  and a dormant copy's calls never start): removed; Play's full snapshot
+  needed a cut past nine tenths, where length alone says "the end".
 - Equivalent and left out: "a stall's place confirmed meanwhile" (the
   poll's paused push needs no "ask first" after a pause since round 11,
   and `sync_now` checks the stall itself); the dormancy timer ignoring

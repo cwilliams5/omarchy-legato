@@ -542,3 +542,17 @@ test("the settings list isn't the widget's: tools reading barWidget.schema would
   assert.equal(manifest.barWidget.defaults, undefined)
   assert.ok(manifest.legatoSettings.schema.length >= 9)
 })
+
+test("wheel steps add up a touchpad's small deltas, as Omarchy's Util.wheelSteps", () => {
+  let acc = 0, steps = 0
+  for (const delta of [30, 30, 30, 40]) { const r = Model.wheelSteps(acc, delta); acc = r.remainder; steps += r.steps }
+  assert.equal(steps, 1)
+  assert.equal(acc, 10)
+  assert.deepEqual(plain(Model.wheelSteps(0, 960)), { steps: 1, remainder: 0 })      // a mouse reporting 8 notches at once: one
+  assert.deepEqual(plain(Model.wheelSteps(100, -30)), { steps: 0, remainder: -30 })  // a change of direction starts over
+  assert.deepEqual(plain(Model.wheelSteps(0, -120)), { steps: -1, remainder: 0 })
+})
+
+test("the bridge keeps WAYLAND_DISPLAY (the video window can't draw without it)", () => {
+  assert.ok(Model.bridgeEnvironmentNames.includes("WAYLAND_DISPLAY"))
+})
