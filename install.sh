@@ -1,7 +1,7 @@
 #!/bin/bash
 # Copy this checkout into the Omarchy plugin directory and enable it.
-# Re-run after pulling changes: Omarchy reloads the plugin when its files
-# change (`omarchy restart shell` to be sure).
+# Re-run after pulling changes, then `omarchy restart shell`: Omarchy reloads
+# the plugin when its files change, but from the QML it already compiled.
 
 set -euo pipefail
 

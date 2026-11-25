@@ -197,11 +197,10 @@ devices.
   Episodes served from this computer itself never play.
 - **A cover isn't a video:** some feeds pack the episode's cover into the
   file as a video stream. Legato treats those episodes as audio.
-- **A place whose send failed wins for an hour:** with the network down
-  here, the place this computer couldn't send is kept over Pocket Casts'
-  older one at the next Play, within the hour; if you went back on your
-  phone meanwhile, on purpose, that's undone. (Anything that played while
-  Legato wasn't watching is never kept.)
+- **A feed that keeps only its newest episodes** drops older ones, and
+  Pocket Casts forgets them too, place and all. When the episode you were
+  in has gone that way, Play moves on to Up Next, and Next and autoplay
+  skip it.
 - **A host that can't start part way** (it serves no byte ranges): a
   resume plays from the top ("Server can't resume: playing from top"), and
   Legato sends no position until playback passes where you were, so your
@@ -254,10 +253,12 @@ devices.
   the episode playing (mpv runs on its own), not synced and not paused
   before sleep, until you stop it or Legato is back; then the next Play
   asks Pocket Casts, and its answer wins over what played meanwhile.
-- **Updating from 1.0:** restart the shell once afterwards (`omarchy
-  restart shell`, or log out and in). Omarchy keeps 1.0's background part
-  running through the update, so the panel says so and Settings and Stats
-  wait until then.
+- **After an update, restart the shell** (`omarchy restart shell`, or log
+  out and in). The shell keeps running the panel and background part it
+  already loaded until it restarts, beside Legato's new helper. From 1.0,
+  that's 1.0's panel, whose Settings page is empty meanwhile (playback and
+  syncing carry on, under 1.1's rules); later updates say "restart the
+  shell to finish" in the panel.
 - **Omarchy reloads every plugin when any plugin's files change** (an
   update, an install), and that ends whatever Legato was doing at that
   moment; a play cut short starts over at the next Play. Rarely, a sign-in
@@ -440,9 +441,11 @@ which stay off; a key that isn't a setting is kept and named.
   key), a sleep Legato missed, or a long stall, and a paused one only if it
   moved since the last send under 90 seconds ago. Anything older waits for
   the next resume to ask, so a pause, stop or skip here doesn't rewind your
-  phone. The one place of this computer's kept over Pocket Casts' answer is
-  one whose send failed (the network was down), further on, within the
-  hour; never what played while Legato wasn't watching.
+  phone. A place this computer couldn't send (the network was down) is
+  where the episode starts again, even after the player closed, as long as
+  nobody else has moved it since (within the hour); anything your phone
+  sent since wins. An episode that ends on a resume nobody checked yet (a
+  media key) asks Pocket Casts before it's marked played.
 - **Before sleep,** a small guard holds a logind sleep delay while an
   episode is loaded. When the computer is about to sleep it pauses the
   episode, sends your position (within 4 seconds) and lets go.

@@ -5,9 +5,11 @@ import qs.Commons
 // and no screen limit (tests/qml only).
 Item {
   id: kp
-  property var anchorItem: null
+  // Required, as in the real one: a panel that leaves either out can't be
+  // created on the shell.
+  required property Item anchorItem
+  required property QtObject bar
   property var owner: null
-  property var bar: null
   property bool open: false
   // As the real one: shown while open and while its card fades out after a
   // close (a test sets `fading`).

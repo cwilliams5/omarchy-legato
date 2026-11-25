@@ -14,10 +14,9 @@ Cody's work setup.
 
 Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
-(docs/PLAN.md phases H and SR: rounds 1-13 fixed; round 13 was the first
-in which neither reviewer found anything critical or high, and its three
-safety mediums, which could still rewind a phone, are fixed; round 14
-next). Cody, 2026-11-24: SR86 (settings in Legato's own file)
+(docs/PLAN.md phases H and SR: rounds 1-14 fixed; round 14's one high, a
+place this machine couldn't send lost once the player closed, is fixed;
+round 15 next). Cody, 2026-11-24: SR86 (settings in Legato's own file)
 and SR63 (one live service on a replacement bar) were folded into 1.1.0
 before round 10, and the review loop runs for as long as rounds keep
 finding critical or high issues (stop: a round with none, and every
@@ -72,16 +71,13 @@ what the API lists, or touch the user's Hyprland config.
 - **On Cody's laptop:** working copy `~/Work/omarchy-legato`; installed with
   `omarchy plugin add` from this repo, so the live folder
   `~/.config/omarchy/plugins/io.github.cwilliams5.legato` is a git clone;
-  Cody's dotfiles (`~/Work/dotfiles`, chezmoi) list it in
-  `home/.chezmoidata/plugins.yaml` and track its bar placement in
-  `shell.json`.
+  Cody's dotfiles record the plugin and its bar placement.
 - **Origin:** a hard fork of Nine Point Labs' Pocket Casts plugin,
   [Ninepointlabs-Omarchy-Extras/omarchy-pocketcasts](https://github.com/Ninepointlabs-Omarchy-Extras/omarchy-pocketcasts)
   (MIT), taken at v0.1.1 (`d039ee8`, 2026-10-17) with its full history (remote
   `original`). The fixes were first written as a soft fork,
-  `cwilliams5/omarchy-pocketcasts` (public GitHub fork, working copy
-  `~/Work/omarchy-pocketcasts`), which stays for the upstream PRs: keep it
-  while they're open.
+  `cwilliams5/omarchy-pocketcasts` (public GitHub fork), which stays for
+  the upstream PRs: keep it while they're open.
 
 ## Identity
 
@@ -187,17 +183,23 @@ docs/PLAN.md         what's left to build
 2. **Every resume asks Pocket Casts first** (`check_server`): the top of Up
    Next and this episode's record. Its answer wins: seek to where another
    device left off, follow it to a different episode, or stop if it finished
-   everything. A local place further on is kept only where a push of a
-   confirmed stretch failed (`unsentPush`, recorded by the failure itself,
-   within the hour of it, the place still where it was: `keep_local`):
-   never what played during a gap (Legato off, a sleep it missed), after a
-   resume Pocket Casts couldn't confirm, nor a stretch that played and
-   paused again with nobody asking (a media key while Legato was off: the
-   first poll marks it `unconfirmed`, `moved_unasked`); that stretch is no
-   news. An end reached during a gap or unconfirmed is no news either
-   (`finish_current`): the record is read first, as a retry does, nothing
-   is marked played if another device moved it (the player closes; the
-   next Play follows Pocket Casts), and nothing autoplays. Another episode's record
+   everything: whenever its place differs from this machine's last push,
+   another device wrote, and that wins over anything that moved here
+   unpushed (a gap's stretch, an unconfirmed resume's, a stall's, a place
+   whose push failed). The one local place kept is where a push failed
+   (`unsentPush`, recorded by the failure itself), and only by a reload of
+   the same episode (Play after the player closed, a break's reload, Play
+   from a list: `play_item`'s `kept_place`): within the hour of the
+   failure, and only while Pocket Casts still holds this machine's last
+   push (nobody else has written since). A loaded player needs no keep: it
+   seeks only on another device's write. A stretch that played and paused
+   again with nobody asking (a media key while Legato was off) is marked
+   `unconfirmed` by the first poll (`moved_unasked`), so nothing pushes it.
+   An end reached during a gap, unconfirmed, or on a resume nobody checked
+   yet (`checkServer`) is no news either (`finish_current`): the record is
+   read first, as a retry does, nothing is marked played if another device
+   moved it (the player closes; the next Play follows Pocket Casts), and
+   nothing autoplays. Another episode's record
    (`user_episode` checks the uuid) is no answer. This covers resumes the bridge didn't cause: a poll that sees
    a pause sets `checkServer`, and a gap of `RECHECK_AFTER` (90 s) since the
    last push while playing (sleep, shell down) counts as a resume. Nothing
@@ -240,7 +242,11 @@ docs/PLAN.md         what's left to build
    `TextInput`, `TextEdit`, `TextArea`: Qt 6.12 reads the clipboard into
    them by itself), the sign-in fields paste only through `bridge paste`
    (4 KiB, 2 s, wl-paste's whole process group killed after); every file is
-   opened relative to a checked directory descriptor. The About page's privacy text must stay
+   opened relative to a checked directory descriptor; HOME and the XDG
+   directories are honoured only as absolute paths (normalized), and one
+   set but unusable stops the call (`bad_env`) rather than fall back to the
+   account's real home (a reviewer's `..` path once acted on the real
+   account that way). The About page's privacy text must stay
    true (tests compare it with the hosts the bridge can reach).
 7. **Every text that comes from outside renders as plain text**
    (`Text.PlainText`): episode titles, error messages, mpv's error strings.
@@ -355,7 +361,13 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   phone to another episode). Next and autoplay start from Up Next's sync
   data, or from the record when the reply leaves an episode's out
   (`next_in_up_next`). Episodes of shows you never followed, played by
-  nobody, have no record and play from the public list as before.
+  nobody, have no record and play from the public list as before. An
+  episode gone from its feed is the one exception to "no answer": a feed
+  that keeps only its newest episodes drops it, and Pocket Casts forgets
+  it too (its record comes back empty). When the show's own list loads
+  and lacks it (`left_its_feed`; an empty list or one that won't load
+  proves nothing), it's `gone`: Play with nothing loaded moves on to Up
+  Next, Next and autoplay skip it, and nothing is pushed for it.
 - **Idle unload:** paused for `unloadAfterMinutes` (15), the player closes
   (`stop --if-paused`). The next play goes through `resume_last`, which asks
   Pocket Casts what to play.
@@ -405,9 +417,9 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   reload) asks you to mark the episode played, never doing it itself; the
   first stop there says "Stream dropped" (a link that went a second after
   a resume isn't the end of anything). On a host without ranges, a stop
-  where the show's skip-outro has it stop is the end too. Play loads it again from Pocket Casts' position, or from this
-  machine's further one if its push failed within the hour
-  (`unsentBreak`). Where it starts is never "from the top" because it's at
+  where the show's skip-outro has it stop is the end too. Play loads it again from Pocket Casts' position, or from where
+  it broke if that push failed and nobody wrote since (`kept_place`,
+  above). Where it starts is never "from the top" because it's at
   or past the listed length (`start_position`): files run longer than
   listed (ads inserted on the fly), and that pushed 0 to every device.
 - **The self-check** (`cmd_watchcheck`, `bridge watchcheck`): the watcher
@@ -459,7 +471,9 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   lose a rotated refresh token. For the same reason the call's deadline
   waits while a refresh is answered and stored (`deadline_held`), and the
   sleep guard never refreshes (`REFRESH_ALLOWED`). So on a
-  hanging network Play can wait 5 s per request, plus a due refresh. A
+  hanging network Play can wait 5 s per request, plus a due refresh (what
+  follows an answer, an empty record's other lookups or a switch to
+  another episode, takes the usual 15 s per request). A
   poll's check takes the usual time, so a slow link still confirms and
   pushes.
 - **Listening stats** (`stats.json`, the Stats page): `count_listening` runs
@@ -494,7 +508,10 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   many seconds), pushes its position if it gets the lock within 2 s (4 s
   per request and `SLEEP_GUARD_DEADLINE`, 10 s, for all of it; with the
   current sign-in only, never waiting for the auth lock: a refresh cut
-  short there could sign you out), sets `checkServer`, and exits, releasing the delay; the
+  short there could sign you out), sets `checkServer`, and exits, releasing the delay (an
+  episode already paused: it first waits up to `SLEEP_PLAY_WAIT`, 6 s, for
+  a Play in flight, which holds the state lock, and pauses what that Play
+  started, `pause_after_play`); the
   service starts a fresh guard 3 s later. A guard that fails instead
   waits longer each time (6 s, doubling) and after five failures in a row
   the service gives up and says so, until the next episode is loaded. A
@@ -548,9 +565,10 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
 - **The web player has the same resume problem solved**: on window focus
   while paused it refreshes Up Next and in-progress and adopts the server's
   position unless a local save is pending ("user returned" in its bundle).
-  `check_server` follows a similar rule: Pocket Casts' position wins,
-  except a local one this machine never got through that is further on,
-  and only within the hour (`UNSENT_BREAK_KEPT`).
+  Legato's rule is stricter: Pocket Casts' position wins whenever anyone
+  else wrote since this machine's last push; a place this machine couldn't
+  send is kept only while nobody did, within the hour (`kept_place`,
+  `UNSENT_KEPT`).
 - **The iOS app pushes on pause**, subject to a server-set minimum gap
   between saves; right after pausing the phone, the server can lag a few
   seconds.
@@ -592,18 +610,30 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   and it goes dormant again. One copy per screen remains if a replacement
   bar shows the chip on two screens (README Known limits); the bridge acts
   on settings.json for the settings that act, so they can't disagree.
-- **Omarchy keeps a `keepLoaded` service through a plugin reload** (any
-  file change in the plugin folder: `omarchy plugin update`, install.sh)
-  and rebuilds the widgets from the new files, and it decides what to keep
-  from the manifest it had before the rescan (`reloadPlugins`:
-  `unloadPluginServices`, then `rescan`). Legato 1.0's manifest said
-  keepLoaded (from the original), so updating to 1.1 leaves the 1.0 service
-  running under the 1.1 panel until the shell restarts: the panel sees no
-  `apiVersion` (`serviceCurrent`), says "restart the shell to finish",
-  hands it the bar entry the 1.0 way and leaves Settings and Stats alone
+- **A plugin reload (any file change in a plugin folder: `omarchy plugin
+  update`, install.sh) rebuilds widgets and services from the QML already
+  compiled.** `reloadPlugins` calls `Qt.clearComponentCache()` only if it
+  exists, and in Quickshell 0.3.2 it doesn't (measured by the round 14 fit
+  reviewer, and Locus's strict review 2: changed QML and `.pragma
+  library` files keep their old code through destroy, gc and a Loader
+  reload). So an update runs the old QML against the new bridge, watcher
+  and manifest.json until the shell restarts: the bridge must answer the
+  previous release's QML. From 1.0.2 that's 1.0's panel and service (its
+  Settings page empty: it reads `barWidget.schema`, now `legatoSettings`);
+  the 1.1 bridge parses every call 1.0 makes, and `setting_now`'s None
+  before the import leaves 1.0's choices to it. From 1.1 on, `status` says
+  the files' version (`files_version`) and the service compares it with
+  its own (`Model.qmlVersion`, kept equal to manifest.json's by a test): a
+  newer one puts "restart the shell to finish" in the status line
+  (`updatedOnDisk`). Omarchy also keeps a `keepLoaded` service through a
+  reload, deciding from the manifest it had before the rescan
+  (`unloadPluginServices`, then `rescan`); 1.0's said keepLoaded, 1.1's
+  doesn't. Should a shell clear its component cache on a reload, the 1.1
+  panel would meet 1.0's kept service: it sees no `apiVersion`
+  (`serviceCurrent`), says "restart the shell to finish", hands it the bar
+  entry the 1.0 way and leaves Settings and Stats alone
   (tests/qml/service.qml runs it against 1.0.2's real Service.qml,
-  tests/qml/v1_0). 1.1 has no keepLoaded: later updates reload the service
-  too (mpv is detached; the guard and the proxy restart).
+  tests/qml/v1_0).
 - **Destroying a Quickshell Process kills its child** (tested 2026-11-24 with
   a throwaway instance: the destroyed one's `sleep` ended at once, a kept
   one's ran on). A plugin reload destroys the service (1.1 has no
@@ -674,8 +704,8 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   open window and adds a `hl.on("window.open")` hook (once, checked with
   `is_active()`) that sets it on each new one. Only the inactive opacity
   is see-through: mpv draws its right-click menu inside the window, so the
-  window is solid while it has focus (a right-click focuses it; Cody's
-  Hyprland focuses on click, `follow_mouse` 0).
+  window is solid while it has focus (a right-click focuses it, where
+  Hyprland focuses on click).
   mpv needs `WAYLAND_DISPLAY` to draw at all: without it, selecting a
   video track silently does nothing. The first video of a session takes
   about 2.5 s (GPU set-up). mpv lists an episode's cover art as a video
@@ -749,15 +779,15 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   `--osc=no` keeps the video window to just the picture, and
   `script-message osc-visibility never` hides it on a player already
   running.
-- **Hybrid GPUs** (Cody's laptop: Intel Iris Xe drives the display, an
-  NVIDIA RTX A2000 is render-only): libplacebo picked the NVIDIA GPU for
+- **Hybrid GPUs** (an Intel GPU driving the display, an NVIDIA one
+  render-only): libplacebo picked the NVIDIA GPU for
   the video window (1.8 s to create the device, ~450 MB mapped, dGPU awake)
   and once deadlocked mpv's video output (all threads waiting, IPC silent,
   killable). With `VK_LOADER_DRIVERS_DISABLE=*nvidia*` (set by the bridge
   only when NVIDIA drives no connected display) it uses the Intel GPU:
   1.5 ms, ~98 MB, vaapi decoding. A hung player is detected (2 s answer
-  check) and ended by the watchdog; `ptrace_scope` is 1 here, so a hung
-  mpv can't be stack-traced without sudo.
+  check) and ended by the watchdog; with Yama's `ptrace_scope` at 1 (a
+  common default), a hung mpv can't be stack-traced without sudo.
 - **Trim with video:** the picture falls behind at each cut pause (the
   Pocket Casts Android app does the same); `--framedrop=decoder+vo` helps it
   catch up.
@@ -832,10 +862,10 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   network does: `self.fake["fail"] = {"/sync/update_episode": 1}`.
 - **Live:** push, then `omarchy plugin update io.github.cwilliams5.legato
   --yes` (it refuses without `--yes`, and refuses a live clone with local
-  changes). Omarchy reloads the plugin on any file change (service and
-  widgets, since 1.1 has no keepLoaded); `omarchy restart shell` is the
-  clean way to be sure (the bar blinks once; playback continues, mpv is
-  detached). Bridge-only changes need nothing.
+  changes). Omarchy reloads the plugin on any file change, but from the
+  QML it already compiled (above): `omarchy restart shell` is what runs the
+  new QML (the bar blinks once; playback continues, mpv is detached).
+  Bridge-only changes need nothing.
 - **A running mpv keeps the options it started with.** New mpv flags reach
   only players started afterwards (after Stop or the idle unload). Anything
   the current player needs (window keys, `menu-data`, OSD settings) is also

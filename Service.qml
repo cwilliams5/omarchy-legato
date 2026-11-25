@@ -23,10 +23,16 @@ Item {
   // one Legato, not two.
   property bool active: false
   // What a panel can ask of this service (Panel.qml serviceCurrent). A 1.0
-  // service has none: Omarchy kept it running through the update to 1.1
-  // (its manifest said keepLoaded) under the new panel, until the shell
-  // restarts.
+  // service has none. Today's shell (Quickshell 0.3.2) keeps every plugin's
+  // compiled QML through an update, so a 1.0 panel stays with it; a shell
+  // that clears its component cache on a reload (Omarchy calls it when it
+  // exists) would put the 1.1 panel over 1.0's kept service (keepLoaded).
   readonly property int apiVersion: 2
+  // The version of the files on disk (the bridge's `status`): newer than
+  // this code's (Model.qmlVersion) after an update the shell hasn't
+  // restarted for. The panel asks for a restart.
+  property string filesVersion: ""
+  readonly property bool updatedOnDisk: filesVersion !== "" && filesVersion !== Model.qmlVersion
   // Panels holding the shell's copy awake (claim/release). When the last one
   // goes (Omarchy's bar swapped for a replacement at run time), the copy
   // goes dormant again a moment later, so the replacement bar's own copy is
@@ -433,6 +439,7 @@ Item {
       root.probedAt = Date.now()
       root.lastItem = d.last || {}
       root.pythonVersion = /^[0-9]{1,3}(\.[0-9]{1,3}){1,2}$/.test(String(d.python || "")) ? d.python : ""
+      root.filesVersion = typeof d.version === "string" ? d.version : ""
       if (d.settings && settingsChange === root._settingsChanges) root.applySettings(d.settings)
       if (root.authenticated || d.running === true) root.refreshPlayer()
       if (root.authenticated) root.loadUpNextIfStale()

@@ -164,8 +164,8 @@ BROKE_SLACK = 10
 # A load that started this far short of where it was asked couldn't start
 # part way (below_start).
 START_SLACK = 5
-# A break's position Pocket Casts never got is kept this long (resume_last).
-UNSENT_BREAK_KEPT = 3600
+# A place Pocket Casts never got (its push failed) is kept this long (kept_place).
+UNSENT_KEPT = 3600
 # Extra mpv arguments; the test suite sets --ao=null here.
 MPV_EXTRA_ARGS = ()
 SPEEDS = (0.8, 1.0, 1.1, 1.2, 1.3, 1.5, 1.7, 2.0, 2.5, 3.0)
@@ -256,8 +256,11 @@ class ApiError(Exception):
 TRUSTED_BIN_DIRS = ("/usr/bin", "/bin", "/usr/sbin", "/sbin", "/run/current-system/sw/bin")
 TRUSTED_PATH = ":".join(TRUSTED_BIN_DIRS)
 
-# Directory variables, honoured only as clean absolute paths. XDG_RUNTIME_DIR
-# is also where mpv finds PipeWire/PulseAudio.
+# Directory variables, honoured only as absolute paths (normalized: "/a/b/../c"
+# is "/a/c", as the caller meant). One set but unusable stops the call rather
+# than fall back to the account's real home: a test pointing HOME at a scratch
+# folder through ".." once acted on the real state and Pocket Casts account.
+# XDG_RUNTIME_DIR is also where mpv finds PipeWire/PulseAudio.
 PATH_ENV_NAMES = ("HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME",
                   "XDG_DATA_HOME", "XDG_RUNTIME_DIR")
 # What mpv-mpris needs to publish the player on the session bus.
@@ -272,13 +275,14 @@ CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def clean_env_value(name, value):
-    """`value` when it is a bounded single-line string (and, for a directory
-    variable, a normalized absolute path); "" for anything else."""
+    """`value` when it is a bounded single-line string (for a directory
+    variable, an absolute path, normalized); "" for anything else."""
     if not isinstance(value, str) or not value or len(value) > 4096 or CONTROL_RE.search(value):
         return ""
     if name in PATH_ENV_NAMES:
-        if not value.startswith("/") or value.startswith("//") or os.path.normpath(value) != value:
+        if not value.startswith("/") or value.startswith("//"):
             return ""
+        return os.path.normpath(value)
     return value
 
 
@@ -292,6 +296,8 @@ def scrub_environment():
         value = clean_env_value(name, os.environ.get(name))
         if value:
             kept[name] = value
+        elif name in PATH_ENV_NAMES and os.environ.get(name):
+            raise ApiError("bad_env", "%s isn't a usable absolute path: Legato won't guess where your files are" % name)
     os.environ.clear()
     os.environ.update(kept)
     os.environ["PATH"] = TRUSTED_PATH
@@ -1348,6 +1354,22 @@ def position_known_elsewhere(uuid):
         return True
 
 
+def left_its_feed(uuid, podcast_uuid):
+    """Whether the show's own episode list loads and no longer has this
+    episode: a feed that keeps only its newest episodes dropped it, and
+    Pocket Casts forgot it with it (its record comes back empty). Can't tell
+    (no show given, the list didn't load, or came back empty): False."""
+    if not podcast_uuid:
+        return False
+    try:
+        show = fetch_show(podcast_uuid)
+    except ApiError:
+        return False
+    listed = {str((e or {}).get("uuid") or "").lower() for e in show.get("episodes") or [] if isinstance(e, dict)}
+    listed.discard("")
+    return bool(listed) and safe_uuid(uuid) not in listed
+
+
 def resolve_episode(uuid, podcast_uuid=""):
     """An episode with a playable URL: from your Pocket Casts record, or —
     for a show you don't follow — from the show's public episode list."""
@@ -1360,7 +1382,12 @@ def resolve_episode(uuid, podcast_uuid=""):
         # one you don't, an episode anyone played has one (a push creates it)
         # and shows in Up Next's sync data or In Progress. None came back (a
         # 404, an empty answer, a change in its unofficial API): the public
-        # list would start it at 0, and that would be pushed.
+        # list would start it at 0, and that would be pushed. Unless it's
+        # gone: no longer in the show's list either (a feed that keeps only
+        # its newest episodes); then nothing plays it, and Play and Next move
+        # on (resume_last, next_in_up_next).
+        if left_its_feed(uuid, podcast_uuid):
+            raise ApiError("gone", "That episode has left its show's feed")
         raise ApiError("no_record", "Pocket Casts didn't answer: try again")
     item = norm_episode(raw) if raw else None
     if item and item["url"]:
@@ -2178,7 +2205,7 @@ def number(value):
 # where a time belongs raised in every command that read it, so Stop
 # couldn't stop and an end was never handled until the file was deleted.
 PLAYBACK_NUMBERS = ("lastSyncAt", "lastSyncPos", "lastSyncSleep", "position", "stallHandled", "pushFailures")
-PLAYBACK_OBJECTS = ("episode", "stream", "listening", "breakStrike", "unsentBreak", "unsentPush")
+PLAYBACK_OBJECTS = ("episode", "stream", "listening", "breakStrike", "unsentPush")
 ENTRY_NUMBERS = ("at", "tried", "left", "position", "duration")  # pendingFinish's entries, unsent places
 
 
@@ -2195,9 +2222,8 @@ def clean_playback(state):
     def well_formed(entry):
         return (isinstance(entry, dict) and isinstance(entry.get("uuid"), str)
                 and all(entry.get(k) is None or number(entry[k]) for k in ENTRY_NUMBERS))
-    for key in ("unsentBreak", "unsentPush"):
-        if key in state and not well_formed(state[key]):
-            del state[key]
+    if "unsentPush" in state and not well_formed(state["unsentPush"]):
+        del state["unsentPush"]
     if "pendingFinish" in state:
         pending = state["pendingFinish"]
         state["pendingFinish"] = [p for p in pending if well_formed(p)] if isinstance(pending, list) else []
@@ -2250,9 +2276,9 @@ def pushed(state, position):
 
 def push_failed(state, position):
     """A push of a place that played here, confirmed, never reached Pocket
-    Casts (the network dropped): the one local place kept over an answer
-    that's behind it, within the hour (check_server's keep_local). Not from
-    a call that slept: its place is from before the suspend."""
+    Casts (the network dropped): the one local place ever kept over Pocket
+    Casts' answer (kept_place). Not from a call that slept: its place is
+    from before the suspend."""
     if not slept_since_start():
         state["unsentPush"] = {"uuid": (state.get("episode") or {}).get("uuid") or "",
                                "position": float(position), "at": time.time()}
@@ -2266,6 +2292,26 @@ def unsent_push(state):
             and number(unsent.get("position")) and number(unsent.get("at"))):
         return unsent
     return None
+
+
+def kept_place(state, server):
+    """Where to start the episode `state` names again instead of Pocket
+    Casts' place `server`, or None: the place of a push that failed
+    (`unsentPush`), within the hour of the failure, while Pocket Casts still
+    holds this machine's last confirmed push (`lastSyncPos`): nobody else
+    has written since, so this machine's place is the latest there is. Any
+    other write (your phone, going back on purpose, or on) wins.
+
+    Only a reload of the same episode uses it (play_item: Play after the
+    player closed, a break's reload, Play from a list). A loaded player needs
+    no rule: its resume check seeks only when Pocket Casts' place differs
+    from this machine's last push, which is another device's write."""
+    unsent = unsent_push(state)
+    if unsent is None or time.time() - unsent["at"] >= UNSENT_KEPT:
+        return None
+    if abs(server - (state.get("lastSyncPos") or 0)) > DRIFT_SLACK:
+        return None
+    return unsent["position"]
 
 
 def moved_unasked(state):
@@ -2501,16 +2547,26 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
     (another device moved on): the outgoing episode's local position is out
     of date then, and pushing it would rewind that device."""
     position = start_position(item, from_start)
+    server_place = position
     start_from, skip_last = show_skips(item.get("podcast", ""))
     duration = as_int(item.get("duration"))
     intro = 0
-    if (position == 0 and not from_start and start_from
+    previous = load_playback()
+    current = previous.get("episode") or {}
+    # A reload of the episode playback.json names (Play after the player
+    # closed, a break's reload, Play from a list): from the place a push
+    # couldn't send, if nobody moved it since (kept_place), not from Pocket
+    # Casts' older one. Never for an episode played to its end.
+    kept = None
+    if not from_start and current.get("uuid") == item.get("uuid") and item.get("status") != STATUS_PLAYED:
+        kept = kept_place(previous, as_int(item.get("playedUpTo")))
+    if kept is not None:
+        position = kept
+    elif (position == 0 and not from_start and start_from
             and (not duration or start_from < duration - FINISH_SLACK)):
         # The show's skip-intro, for an episode starting from the top (as the
         # Pocket Casts apps do it; "play from the start" means the start).
         position = intro = start_from
-    previous = load_playback()
-    current = previous.get("episode") or {}
     # Switching away mid-episode: save where you were in the old one (unless
     # it just finished, which already marked it played).
     if (save_previous and current.get("uuid") and current.get("uuid") != item.get("uuid")
@@ -2519,7 +2575,7 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
     # atTop: whether this episode is the top of Up Next, i.e. what Pocket
     # Casts considers playing. If the top later changes, another device has
     # moved on to something else (see check_server).
-    state = {"episode": chip_item(item), "lastSyncPos": position,
+    state = {"episode": chip_item(item), "lastSyncPos": position if kept is None else server_place,
              "recordSeen": bool(item.get("fromRecord")),
              "position": position, "handledEnd": "", "atTop": bool(at_top),
              # Episodes that ended here while Pocket Casts couldn't be told;
@@ -2529,6 +2585,8 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
              "pendingFinish": [p for p in previous.get("pendingFinish") or []
                                if p.get("uuid") != item.get("uuid")]}
     synced(state)
+    if kept is not None:
+        state["unsentPush"] = previous["unsentPush"]  # until a push of it goes through
     strike = previous.get("breakStrike")
     if isinstance(strike, dict) and strike.get("uuid") == item.get("uuid"):
         state["breakStrike"] = strike  # a reload of the episode that just broke (stream_stopped)
@@ -2553,6 +2611,9 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
         save_playback(state)
     try:
         push_position(item, position)
+        if kept is not None:
+            pushed(state, position)  # Pocket Casts has it now
+            save_playback(state)
     except ApiError:
         pass
     # The cover last: a call cut off fetching it (a slow host, the deadline)
@@ -2618,7 +2679,12 @@ def next_in_up_next(state, current=""):
                 # one (Up Next leaves it out for episodes not started, and a
                 # reply can miss the entry), from its record, which refuses
                 # an empty lookup rather than start it at 0 and push that.
-                item = resolve_episode(uuid, item["podcast"])
+                try:
+                    item = resolve_episode(uuid, item["podcast"])
+                except ApiError as err:
+                    if err.code == "gone":
+                        continue  # left its feed: Pocket Casts can't play it either
+                    raise
             return item
     return None
 
@@ -2633,13 +2699,14 @@ def finish_current(state, prefs, autoplay):
     polls (`pendingFinish`), while the next episode plays too.
 
     An end reached while nobody watched (a gap: Legato off, a sleep it
-    missed) or on a resume Pocket Casts never confirmed may be over a phone
-    that went back into the episode meanwhile: its record is read first, as
-    a retry does, and another device's say stands (nothing is marked
-    played). Nothing new starts by itself then: Play does that."""
+    missed), on a resume Pocket Casts never confirmed, or on one nobody has
+    checked yet (a media key's, before any poll asked: `checkServer`) may be
+    over a phone that went back into the episode meanwhile: its record is
+    read first, as a retry does, and another device's say stands (nothing
+    is marked played). Nothing new starts by itself then: Play does that."""
     episode = state.get("episode") or {}
     uuid = episode.get("uuid", "")
-    unwatched = bool(state.get("unconfirmed")) or sync_age(state) >= RECHECK_AFTER
+    unwatched = bool(state.get("unconfirmed") or state.get("checkServer")) or sync_age(state) >= RECHECK_AFTER
     add_stats(finished=1)
     state["handledEnd"] = uuid
     state["endedAutoplay"] = bool(autoplay)
@@ -3161,10 +3228,8 @@ def stream_stopped(state, prefs, position, stalled=False, unproven=False):
                 episode["playedUpTo"] = int(position)
             except ApiError:
                 # Pocket Casts never got it: the next Play carries on from
-                # here, within the hour (resume_last). Not a place from
-                # before a sleep this call slept through.
-                if not slept_since_start():
-                    state["unsentBreak"] = {"uuid": episode.get("uuid"), "position": float(position), "at": time.time()}
+                # here, if nobody else moved it meanwhile (kept_place).
+                push_failed(state, position)
     # It stopped where this load began. Once, the link may simply have gone
     # (a second after a resume); twice in a row at the same spot, nothing
     # more of it arrives (it may be its end, misjudged): say how to mark it
@@ -3275,18 +3340,14 @@ def check_server(state, prefs, player=None, quick=False):
         server = as_int(record.get("playedUpTo"))
         last_pushed = state.get("lastSyncPos") or 0
         local = state.get("position") or 0
-        # Keep a local position only when it's where a push of a stretch that
-        # played here, confirmed, failed (`unsentPush`: Pocket Casts never got
-        # it), further on than what another device saved, within the hour of
-        # that push (a phone rewound on purpose later wins), and not while
-        # the place is `unconfirmed`. Nothing else that moved unpushed is
-        # news: what played during a gap (Legato off, a sleep it missed) or
-        # after a resume nobody confirmed, or where a stall left it. You
-        # may have rewound the phone meanwhile, and the answer wins.
-        unsent = unsent_push(state)
-        keep_local = (unsent is not None and abs(local - unsent["position"]) <= DRIFT_SLACK and local > server
-                      and not state.get("unconfirmed") and time.time() - unsent["at"] < UNSENT_BREAK_KEPT)
-        if abs(server - last_pushed) > DRIFT_SLACK and not keep_local:
+        # Pocket Casts' place differs from this machine's last push: another
+        # device wrote since (or this machine's push landed and its reply was
+        # lost: the seek then goes to about where it is). Its answer wins,
+        # over anything that moved here unpushed: what played during a gap,
+        # after a resume nobody confirmed, where a stall left it, a place
+        # whose push failed. The same place: nobody moved it, and playing on
+        # from here keeps any place a failed push couldn't send.
+        if abs(server - last_pushed) > DRIFT_SLACK:
             own = player is None
             player = player or Mpv.connect()
             refused = False
@@ -3691,6 +3752,7 @@ def cmd_status(args):
         "socket": player_socket(),
         "last": chip_item(episode),
         "python": "%d.%d.%d" % sys.version_info[:3],  # for the About page
+        "version": files_version(),  # the files' version: newer than the QML's after an update
         "settings": status_settings(),
     })
 
@@ -4142,7 +4204,8 @@ def cmd_play(args):
 def resume_last(prefs):
     """Nothing is loaded (mpv was closed, or the machine restarted): pick up
     the last episode where Pocket Casts says you left it (or further, where
-    this machine got to and couldn't tell it), else the top of Up Next.
+    this machine got to and couldn't tell it if nobody moved it since:
+    play_item's kept_place), else the top of Up Next.
     Another device may have finished it or moved on to something else
     since; then the top of Up Next is what plays, and the last episode is
     neither restarted nor queued again."""
@@ -4155,9 +4218,12 @@ def resume_last(prefs):
         try:
             item = resolve_episode(episode["uuid"], episode.get("podcast", ""))
         except ApiError as err:
-            if err.code == "no_record":
-                raise  # no answer about it: never something else, never from 0
-            item = None
+            if err.code not in ("gone", "not_found"):
+                # No answer about it (an empty lookup, the network): never
+                # something else, never from 0, and never past a place
+                # this machine couldn't send. Try again.
+                raise
+            item = None  # gone from its feed, or no audio: Up Next's next
         if item and state.get("recordSeen") and not item.get("fromRecord"):
             # Pocket Casts knew where you were in it and now says nothing: the
             # show's public list would start it from 0 and push that.
@@ -4171,19 +4237,12 @@ def resume_last(prefs):
                 top = None
             if top and top["uuid"] != item["uuid"]:
                 item = None
-    unsent = state.get("unsentBreak")
-    if (item and isinstance(unsent, dict) and unsent.get("uuid") == item.get("uuid")
-            and time.time() - (unsent.get("at") or 0) < UNSENT_BREAK_KEPT
-            and isinstance(unsent.get("position"), (int, float))
-            and unsent["position"] > as_int(item.get("playedUpTo"))):
-        # The stream broke while Pocket Casts couldn't be told where it got to
-        # (stream_stopped): carry on from there, within the hour. Pocket Casts
-        # being further on (another device listened on) wins, as always.
-        item = dict(item, playedUpTo=int(unsent["position"]))
     if not item:
         # Not an episode that ended here (its removal from Up Next may still
         # be pending): playing it from its sync data pushed it in progress.
-        item = next_in_up_next(state)
+        # Nor the last one itself: finished, moved on from, or gone from its
+        # feed (still on Up Next, it's no answer again).
+        item = next_in_up_next(state, episode.get("uuid", ""))
     if not item:
         raise ApiError("nothing_queued", "Up Next is empty — pick an episode to play")
     # The outgoing player is gone: nothing of it is pushed here (play_item
@@ -4285,7 +4344,7 @@ def cmd_seek(args):
             else:
                 # While paused, sync_now's rule decides: a seek right after
                 # pausing is sent; later, the next resume asks Pocket Casts.
-                sync_now(player, state, force=playing and not state.get("checkServer"))
+                sync_now(player, state, force=playing)  # (not after a resume nobody checked: sync_now)
         view = poll_after_change(load_playback(), load_prefs())
     out(view)
 
@@ -4361,6 +4420,7 @@ def cmd_speed(args):
 
 SLEEP_PUSH_TIMEOUT = 4
 SLEEP_GUARD_DEADLINE = 10
+SLEEP_PLAY_WAIT = 6  # how long a guard waits for a Play in flight (pause_for_sleep)
 
 
 def wait_for_sleep(lines):
@@ -4396,8 +4456,10 @@ def pause_for_sleep():
     if not player:
         return False
     with player:
-        if player.get("pause") is not False or player.get("eof-reached") is True:
+        if player.get("eof-reached") is True:
             return False
+        if player.get("pause") is not False:
+            return pause_after_play(player)
         # Paused first, before the state lock: a poll pushing on a slow link
         # can hold that for many seconds, and the machine is about to sleep.
         player.set("pause", True)
@@ -4416,6 +4478,29 @@ def pause_for_sleep():
         finally:
             lock.__exit__(None, None, None)
     return True
+
+
+def pause_after_play(player):
+    """Paused already, but a Play may be on its way (its resume check in
+    flight, holding the state lock): this guard would let the sleep go, and
+    the Play would unpause just before the suspend, playing on behind the
+    lock screen. Wait for it a moment, then pause what it started."""
+    try:
+        lock = StateLock(timeout=SLEEP_PLAY_WAIT)
+        lock.__enter__()
+    except ApiError:
+        return False
+    try:
+        if player.get("pause") is not False or player.get("eof-reached") is True:
+            return False
+        player.set("pause", True)
+        state = load_playback()
+        sync_now(player, state, force=True)
+        state["checkServer"] = True
+        save_playback(state)
+        return True
+    finally:
+        lock.__exit__(None, None, None)
 
 
 def cmd_sleepguard(args):
@@ -4658,20 +4743,44 @@ SETTINGS_FILE = "settings.json"
 SETTINGS_SAFE = {"autoplay": False, "unloadAfterMinutes": 0}
 
 
-def settings_schema():
-    """The settings, as manifest.json's `legatoSettings.schema` lists them
-    (the Settings page is drawn from the same list; not barWidget.schema,
-    whose readers write the widget's bar entry), from the plugin folder this
-    bridge runs from: the bridge's own code is there, so it's as trusted as
-    the bridge."""
+def manifest():
+    """manifest.json from the plugin folder this bridge runs from: the
+    bridge's own code is there, so it's as trusted as the bridge."""
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "manifest.json")
     with open(path, "rb") as f:
         blob = f.read(STATE_MAX_BYTES + 1)
     if len(blob) > STATE_MAX_BYTES:
         raise ApiError("bad_manifest", "manifest.json is too large")
     try:
-        schema = json.loads(blob.decode("utf-8"))["legatoSettings"]["schema"]
-    except (UnicodeDecodeError, ValueError, KeyError, TypeError):
+        data = json.loads(blob.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise ApiError("bad_manifest", "manifest.json can't be read")
+    if not isinstance(data, dict):
+        raise ApiError("bad_manifest", "manifest.json can't be read")
+    return data
+
+
+def files_version():
+    """The version of the files on disk (manifest.json): after an update the
+    shell keeps running the QML it compiled until it restarts (Quickshell
+    0.3.2 can't clear its component cache), while this bridge is the new
+    one. The service compares it with its own (Model.qmlVersion)."""
+    try:
+        version = manifest().get("version")
+    except (OSError, ApiError):
+        return ""
+    return version if isinstance(version, str) and re.match(r"^[0-9]{1,3}(\.[0-9]{1,3}){1,2}$", version) else ""
+
+
+def settings_schema():
+    """The settings, as manifest.json's `legatoSettings.schema` lists them
+    (the Settings page is drawn from the same list; not barWidget.schema,
+    whose readers write the widget's bar entry), from the plugin folder this
+    bridge runs from: the bridge's own code is there, so it's as trusted as
+    the bridge."""
+    try:
+        schema = manifest()["legatoSettings"]["schema"]
+    except (KeyError, TypeError):
         raise ApiError("bad_manifest", "manifest.json lists no settings")
     return [entry for entry in schema if isinstance(entry, dict) and isinstance(entry.get("key"), str)]
 
@@ -5044,7 +5153,11 @@ def deadline_held():
 
 
 def main(argv):
-    scrub_environment()
+    try:
+        scrub_environment()
+    except ApiError as err:
+        fail(err.code, err.message)
+        return 0
     args = build_parser().parse_args(argv)
     timed = args.command not in ("sleepguard", "proxy") and threading.current_thread() is threading.main_thread()
     if timed:

@@ -12,13 +12,13 @@ python3 -B tests/mutate.py .       # all of them, about 2 hours
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (403 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (434 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
 it. A mutation whose pattern no longer matches the code is reported STALE
 and fails the run (fix its pattern), as does one whose tests fail
 unmutated (SKIP).
 
-## The set (403; strict review rounds 1 to 13, 2026-11-24)
+## The set (434; strict review rounds 1 to 14, 2026-11-25)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
@@ -197,6 +197,20 @@ caught each mutant. By area:
   that hid whether a pause event brings one: steps split) and one test's
   premise was off (Play pressed before mpv had paused itself at the end).
   All three killed after.
+- Round 13's full run: 403 of 403. Round 14 (the reviewers' own): safety
+  3 of 18 survived (the https suspend check twice, the seek flag), fit 47
+  of 106 QML/JS (about 14 equivalent or doubly guarded): the real ones
+  planted now with tests (real keys through Omarchy's own key catcher,
+  the import from the bar entry, the debounce, a late show page, sign-out,
+  `legato stop`, the live position at speed). Round 14's set, its 45 new or
+  changed: 43 killed at first; "the reload falls to Up Next" was hidden by
+  Play now skipping the last episode itself (its test list now includes
+  the failed-lookup test), and "keys fire while typing" needed a key the
+  field leaves alone (an arrow: printable keys never reach the catcher).
+- Equivalent and left out (round 14): `keep_local` and its rules (the
+  loaded player's keep is gone: its check seeks only on another device's
+  write); the Stats/About keys while typing (the field takes printable
+  keys before the panel's key catcher sees them).
 - Equivalent and left out (round 13): the resume check's and
   reopen_ended's drops of an unsent push (a place the answer replaced, or
   an episode played again, is never within the 3 s the keep needs; the

@@ -1299,12 +1299,95 @@ Fit (three mediums, nothing critical or high):
   nobody asked about pushed" was the paused push's guard, now removed
   (above).
 
+### SR, round 14 (2026-11-25)
+
+Round 14's reports (kept outside the repo). Neither found anything
+critical; the safety reviewer found one high. Each finding checked against
+the code first.
+
+Before the reports came back (from tonight's own events):
+
+- [x] SR143 (an incident) A reviewer pointed HOME/XDG at a scratch folder
+  through a path with `..`; the bridge dropped it as not normalized and
+  fell back to the account's real home, acting on Cody's real state and
+  Pocket Casts account (an episode taken off Up Next, a clip played aloud,
+  settings changed; restored with his OK). Fixed: directory variables are
+  normalized absolute paths, and one set but unusable stops the call
+  (`bad_env`). Tested in process, with the account's own home faked too.
+  The strict-review skill's reviewer prompts now forbid running a
+  project's program outside its test harness.
+- [x] SR144 A feed that keeps only its newest episodes drops older ones,
+  and Pocket Casts forgets them (an empty record): Play said "Pocket Casts
+  didn't answer" for good, and Next could stick the same way. Now an
+  episode the show's own list no longer has (`left_its_feed`; a list that
+  won't load or comes back empty proves nothing) is `gone`: Play moves on
+  to Up Next, Next and autoplay skip it. Tests.
+
+Safety (one high, two mediums, two lows):
+
+- [x] SR145 (high) A place this machine played and couldn't send was lost
+  once the player closed (Stop, the idle unload): only a loaded player kept
+  it, and a transient lookup error fell through to Up Next at Pocket Casts'
+  older place. Fixed, and simpler: the keep moved to reloads of the same
+  episode (`play_item`'s `kept_place`: Play after the player closed, a
+  break's reload, Play from a list), with one rule: within the hour, while
+  Pocket Casts still holds this machine's last push (nobody else wrote
+  since). A loaded player needs none (it seeks only on another device's
+  write), so `keep_local` is gone, and so is the old trade-off (a phone
+  rewound on purpose within the hour was undone). The break's own unsent
+  place is the same record now (`unsentBreak` gone). Play with nothing
+  loaded raises "try again" on any lookup error but "gone" or "no audio".
+  Tests (Stop, the idle unload, an hour on, a write elsewhere, a failed
+  lookup, a replay of an episode finished elsewhere).
+- [x] SR146 (medium) An end reached on a resume nobody checked yet (a media
+  key, no poll before the end) was marked played over a phone that went
+  back: `unwatched` now counts `checkServer`. Test.
+- [x] SR147 (medium, tests) Pocket Casts' https transport never ran the
+  suspend check in a test: one now goes through the production opener to
+  a TLS host (both reviewer mutants killed).
+- [x] SR148 (lows) A media widget's seek while paused, reported as a seek,
+  is sent (and one nothing explains isn't): tests. A Play in flight as the
+  lid closes: the guard waits for it (`pause_after_play`, up to 6 s) and
+  pauses what it started. Test.
+- [x] SR149 (nits) cmd_seek's dead `checkServer` guard removed; CLAUDE.md's
+  "5 s per request" narrowed.
+
+Fit (nothing critical or high):
+
+- [x] SR150 (medium) An update runs the QML the shell already compiled
+  (Quickshell 0.3.2 can't clear its component cache; measured): from
+  1.0.2, 1.0's panel and service run against 1.1's bridge until the shell
+  restarts (Settings empty meanwhile; playback and sync under 1.1's rules,
+  the bridge parsing every call 1.0 makes). README, CLAUDE.md, install.sh
+  and H6 corrected. From 1.1 on, `status` says the files' version and the
+  service compares it with its own (`Model.qmlVersion`, kept equal to
+  manifest.json's): "restart the shell to finish" on a mismatch. The
+  1.1-panel-over-1.0-service handling stays, for a shell that clears its
+  cache. Tests.
+- [x] SR151 (medium, tests) Stand-ins closer to the platform: Omarchy's own
+  PanelKeyCatcher (a copy, checked against the installed one) and
+  KeyboardPanel's required properties. Tests with real keys: Enter on a
+  row plays once; typing in the sign-in fields types; Ctrl+key isn't
+  text; the length cap; a paste cancelled by focus moving. And: the 1.0
+  bar entry imported through the real chip; a late show page's answer;
+  the volume debounce; covers decoded small; `legato stop`; the live
+  position at speed; sign-out forgetting the lists.
+- [x] SR152 (low) Maintainer details in CLAUDE.md made neutral (dotfiles
+  paths, the old fork's working copy, Hyprland focus, the laptop's GPUs).
+- [ ] SR153 (lows, left) No i18n (not a regression); the chip's `refresh`
+  IPC reloads per screen on two screens; guards stacked two deep in a few
+  places; settings defaults listed twice in manifest.json; notifications
+  without an icon. The verification request should list what 1.1 adds:
+  notify-send, the self-check's 127.0.0.1 server and its detached process.
+
 - [ ] SR46 (see round 5) Re-shoot media/stats.png with representative
   numbers, on an empty workspace, after the code is final.
 - [ ] H6 Ship 1.1.0 (a minor version: the stats are a feature) with the
   `ship-update` skill: push (Cody), plugin update and install test (from
-  1.0.2 without a shell restart: the panel must say to restart, nothing
-  breaks; then after the restart, Settings and Stats work),
+  1.0.2 without a shell restart: 1.0's panel keeps running against the
+  1.1 bridge, Settings empty, playback, sync and its keys still working,
+  SR150; then after the restart, Settings and Stats work, and a later
+  1.1.x update says "restart the shell to finish"),
   marketplace scan, release notes and `gh release` (each on his go), and
   last of all the marketplace verification request (Cody approves the
   filing).
@@ -1423,6 +1506,18 @@ Fit (three mediums, nothing critical or high):
   tests; 403 mutations, the 65 new or changed all killed (three only
   after their tests were fixed: two that never reached the rule, one
   whose premise was off). Round 14 next.
+- 2026-11-25 (night): round 14 (SR143-SR153): one high (a place this
+  machine couldn't send was lost once the player closed): the keep moved
+  to reloads of the same episode, kept only while nobody else has written
+  since (simpler, and a write elsewhere now always wins). An end on an
+  unchecked resume asks first; Pocket Casts' https suspend check tested;
+  the sleep guard waits out a Play in flight. A reviewer's sandbox fell
+  back to the real home and acted on Cody's account (restored with his
+  OK): the bridge now refuses an unusable home instead. Episodes gone from
+  a rolling feed no longer stop Play. Updates run the old QML until a
+  restart (measured): docs corrected, and from 1.1 on the panel says so.
+  Real keys through Omarchy's own key catcher in the QML tests. 357
+  Python + 47 node tests; 434 mutations. Round 15 next.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

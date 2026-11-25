@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import Quickshell.Io
 import "../.." as Legato
+import "../../Model.js" as Model
 
 // The real Panel.qml and Service.qml, offscreen, with stand-ins for Omarchy's
 // components and Quickshell's processes (tests/qml/imports): no bridge runs;
@@ -452,6 +453,75 @@ Item {
     service.reportError("z")
     check("with the panel closed, an error is sent as a notification", JSON.stringify(notices()) === "[\"z\"]",
           JSON.stringify(notices()))
+    settle()
+
+    // Real keys through Omarchy's own PanelKeyCatcher (a copy). Enter on an
+    // episode row plays it, once: the catcher sends Enter as "return" then
+    // "activate", and activate alone is play/pause.
+    panel.open()
+    settle()
+    // (First: a row's cover decodes at twice the size it's shown, not 320 px
+    // for every row of every list.)
+    var cover = find(named("rowsRepeater").itemAt(0), function(i) { return i.sourceSize !== undefined && i.mipmap === true })
+    check("a row's cover decodes at twice its size", cover && cover.sourceSize.width <= 2 * Math.max(16, cover.width) + 1
+          && cover.sourceSize.width < 320, cover && (cover.sourceSize.width + " for " + cover.width))
+    keys.forceActiveFocus()
+    panel.cursorIndex = 0
+    events.keyClick(Qt.Key_Return)
+    check("Enter on a row plays it, and only that", calls("play").length === 1 && exactly("toggle").length === 0
+          && calls("pause").length === 0 && calls("resume").length === 0,
+          Processes.started.filter(function(p) { try { return p.alive } catch (e) { return false } })
+            .map(function(p) { return p.command.slice(-4).join(" ") }).join("; "))
+    settle()
+    // A show's page that answers late doesn't overwrite the one you opened since.
+    service.openDetail({ type: "podcast", uuid: "bbbbbbbb-0000-0000-0000-00000000000a", name: "Show A" })
+    service.openDetail({ type: "podcast", uuid: "bbbbbbbb-0000-0000-0000-00000000000b", name: "Show B" })
+    answerExactly("episodes bbbbbbbb-0000-0000-0000-00000000000a", { podcast: { name: "Show A" }, items: [top.episode], total: 1 })
+    check("a late answer for another show is dropped", service.detail && service.detail.item.name === "Show B"
+          && service.detail.loading === true, JSON.stringify(service.detail && service.detail.item))
+    service.closeDetail()
+    settle()
+    // Signed out: the sign-in fields. Typing goes into them, not to the
+    // panel's keys ("a" opens Stats elsewhere); Ctrl+key isn't text; the
+    // length is capped; a paste still under way when focus moves is dropped.
+    service.authenticated = false
+    var email = named("emailField")
+    email.text = ""
+    email.forceActiveFocus()
+    events.keyClick(Qt.Key_A)
+    check("typing in the email field types", email.text === "a" && !panel.showStats, email.text + " " + panel.showStats)
+    // Keys the field leaves alone go on up: the panel's key catcher must let
+    // them pass (`blocked`), or Left/Right switched the tab behind the card.
+    var tab = panel.currentTab
+    events.keyClick(Qt.Key_Right)
+    check("arrows in a sign-in field don't reach the panel's keys", panel.currentTab === tab, tab + " -> " + panel.currentTab)
+    events.keyClick(Qt.Key_B, Qt.ControlModifier)
+    check("Ctrl+key isn't text", email.text === "a", email.text)
+    email.text = new Array(email.maxLength + 1).join("x")
+    events.keyClick(Qt.Key_C)
+    check("the field stops at its length", email.text.length === email.maxLength, email.text.length)
+    email.text = "me"
+    events.keyClick(Qt.Key_V, Qt.ControlModifier)
+    check("(Ctrl+V asks for the clipboard)", exactly("paste").length === 1, exactly("paste").length)
+    keys.forceActiveFocus()
+    answerExactly("paste", { text: "@example.com" })
+    check("a paste under way when focus moves is dropped", email.text === "me", email.text)
+    service.authenticated = true
+    settle()
+    panel.close()
+
+    // Updated on disk, not yet restarted: the files say a newer version than
+    // this code (Quickshell keeps the QML it compiled): the panel asks for a
+    // restart; the same version says nothing.
+    service.refresh()
+    answerExactly("status", { authenticated: true, mpv: "/usr/bin/mpv", socket: "", python: "3.14", version: "9.9.9",
+                              settings: top.savedSettings })
+    check("files newer than the running code: restart the shell", panel.statusText === panel.restartNote, panel.statusText)
+    settle()
+    service.refresh()
+    answerExactly("status", { authenticated: true, mpv: "/usr/bin/mpv", socket: "", python: "3.14", version: Model.qmlVersion,
+                              settings: top.savedSettings })
+    check("the same version: no note", panel.statusText !== panel.restartNote, panel.statusText)
     settle()
 
     // Closing. The rows stay while the card fades out (emptied, it snapped

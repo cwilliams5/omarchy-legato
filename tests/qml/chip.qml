@@ -103,7 +103,8 @@ Item {
                    top.noticesOnce, top.quietReloads, top.chipShapes, top.idleWheel, top.idleWheelCheck, top.marquee,
                    top.touchpad, top.touchpadCheck, top.liveStatus, top.liveStatusCheck, top.guardBack,
                    top.guardRestart, top.guardRestartCheck, top.mpvEvents, top.pauseEvent, top.pauseEventPoll, top.seekEventPoll,
-                   top.toggles, top.idleUnload]
+                   top.toggles, top.idleUnload, top.volumeDebounce, top.volumeDebounceCheck, top.importFromBar,
+                   top.ipcStopAndSpeed, top.ipcStopAndSpeedCheck, top.signOutLists]
       if (top.step >= steps.length) { stop(); Qt.exit(top.failures); return }
       if (top.waits === 0) top.stepStarted = Date.now()
       // A step returns false to wait for a debounced call (up to 2 s).
@@ -414,6 +415,65 @@ Item {
     shared.unloadPlayer()
     check("the idle unload stops only a paused player", calls("stop --if-paused").length === 1,
           running().map(function(p) { return (argsOf(p) || []).join(" ") }).join("; "))
+    answerAll(top.answers)
+  }
+
+  // Volume changes in quick succession (a drag) go out as one call.
+  function volumeDebounce() {
+    answerAll(top.answers)
+    shared.applyPlayer(top.playing)
+    shared.setVolume(40)
+    shared.setVolume(45)
+  }
+  function volumeDebounceCheck() {
+    if (Date.now() - top.stepStarted < 300) return false  // past the 180 ms debounce
+    var vol = volumes()
+    check("two quick volume changes go out as one", vol.length === 1 && argsOf(vol[0])[1] === "45",
+          vol.map(function(p) { return argsOf(p).join(" ") }).join("; "))
+    answerAll(top.answers)
+  }
+
+  // A Legato 1.0 user's bar entry reaches the panel through the real chip
+  // (Omarchy injects it) and is copied into settings.json once, while
+  // there's no file yet (stored false): with it, their "autoplay off".
+  function importFromBar() {
+    answerAll(top.answers)
+    chip.settings = { id: "io.github.cwilliams5.legato", autoplay: false, unloadAfterMinutes: 0 }
+    var fresh = JSON.parse(JSON.stringify(top.settingsView))
+    fresh.stored = false
+    shared.applySettings(fresh)
+    var imports = running().filter(function(p) { var a = argsOf(p); return a && a[0] === "settings" && a[1] === "import" })
+    var entry = imports.length === 1 ? JSON.parse(argsOf(imports[0])[3]) : null
+    check("a 1.0 bar entry is copied into settings.json once", entry && entry.autoplay === false
+          && entry.unloadAfterMinutes === 0 && entry.id === undefined, JSON.stringify(entry) + " x" + imports.length)
+    answerAll(top.answers)
+  }
+
+  // `legato stop` stops; the live position moves at the playing speed.
+  function ipcStopAndSpeed() {
+    answerAll(top.answers)
+    var ipc = find(shared, function(i) { return i.objectName === "ipcLoader" }).item
+    ipc.stop()
+    check("legato stop stops", calls("stop").length === 1, calls("stop").length)
+    answerAll(top.answers)
+    var fast = JSON.parse(JSON.stringify(top.playing))
+    fast.speed = 2
+    shared.applyPlayer(fast)  // at 100
+  }
+  function ipcStopAndSpeedCheck() {
+    if (Date.now() - top.stepStarted < 1300) return false
+    var position = shared.livePosition()
+    check("at 2x the live position moves twice as fast", position >= 102.2, position)
+    shared.applyPlayer(top.playing)
+  }
+  // Signing out forgets the account's lists, not only its sign-in.
+  function signOutLists() {
+    answerAll(top.answers)
+    shared.upNext = [top.episode]
+    shared.signOut()
+    running().forEach(function(p) { var a = argsOf(p); if (a && a[0] === "logout") p.finish(0, JSON.stringify({ ok: true, data: {} }), "") })
+    check("signing out forgets the account's lists", shared.upNext.length === 0 && shared.authenticated === false,
+          shared.upNext.length + " " + shared.authenticated)
     answerAll(top.answers)
   }
 

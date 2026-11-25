@@ -577,3 +577,14 @@ test("the README binds the panel through Omarchy's panel route (the focused scre
   target = target.slice(0, target.indexOf("\n  }\n"))
   for (const [, name] of target.matchAll(/function (\w+)\(\)/g)) assert.match(readme, new RegExp("`" + name + "`"), name)
 })
+
+test("the QML's own version is manifest.json's (an update the shell hasn't restarted for is told by the difference)", () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"))
+  assert.equal(Model.qmlVersion, manifest.version)
+})
+
+test("the PanelKeyCatcher stand-in is Omarchy's own, unchanged (the panel's keys are tested through it)", { skip: !fs.existsSync("/usr/share/omarchy/shell/Ui/PanelKeyCatcher.qml") }, () => {
+  const copy = fs.readFileSync(path.join(ROOT, "tests/qml/imports/qs/Ui/PanelKeyCatcher.qml"), "utf8")
+  const real = fs.readFileSync("/usr/share/omarchy/shell/Ui/PanelKeyCatcher.qml", "utf8")
+  assert.ok(copy.endsWith(real), "tests/qml/imports/qs/Ui/PanelKeyCatcher.qml differs from Omarchy's: copy it again")
+})

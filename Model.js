@@ -4,6 +4,13 @@
 
 .pragma library
 
+// This code's own version. After an update the shell runs the QML it
+// compiled until it restarts (Quickshell 0.3.2 can't clear its component
+// cache), while the bridge and manifest.json on disk are new: `status`
+// says which version the files are, and a mismatch asks for a restart.
+// Kept equal to manifest.json's (tests/model.test.cjs).
+var qmlVersion = "1.1.0"
+
 var glyph = {
   app: "󰦔",
   video: "󰕧",

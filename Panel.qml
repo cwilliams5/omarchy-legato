@@ -233,7 +233,7 @@ Panel {
 
   readonly property string statusText: {
     if (!service) return ""
-    if (!serviceCurrent) return restartNote
+    if (!serviceCurrent || service.updatedOnDisk) return restartNote
     if (service.actionError !== "") return service.actionError
     if (service.actionStatus !== "") return service.actionStatus
     if (service.playerError !== "") return service.playerError
@@ -868,6 +868,7 @@ Panel {
             // themselves): see SignInField.qml.
             SignInField {
               id: emailField
+              objectName: "emailField"
               width: parent.width
               placeholderText: "Email"
               text: root.service ? root.service.email : ""
