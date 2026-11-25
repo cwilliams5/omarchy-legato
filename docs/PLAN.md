@@ -1125,7 +1125,8 @@ Fit (nothing critical or high):
 - [x] SR117 (low) Each plugin reload made a panel spin up its own service
   for a moment: a panel that had the shell's never makes one. Test.
 - [x] SR118 (low, since 1.0) "Tab to open first" stopped applying after the
-  first tab click: each open starts there now. Test.
+  first tab click: each open starts there now (Cody's choice, 2026-11-24,
+  over remembering the last tab picked). Test.
 - [x] SR119 (low) `hyprctl clients` on every poll would have passed the
   suite: a test now checks polls without video ask Hyprland nothing.
 - [x] SR120 (low; safety nit) Before the 1.0 entry is copied in, autoplay and
@@ -1206,6 +1207,68 @@ Fit (nothing critical or high):
   Service comments. The resume check's path tests after the stray check
   were redundant: removed, with their mutants; "an idle copy of the
   service" is equivalent since round 11's latch.
+
+### SR, round 13 (2026-11-24): reviewed, not yet fixed
+
+reports kept outside the repo (each
+finding there with its scenario, `file:line`, verification and a test).
+The first round in which neither reviewer found anything critical or
+high. Next: verify each, fix with tests, then round 14.
+
+Safety (three mediums, reproduced against the fake server):
+
+- [ ] SR135 (medium) What played during a gap (a media key with Legato off
+  after a watched resume, a sleep the guard missed, an end reached while
+  Legato was off, a guard that paused behind a slow poll then a long
+  sleep) is kept over a phone that went back: `keep_local` keeps any
+  unpushed place further on; a gap never sets `unconfirmed`, and the
+  first poll's marking (SR132) needs `checkServer` already set.
+- [ ] SR136 (medium) A Play that spans a suspend loads after the wake with
+  `pause=no`, and `recorded()` refreshes `lastSyncAt`, so the gap check
+  never fires: it plays behind the lock screen and the first poll pushes
+  over the phone (Play, Next, autoplay, resume_last, the check's switch).
+- [ ] SR137 (medium) A finished episode whose Up Next removal is pending is
+  replayed from 0 by Next, autoplay, resume_loaded and the resume check's
+  switch (they skip only the current episode; SR131 covered resume_last),
+  and `play_item` drops its pending entry.
+- [ ] SR138 (lows) A host without ranges: a rewind beyond mpv's back buffer
+  pushed over; an HLS break in the last tenth marked played; after a
+  sleep under a minute the guard's unpushed pause pushed blind; a
+  malformed playback.json jams Stop and Play; a removal-only retry
+  doesn't re-read the record. The reviewer's surviving mutants: R1, R3,
+  R16, R32, R33 (in the report).
+
+Fit (three mediums, nothing critical or high):
+
+- [ ] SR139 (medium, tests) The stand-in Process's `finish()` drops the
+  `running:` binding real Quickshell keeps, so the sleep guard's restart
+  after a sleep is untested (the second lid-close would pause nothing if
+  `sleepGuardRestart.restart()` went); no QML test sends mpv's
+  `property-change` events (the event-driven core).
+- [ ] SR140 (low-medium) A touchpad wheel over the panel's progress bar
+  seeks 10 s per event through Omarchy's PanelSlider (a swipe: about 80 s,
+  pushed at once); SR124 fixed the chip only.
+- [ ] SR141 (design) Four hand-kept counters (claims, open panels, Stats
+  pages, pages) keep needing drift fixes; compiling the bridge is 42% of
+  each call's CPU (a small launcher importing it as a module); CLAUDE.md
+  is long.
+- [ ] SR142 (lows) The panel keybind example opens on whichever screen
+  registered first (Omarchy's `{ panel = id }` opens on the focused one);
+  plain IpcHandler, not ShellIpc; every row builds an unused header; the
+  list empties and the card snaps shorter during the close fade;
+  `hyprctl` replies ignored; a bare animation duration ignores Omarchy's
+  animations-off; docs/PLAN.md cites a private path and CLAUDE.md
+  mentions a home server (a public repo: fix before the push);
+  TempHome keeps HYPRLAND_INSTANCE_SIGNATURE and the bus address; claims
+  ("every 30 s" is 32 s plus hyprctl with video; the plugin-id IPC list;
+  "IPC lives on BarWidget.qml"; the suite's duration; "any number of
+  screens" for plugin-id keybinds). The reviewer's 16 surviving mutants
+  (S1-S3, S5-S7, S9, P2-P5, C1-C3, B1, B3; P3: a typed password left in
+  the panel after it closes) are in the report.
+- [ ] Round 12's full mutation run: 350 of 352; survivors "poll: a stretch
+  nobody asked about pushed" and "service: a dormant copy keeps mpv's
+  socket" (likely masked by round 12's own changes: check each, then a
+  test or "equivalent" in tests/mutations.md).
 
 - [ ] SR46 (see round 5) Re-shoot media/stats.png with representative
   numbers, on an empty workspace, after the code is final.
@@ -1314,6 +1377,12 @@ Fit (nothing critical or high):
   1.0's kept service no longer forces autoplay off. 309 Python + 43 node
   tests; 352 mutations, the new and changed all killed (the full run with
   round 13). Round 13 next.
+- 2026-11-24 (night, last of the session): round 13 reviewed (SR135-SR142,
+  not yet fixed): no critical or high from either reviewer for the first
+  time; three safety mediums (a gap's stretch over a phone that went back,
+  a Play across a suspend, a pending-removal episode replayed from 0) and
+  three fit mediums. Round 12's full run: 350 of 352. Next: fix round 13,
+  then round 14.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

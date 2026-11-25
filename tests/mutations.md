@@ -167,6 +167,9 @@ caught each mutant. By area:
   copy's reportError guard proved redundant (a notification is a call,
   and a dormant copy's calls never start): removed; Play's full snapshot
   needed a cut past nine tenths, where length alone says "the end".
+- Round 12's full run: 350 of 352. Survivors, not yet looked at: "poll: a
+  stretch nobody asked about pushed" and "service: a dormant copy keeps
+  mpv's socket" (PLAN round 13).
 - Equivalent and left out: "a stall's place confirmed meanwhile" (the
   poll's paused push needs no "ask first" after a pause since round 11,
   and `sync_now` checks the stall itself); the dormancy timer ignoring

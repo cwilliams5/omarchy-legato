@@ -14,12 +14,15 @@ Cody's work setup.
 
 Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
-(docs/PLAN.md phases H and SR: rounds 1-12 so far; the fit reviewer has
-found nothing critical or high since round 7, the safety reviewer still
-found a high in round 12, fixed). Cody, 2026-11-24: SR86 (settings in
-Legato's own file) and SR63 (one live service on a replacement bar) were
-folded into 1.1.0 before round 10, and the review loop runs for as long
-as rounds keep finding critical or high issues: round 13 next. Then push,
+(docs/PLAN.md phases H and SR: rounds 1-12 fixed; round 13 reviewed,
+its findings recorded in PLAN and not yet fixed. Round 13 is the first in
+which neither reviewer found anything critical or high; the safety
+reviewer's three mediums can still rewind a phone, so they're fixed next,
+then round 14). Cody, 2026-11-24: SR86 (settings in Legato's own file)
+and SR63 (one live service on a replacement bar) were folded into 1.1.0
+before round 10, and the review loop runs for as long as rounds keep
+finding critical or high issues (stop: a round with none, and every
+planted mutation killed; round 12's full run: 350 of 352). Then push,
 release, the stats screenshot re-shot, and the marketplace verification
 request last of all, each on Cody's go. Committed and installed on Cody's
 laptop at each round's end (`./install.sh`), not pushed. Listed on the Omarchy plugin marketplace on 2026-11-23
