@@ -168,6 +168,27 @@ Item {
     settle()
     keys.textKey("a", 0)
     check("a closes it again", !panel.showStats && !statsView.visible && service.statsPagesOpen === 0, panel.showStats)
+    panel.setSettings(true)
+    keys.closeRequested()  // Esc
+    check("Esc on the Settings page closes the page, not the panel", !panel.showSettings && panel.opened,
+          panel.showSettings + " " + panel.opened)
+    settle()
+    // With where it's saved and a long problem, the page is taller than
+    // the panel can be: it scrolls instead of cutting off its last rows.
+    panel.setSettings(true)
+    settle()  // (a pending status answer carries settings with no problem)
+    service.settingsPath = "~/.local/state/omarchy-legato/settings.json"
+    var unknown = []
+    for (var k = 0; k < 60; k++) unknown.push("misspelledSetting" + k)
+    service.settingsProblem = "settings.json: autoplay not valid (off); " + unknown.join(", ") + " not a setting"
+    named("settingsView").forceLayout()  // a Column lays out on the next frame otherwise
+    var flick = named("settingsFlick")
+    check("a Settings page taller than the panel scrolls", flick && flick.contentHeight === named("settingsView").implicitHeight
+          && flick.contentHeight > flick.height && flick.interactive && card.contentHeight <= 760,
+          flick ? flick.contentHeight + " in " + flick.height + " interactive " + flick.interactive + " card " + card.contentHeight : "no flick")
+    keys.closeRequested()
+    service.settingsProblem = ""
+    settle()
 
     // Before its first read the page follows the service's switch: On,
     // until the player says otherwise.

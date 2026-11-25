@@ -5,8 +5,9 @@ import "Model.js" as Model
 
 // The plugin's data layer, instantiated once per shell as its `service`
 // entry point. Every bar widget (one per monitor) and every open panel reads
-// this one instance, so player polling and library fetches never run more
-// than once per shell. All Pocket Casts and mpv traffic goes through
+// this one instance, so player polling and library fetches run once per
+// shell (on a bar that replaces Omarchy's, one per screen showing the chip:
+// README, Known limits). All Pocket Casts and mpv traffic goes through
 // bin/legato-bridge, which prints one JSON object per call.
 Item {
   id: root
@@ -20,6 +21,28 @@ Item {
   // Omarchy's, which hides the shell's service from its widgets, still runs
   // one Legato, not two.
   property bool active: false
+  // What a panel can ask of this service (Panel.qml serviceCurrent). A 1.0
+  // service has none: Omarchy kept it running through the update to 1.1
+  // (its manifest said keepLoaded) under the new panel, until the shell
+  // restarts.
+  readonly property int apiVersion: 2
+  // Panels holding the shell's copy awake (claim/release). When the last one
+  // goes (Omarchy's bar swapped for a replacement at run time), the copy
+  // goes dormant again a moment later, so the replacement bar's own copy is
+  // the only one live; the moment covers a bar rebuilding its widgets.
+  property int claims: 0
+  property int dormantAfterMs: 3000
+  function claim() { claims++; dormantTimer.stop(); active = true }
+  function release() {
+    claims = Math.max(0, claims - 1)
+    if (claims === 0 && active) dormantTimer.restart()
+  }
+  Timer {
+    id: dormantTimer
+    interval: root.dormantAfterMs
+    repeat: false
+    onTriggered: if (root.claims === 0) root.active = false
+  }
 
   // ---- Settings (the Settings page), from settings.json in the state folder
   //      through the bridge: read with `status`, again when the Settings page
@@ -154,7 +177,8 @@ Item {
   property string actionError: ""
   property bool actionRunning: false
 
-  // Panels tell the service when they're visible so polling can speed up.
+  // Panels tell the service when they're open (the slider tick, errors in
+  // the status line instead of as notifications).
   property int openPanels: 0
   readonly property bool panelOpen: openPanels > 0
 
@@ -175,6 +199,7 @@ Item {
       id: proc
       property var callback: null
       property string secret: ""
+      property bool began: false
       running: false
       clearEnvironment: true
       environment: root.bridgeEnvironment
@@ -182,10 +207,29 @@ Item {
       stdout: StdioCollector { id: outCollector; waitForEnd: true }
       stderr: StdioCollector { id: errCollector; waitForEnd: true }
       onStarted: {
+        began = true
+        startWatchdog.stop()
         if (secret === "") return
         write(secret)
         secret = ""
         stdinEnabled = false
+      }
+      // Quickshell sends no `exited` for a process that fails to start (a
+      // fork refused): without this its callback never ran, and the poll it
+      // was (playerLoading) or the status read (probing) stayed stuck for
+      // the shell's life. One-shot, only while the call is starting.
+      property Timer startWatchdog: Timer {
+        interval: root.startWatchdogMs
+        running: true
+        repeat: false
+        onTriggered: {
+          if (proc.began) return
+          var cb = proc.callback
+          proc.callback = null
+          proc.running = false
+          if (cb) cb({ ok: false, code: "no_start", error: "legato-bridge didn't start" })
+          proc.destroy()
+        }
       }
       onExited: function(exitCode, exitStatus) {
         var text = String(outCollector.text || "")
@@ -206,6 +250,7 @@ Item {
     }
   }
 
+  property int startWatchdogMs: 10000
   function call(args, callback, secret) {
     if (!active) return null
     if (python === "" && pythonError === "") {
@@ -658,6 +703,7 @@ Item {
 
   Socket {
     id: playerEvents
+    objectName: "playerEvents"
     path: root.mpvSocket
     parser: SplitParser {
       splitMarker: "\n"
@@ -688,9 +734,10 @@ Item {
     return isNaN(minutes) ? 15 : Math.max(0, Math.round(minutes))
   }
 
+  readonly property int unloadAfterMs: Math.max(1, unloadAfterMinutes) * 60000
   Timer {
     id: unloadTimer
-    interval: Math.max(1, root.unloadAfterMinutes) * 60000
+    interval: root.unloadAfterMs
     repeat: false
     running: root.active && root.unloadAfterMinutes > 0 && root.playerActive && !root.isPlaying
     onTriggered: root.unloadPlayer()
@@ -709,6 +756,7 @@ Item {
   // next loaded. Never a loop of processes and polls while paused.
   property int _guardFailures: 0
   readonly property int guardMaxFailures: 5
+  readonly property int guardRetryMs: 3000 * Math.pow(2, _guardFailures)
   onWantSleepGuardChanged: _guardFailures = 0
 
   Process {
@@ -725,11 +773,9 @@ Item {
       try { result = JSON.parse(String(sleepGuardOut.text || "")) } catch (e) { result = null }
       if (result && result.ok === true && result.data && result.data.sleeping === true) {
         root._guardFailures = 0
-        sleepGuardRestart.interval = 3000
         root.settle()
       } else if (root.wantSleepGuard) {
         root._guardFailures++
-        sleepGuardRestart.interval = 3000 * Math.pow(2, root._guardFailures)
         if (root._guardFailures === root.guardMaxFailures)
           root.reportError("Couldn't set up pause-before-sleep" + (result && result.error ? ": " + result.error : ""))
       }
@@ -739,7 +785,7 @@ Item {
 
   Timer {
     id: sleepGuardRestart
-    interval: 3000
+    interval: root.guardRetryMs
     repeat: false
   }
 
@@ -965,7 +1011,6 @@ Item {
   }
 
   property int _settingsChanges: 0
-  property bool _settingsImporting: false
   property string _settingsProblemSaid: ""
   function applySettings(view) {
     if (!view || typeof view !== "object" || !view.values || typeof view.values !== "object") return
@@ -975,24 +1020,30 @@ Item {
     settingsProblem = String(view.problem || "")
     settingsPath = String(view.path || "")
     settingsKnown = true
-    // A file that can't be read is said once (with the panel closed, as a
-    // notification): until it's fixed, nothing is saved and autoplay and
-    // the idle unload are off.
-    if (!settingsWritable && settingsProblem !== "" && settingsProblem !== _settingsProblemSaid) {
+    // A problem (a file that can't be read, a value not valid, a key that
+    // isn't a setting) is said once (with the panel closed, as a
+    // notification), and again if it comes back after being fixed. A file
+    // that can't be read saves nothing; it and a mistyped value leave
+    // autoplay and the idle unload off.
+    if (settingsProblem !== "" && settingsProblem !== _settingsProblemSaid) {
       _settingsProblemSaid = settingsProblem
       reportError(settingsProblem)
+    } else if (settingsProblem === "") {
+      _settingsProblemSaid = ""
     }
     importEntrySettings()
   }
   onEntrySettingsChanged: importEntrySettings()
+  property bool _settingsImportTried: false
   function importEntrySettings() {
-    if (!settingsKnown || settingsStored || !settingsWritable || entrySettings === null || _settingsImporting) return
+    // Tried once per service: the bridge copies the entry only once ever
+    // (prefs.json `settingsImported`), and answers `stored` from then on.
+    if (!settingsKnown || settingsStored || !settingsWritable || entrySettings === null || _settingsImportTried) return
+    _settingsImportTried = true
     var entry = {}
     for (var key in entrySettings) if (key !== "id") entry[key] = entrySettings[key]
-    _settingsImporting = true
     var change = ++_settingsChanges
     call(["settings", "import", "--", JSON.stringify(entry)], function(result) {
-      root._settingsImporting = false
       if (result.ok && change === root._settingsChanges) root.applySettings(result.data)
     })
   }
@@ -1254,5 +1305,6 @@ Item {
   }
 
   Component.onCompleted: if (active && !probed) refresh()
-  onActiveChanged: if (active && !probed) refresh()
+  // Awake again after a dormant spell: read where things stand now.
+  onActiveChanged: if (active) { if (!probed) refresh(); else refreshPlayer() }
 }

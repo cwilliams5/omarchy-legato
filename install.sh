@@ -1,6 +1,7 @@
 #!/bin/bash
 # Copy this checkout into the Omarchy plugin directory and enable it.
-# Re-run after pulling changes; the shell hot-reloads the copied files.
+# Re-run after pulling changes: Omarchy reloads the plugin when its files
+# change (`omarchy restart shell` to be sure).
 
 set -euo pipefail
 

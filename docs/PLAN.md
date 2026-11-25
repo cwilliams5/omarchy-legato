@@ -967,10 +967,105 @@ verification request is the very last step.
   tests/qml/service.qml (dormant, claimed, the replacement bar's own copy,
   IPC only on the live one).
 
+### SR, round 10 (2026-11-24)
+
+reports kept outside the repo (the fit
+report saved by the coordinating session: its reviewer couldn't write
+files). Safety: one high and five mediums, each verified by running; fit:
+nothing critical or high, one medium that hits every updating user. Each
+confirmed against the code before fixing.
+
+- [x] SR87 (high, since 1.0) A position from another file was pushed as the
+  loaded episode's: `sync_now` (pause, stop, next, seeks, the sleep guard,
+  the idle unload) never checked that mpv played the file playback.json
+  names. A play cut off after `loadfile` (the deadline, a slow cover) or
+  another program opening a file through mpv-mpris rewound every device.
+  Fixed: only the recorded file's position is pushed (and seeked, in the
+  resume check); the cover is fetched after the new episode is recorded.
+  Tests (another file loaded into mpv; a play cut off at the cover).
+- [x] SR88 (medium) After a resume Pocket Casts couldn't confirm, its later
+  answer lost to the unconfirmed stretch (`keep_local` took it for an
+  unsent push): a rewind on the phone was undone. Fixed: never kept while
+  `unconfirmed`. Test.
+- [x] SR89 (medium) Next and autoplay took the start from Up Next's sync
+  data, so a reply without it started at 0 and pushed 0. Fixed: the record
+  decides when the sync entry is missing (and refuses an empty lookup).
+  The fake can leave sync data out now (`noSync`). Test.
+- [x] SR90 (medium) An episode of a show you don't follow has a record once
+  anyone played it (Legato's own push makes one): one empty lookup started
+  it at 0 and pushed 0. Fixed: an empty lookup is no answer when Up Next's
+  sync data or In Progress lists a place (`position_known_elsewhere`, in
+  `resolve_episode` and the resume check; can't tell: no answer). The fake
+  creates records on a push and lists only episodes in progress. Tests.
+- [x] SR91 (medium) Switching to a replacement bar at run time left the
+  shell's copy awake beside the bar's own, each on its own settings.
+  Fixed: panels claim and release the shell's copy; the last one gone
+  leaves it dormant (after 3 s), and waking it reads the player. And the
+  bridge acts on settings.json itself for autoplay, the idle unload's
+  "never" and the sleep guard's pause (`setting_now`), so no copy (two
+  screens on a replacement bar, a hand edit) acts against the file; the
+  rest drift until a status read (README). Tests (QML and bridge).
+- [x] SR92 (medium, tests) The claim path Omarchy really takes (the bar
+  handed over after the panel loads, `onSharedServiceChanged`) was
+  untested; its removal left Legato dead and survived. Tests: chip.qml
+  (the real BarWidget, the bar handed over after loading) and service.qml.
+- [x] SR93 (low; fit M3) A deleted settings.json was filled again from the
+  1.0 bar entry. Fixed: the import is remembered (prefs.json
+  `settingsImported`) and tried once per service. Tests.
+- [x] SR94 (low) A mistyped `autoplay` or `unloadAfterMinutes` turned them
+  on, silently; an unknown key was silent. Fixed: off (`SETTINGS_SAFE`),
+  any problem said (notification while closed), again if it comes back,
+  unknown keys named and kept. Tests.
+- [x] SR95 (low) A bridge call that failed to start (Quickshell sends no
+  `exited`) left the poll stuck for the shell's life. Fixed: a start
+  watchdog per call. The stand-in can fail starts now. Test.
+- [x] SR96 (medium; fit M1) `keepLoaded` (from the original) kept the old
+  service through `omarchy plugin update` under the new panel: Settings
+  and Stats threw until a shell restart. Dropped; and since Omarchy
+  decides what to keep from the manifest it had (`reloadPlugins`), the
+  1.0 to 1.1 update still keeps 1.0's service once (the side agent's
+  catch, confirmed in shell.qml): the panel checks `apiVersion`, says
+  "restart the shell to finish", feeds it the bar entry the 1.0 way and
+  leaves Settings and Stats alone. Tests against 1.0.2's real Service.qml
+  (tests/qml/v1_0). Release notes and README say to restart once; the
+  release test updates from 1.0.2 without a restart (H6).
+- [x] SR97 (low-medium; fit M2) The Settings page overflowed with its path
+  and a problem. Fixed: the pages scroll (`PageFlick`; the small-screen
+  limit is gone too). Test.
+- [x] SR98 (low; fit L2) The sleep guard's sender match was untested. Test.
+- [x] SR99 (low; fit L3) Cost claims were 1.0 figures. Reworded (0.1 to
+  0.2 s of CPU per call, helpers about 40 MB). Left for later: a small
+  launcher importing the bridge as a module (cached bytecode) would
+  roughly halve the per-call CPU.
+- [x] SR100 (low; fit L4) The chip taken off (or the plugin disabled)
+  mid-episode leaves mpv playing, unsynced (since 1.0): README Known limits
+  (claims now make plugins[] installs behave the same before and after a
+  restart).
+- [x] SR101 (low; fit L5) A problem that came back wasn't said again (fixed);
+  a symlinked settings.json is refused like every state file (README).
+- [x] SR102 (claims) install.sh "hot-reloads", "QML stays cached", "runs
+  nothing on a timer" while paused, "80 ms", "two small helpers", the
+  760 px limit, the self-check's "both lines", stale comments (Service,
+  Panel, About.js, a node test's name), notify-send and the runtime files
+  in the README; `lexists_at` (dead) removed.
+- [x] SR103 (tests) The reviewers' survivors: the fit reviewer's 16 (chip
+  clicks, wheel and title; the idle unload's minutes; pauseOnSleep; skip
+  lengths; the guard's back-off; socket retries; stale status reads; Esc
+  on Settings; the swipe guard, static; the Settings rows; status
+  `running`; the buffer; the show-list cache; the sender) and the safety
+  reviewer's claim path; round 9's four survivors (followed-show guards
+  masking `recordSeen`, a seek clearing the cut, unescaped notifications)
+  and its reviewer's `recordSeen` mutant; the drag-back test's race with
+  mpv's end pause. The FileView stand-in reads files; a script error in
+  Legato's QML fails the run; mutate.py counts a stale pattern as a
+  failure (twelve were).
+
 - [ ] SR46 (see round 5) Re-shoot media/stats.png with representative
   numbers, on an empty workspace, after the code is final.
 - [ ] H6 Ship 1.1.0 (a minor version: the stats are a feature) with the
-  `ship-update` skill: push (Cody), plugin update and install test,
+  `ship-update` skill: push (Cody), plugin update and install test (from
+  1.0.2 without a shell restart: the panel must say to restart, nothing
+  breaks; then after the restart, Settings and Stats work),
   marketplace scan, release notes and `gh release` (each on his go), and
   last of all the marketplace verification request (Cody approves the
   filing).
@@ -1045,6 +1140,16 @@ verification request is the very last step.
   panel runs its own; the IPC target only on the live copy). 266 Python +
   38 node tests and the new offscreen tests/qml/service.qml; 249 mutations
   listed. Round 10 next.
+- 2026-11-24 (night): round 10 (SR87-SR103): only the recorded file's
+  position is pushed (a high since 1.0); Pocket Casts' answer wins over an
+  unconfirmed stretch; empty lookups and missing sync data never start at
+  0; the shell's service released when its panel goes, and the bridge acts
+  on settings.json itself; keepLoaded dropped and a 1.0 service under the
+  1.1 panel handled (the update keeps it once); the pages scroll. The
+  reviewers' 17 surviving mutants and round 9's 4 caught (the real
+  BarWidget loaded, stand-ins that read files and fail starts). 285 Python
+  + 40 node tests; 294 mutations, the 59 new or changed all killed (the
+  full run with round 11). Round 11 next.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

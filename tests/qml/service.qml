@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell.Io
 import "../.." as Legato
+import "v1_0" as V1
 
 // One live Legato per shell, and settings that outlive the bar entry (SR63,
 // SR86), with the real Panel.qml and Service.qml offscreen and the stand-ins
@@ -90,21 +91,44 @@ Item {
   Legato.Service { id: freshService; python: "/usr/bin/python3" }
   QtObject { id: freshBar; property var shell: ({ serviceFor: function(id) { return freshService } }) }
   property var latePanel: null
+  // The claim path Omarchy's bar really takes: the panel loads with no bar,
+  // and the bar is handed over just after (BarWidget injectPanel).
+  Legato.Service { id: handedService; python: "/usr/bin/python3" }
+  QtObject { id: handedBar; property var shell: ({ serviceFor: function(id) { return handedService } }) }
+  property var handedPanel: null
+  // Legato 1.0's service, as Omarchy keeps it running through the update to
+  // 1.1 (its manifest said keepLoaded): none of the newer calls or
+  // properties, `settings` fed by the panel.
+  Component { id: oldServiceMaker; V1.Service { python: "/usr/bin/python3" } }
+  property var oldService: null
+  QtObject { id: oldBar; property var shell: ({ serviceFor: function(id) { return top.oldService } }) }
+  property var oldPanel: null
+  property var againPanel: null
+  property int noticesBefore: 0
 
   property var replacementPanel: null
   property var builtinPanel: null
   property var local: null
 
   property int step: 0
+  property int waits: 0
   Timer {
     interval: 60
     repeat: true
     running: true
     onTriggered: {
       var steps = [top.dormantAtFirst, top.onAReplacementBar, top.onOmarchysBar, top.changes, top.brokenFile,
-                   top.injectedLate, top.injectedLateSettled]
-      if (top.step < steps.length) { steps[top.step](); top.step++ }
-      else { stop(); Qt.exit(top.failures) }
+                   top.injectedLate, top.injectedLateSettled, top.importedOnce, top.problemsSaid,
+                   top.handedOverLate, top.handedOverLateCheck, top.claimingPanelGone, top.dormantAgain,
+                   top.claimedAgain, top.neverStarts, top.neverStartsAnswered, top.oldServiceUpdate, top.oldServiceCheck]
+      if (top.step >= steps.length) { stop(); Qt.exit(top.failures); return }
+      // A step returns false to wait (up to 1.5 s).
+      if (steps[top.step]() === false) {
+        if (++top.waits < 25) return
+        top.check("step " + top.step + " done in time", false, "still waiting after 25 tries")
+      }
+      top.waits = 0
+      top.step++
     }
   }
 
@@ -185,6 +209,11 @@ Item {
     sets.forEach(function(p) { answer(p, view({ autoplay: false, defaultTab: "podcasts", unloadAfterMinutes: 0, skipForward: 45 })) })
     check("the saved answer is in use", shellService.settings.skipForward === 45 && shellService.skipForwardSeconds === 45,
           shellService.skipForwardSeconds)
+    var forwardRow = find(builtinPanel, function(i) { return i.entry && i.entry.key === "skipForward" })
+    var titleRow = find(builtinPanel, function(i) { return i.entry && i.entry.key === "showTitle" })
+    check("the Settings page shows the saved values, not the bar entry's (it said showTitle off)",
+          forwardRow && forwardRow.value === 45 && titleRow && titleRow.value === true,
+          (forwardRow && forwardRow.value) + " " + (titleRow && titleRow.value))
 
     builtinPanel.persistSettings({ skipBack: 15 })
     bridgeCalls("settings set").forEach(function(p) { top.refuse(p, "settings.json isn't valid JSON: not saved") })
@@ -254,5 +283,97 @@ Item {
     var args = imports.length === 1 ? argsOf(imports[0]) : []
     var copied = args.length ? JSON.parse(args[args.length - 1]) : null
     check("then the entry it was handed is copied", copied && copied.skipBack === 25, JSON.stringify(args))
+  }
+
+  // A failed import isn't tried again in this shell: the bridge copies the
+  // entry once ever, and a loop of imports is the worst way to find out.
+  function importedOnce() {
+    bridgeCalls("settings import").forEach(function(p) { top.refuse(p, "busy") })
+    freshService.readSettings()
+    reads().forEach(function(p) { answer(p, view({}, { stored: false })) })
+    check("a failed import isn't tried again", bridgeCalls("settings import").length === 0, bridgeCalls("settings import").length)
+  }
+
+  // Any problem is said (a value not valid too, not only a file that can't
+  // be read), once, and again if it comes back after being fixed.
+  function problemsSaid() {
+    var bad = view({ autoplay: false }, { problem: "settings.json: autoplay not valid (off)" })
+    noticesBefore = notices().length
+    shellService.readSettings(); reads().forEach(function(p) { answer(p, bad) })
+    check("a value not valid is said", notices().length === noticesBefore + 1, notices().length - noticesBefore)
+    shellService.readSettings(); reads().forEach(function(p) { answer(p, bad) })
+    check("once", notices().length === noticesBefore + 1, notices().length - noticesBefore)
+    shellService.readSettings(); reads().forEach(function(p) { answer(p, view({})) })
+    shellService.readSettings(); reads().forEach(function(p) { answer(p, bad) })
+    check("and again when it comes back after being fixed", notices().length === noticesBefore + 2, notices().length - noticesBefore)
+  }
+
+  function handedOverLate() {
+    handedPanel = panelMaker.createObject(top, {})
+    check("(a panel loaded before its bar: the service still sleeps)", handedService.active === false, handedService.active)
+    handedPanel.bar = handedBar
+  }
+  function handedOverLateCheck() {
+    check("the bar handed over just after loading wakes the shell's copy", handedService.active === true
+          && handedPanel.service === handedService, handedService.active)
+    check("which reads its status", bridgeCalls("status").length >= 1, bridgeCalls("status").length)
+    running().forEach(function(p) { var a = argsOf(p); if (a && a[0] === "status") answer(p, status(view({}))) })
+  }
+
+  // Omarchy's bar swapped for a replacement at run time: the panel that
+  // claimed the shell's copy goes; the copy goes dormant again, so the
+  // replacement bar's own copy is the only one live.
+  function claimingPanelGone() {
+    shellService.dormantAfterMs = 100
+    builtinPanel.destroy()
+  }
+  function dormantAgain() {
+    if (shellService.active) return false
+    check("the shell's copy goes dormant once no panel holds it", shellService.active === false
+          && named(shellService, "ipcLoader").item === null, shellService.active)
+    check("so one copy runs, the replacement bar's", local.active === true, local.active)
+    againPanel = panelMaker.createObject(top, { bar: builtinBar, settings: {} })
+  }
+  function claimedAgain() {
+    check("claimed again, it wakes", shellService.active === true && named(shellService, "ipcLoader").item !== null,
+          shellService.active)
+    check("and reads where things stand", bridgeCalls("player").length >= 1, bridgeCalls("player").length)
+    running().forEach(function(p) { var a = argsOf(p); if (a && a[0] === "player") answer(p, {}) })
+  }
+
+  // Quickshell sends no `exited` for a process that fails to start: the
+  // call it was must still end, or polling stays stuck for good.
+  function neverStarts() {
+    Processes.failStarts = true
+    shellService.startWatchdogMs = 100
+    shellService.playerLoading = false
+    shellService.refreshPlayer()
+    Processes.failStarts = false
+    check("(a poll that couldn't start)", shellService.playerLoading === true, shellService.playerLoading)
+  }
+  function neverStartsAnswered() {
+    if (shellService.playerLoading) return false
+    check("a call that never starts ends after its watchdog: polls aren't stuck", shellService.playerLoading === false,
+          shellService.playerLoading)
+  }
+
+  function oldServiceUpdate() {
+    oldService = oldServiceMaker.createObject(top)
+    oldPanel = panelMaker.createObject(top, { bar: oldBar, settings: { id: "io.github.cwilliams5.legato", autoplay: false } })
+  }
+  function oldServiceCheck() {
+    check("under Legato 1.0's service the panel says to restart the shell", oldPanel.serviceCurrent === false
+          && oldPanel.statusText === oldPanel.restartNote, oldPanel.statusText)
+    check("and hands it the bar entry the 1.0 way", oldService.settings.autoplay === false, JSON.stringify(oldService.settings))
+    oldPanel.open()
+    oldPanel.setSettings(true)
+    oldPanel.persistSettings({ skipBack: 15 })
+    oldPanel.setSettings(false)
+    oldPanel.setStats(true)
+    oldPanel.setStats(false)
+    oldPanel.close()
+    check("the Settings page shows the same note", named(oldPanel, "settingsProblem").text === oldPanel.restartNote,
+          named(oldPanel, "settingsProblem").text)
+    // (script errors from calls it doesn't have fail the run: test_bridge.QmlPages)
   }
 }

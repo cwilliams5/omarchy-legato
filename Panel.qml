@@ -33,14 +33,42 @@ Panel {
   readonly property var sharedService: bar && bar.shell && typeof bar.shell.serviceFor === "function"
     ? bar.shell.serviceFor(moduleName) : null
   readonly property var service: sharedService || (localService.item || null)
+  // False for Legato 1.0's service, which Omarchy keeps running through the
+  // update to this panel (1.0's manifest said keepLoaded, and Omarchy decides
+  // what to keep from the manifest it had): it has none of the newer calls.
+  // Until the shell restarts, the panel says so, hands it the bar entry the
+  // 1.0 way, and leaves Settings and Stats alone.
+  readonly property bool serviceCurrent: !service || Number(service.apiVersion || 0) >= 2
+  readonly property string restartNote: "Legato was updated: restart the shell to finish (omarchy restart shell)."
 
-  function claimService() { if (sharedService && sharedService.active !== true) sharedService.active = true }
+  // The shell's copy this panel holds awake (Service.claim): let go when the
+  // panel goes (a bar swapped at run time) or its bar hands it another.
+  property var claimedService: null
+  function claimService() {
+    if (sharedService === claimedService) return
+    releaseService()
+    if (sharedService && typeof sharedService.claim === "function") {
+      sharedService.claim()
+      claimedService = sharedService
+    }
+  }
+  function releaseService() {
+    var held = claimedService
+    claimedService = null
+    try { if (held) held.release() } catch (e) {}  // a service already gone
+  }
+  // How Omarchy's bar wakes it: the bar reaches the panel just after the
+  // panel has loaded (BarWidget injectPanel), so not in onCompleted.
   onSharedServiceChanged: claimService()
   // The widget's bar entry (`settings`, injected by BarWidget) goes to the
   // service only for the one-time copy of Legato 1.0's settings into
   // settings.json; the settings in use are the service's (from that file).
   // Not before the bar has injected it (settled).
-  function pushSettings() { if (service && settled) service.entrySettings = settings || ({}) }
+  function pushSettings() {
+    if (!service || !settled) return
+    if (!serviceCurrent) service.settings = settings || ({})  // 1.0's service read the entry
+    else service.entrySettings = settings || ({})
+  }
   onSettingsChanged: pushSettings()
   onServiceChanged: pushSettings()
   onSettledChanged: pushSettings()
@@ -109,7 +137,7 @@ Panel {
     if (showSettings) {
       showAbout = false; showStats = false; closeMenu()
       // Read again on opening: a change made outside the page shows here.
-      if (service) { service.settingsError = ""; service.readSettings() }
+      if (service && serviceCurrent) { service.settingsError = ""; service.readSettings() }
     }
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -121,7 +149,7 @@ Panel {
       showAbout = false
       showSettings = false
       closeMenu()
-      if (service) service.loadStats()
+      if (service && serviceCurrent) service.loadStats()
     }
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -201,6 +229,7 @@ Panel {
 
   readonly property string statusText: {
     if (!service) return ""
+    if (!serviceCurrent) return restartNote
     if (service.actionError !== "") return service.actionError
     if (service.actionStatus !== "") return service.actionStatus
     if (service.playerError !== "") return service.playerError
@@ -220,14 +249,14 @@ Panel {
   // Saved by the service to settings.json (never to the bar entry, which
   // Omarchy deletes when the plugin is turned off).
   function persistSettings(values) {
-    if (!service) return
+    if (!service || !serviceCurrent) return
     for (var key in values) service.changeSetting(key, values[key])
   }
 
   function setTab(name) {
     if (service) service.closeDetail()
-    // Not saved: "Tab to open first" (Settings) is the user's choice, and a
-    // write per switch would churn shell.json (which dotfiles may track).
+    // Not saved: "Tab to open first" (Settings) is the user's choice; a tab
+    // switch is just for now.
     if (currentTab !== name) currentTab = name
     if (service) service.loadTab(name, false)
     cursorIndex = Model.firstItemIndex(rows, 0, 1)
@@ -336,7 +365,7 @@ Panel {
   }
 
   function notePages() {
-    if (!service) return
+    if (!service || !serviceCurrent) return
     var stats = showStats, page = pageOpen  // closing the panel clears both
     if (stats !== countedStats) { service.statsPagesOpen = Math.max(0, service.statsPagesOpen + (stats ? 1 : -1)); countedStats = stats }
     if (page !== countedPage) { service.pagesOpen = Math.max(0, service.pagesOpen + (page ? 1 : -1)); countedPage = page }
@@ -346,6 +375,7 @@ Panel {
     noteOpen(false)
     showStats = showAbout = showSettings = false
     notePages()
+    releaseService()
   }
 
   implicitWidth: 1
@@ -390,6 +420,19 @@ Panel {
   }
 
   // ------------------------------------------------------------- pieces --
+
+  // A page (About, Stats, Settings) in place of the main view: as tall as
+  // the page, up to the panel's cap, and scrolled when it's taller (a
+  // problem line on Settings, About with its license, a small screen).
+  component PageFlick: Flickable {
+    anchors.fill: parent
+    contentWidth: width
+    clip: true
+    boundsBehavior: Flickable.StopAtBounds
+    interactive: contentHeight > height
+    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+    onVisibleChanged: if (visible) contentY = 0
+  }
 
   // Cover art with rounded corners and a glyph placeholder. Reads root for
   // colors so callers only ever set `source` and `placeholder`.
@@ -528,41 +571,49 @@ Panel {
 
       // Swapped in for everything below by the header's info button, `i`,
       // or the `about` IPC call; Back, Esc or closing the panel leaves it.
-      AboutView {
-        id: aboutView
-        objectName: "aboutView"
+      PageFlick {
+        objectName: "aboutFlick"
         visible: root.showAbout
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        foreground: root.foreground
-        accent: root.accent
-        fontFamily: root.fontFamily
-        icon: Model.glyph.app
-        version: About.manifestVersion(manifestFile.loaded ? manifestFile.text() : "")
-        licenseText: licenseFile.loaded ? licenseFile.text() : ""
-        versions: root.aboutVersions
-        onBackRequested: root.setAbout(false)
+        contentHeight: aboutView.implicitHeight
+        AboutView {
+          id: aboutView
+          objectName: "aboutView"
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
+          foreground: root.foreground
+          accent: root.accent
+          fontFamily: root.fontFamily
+          icon: Model.glyph.app
+          version: About.manifestVersion(manifestFile.loaded ? manifestFile.text() : "")
+          licenseText: licenseFile.loaded ? licenseFile.text() : ""
+          versions: root.aboutVersions
+          onBackRequested: root.setAbout(false)
+        }
       }
 
       // The header's chart button or `a`: the listening stats.
-      StatsView {
-        id: statsView
-        objectName: "statsView"
+      PageFlick {
+        objectName: "statsFlick"
         visible: root.showStats
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        foreground: root.foreground
-        accent: root.accent
-        fontFamily: root.fontFamily
-        stats: root.service ? root.service.stats : null
-        counting: !root.service || root.service.statsCounting
-        error: root.service ? root.service.statsError : ""
-        urgent: root.urgent
-        onBackRequested: root.setStats(false)
-        onCountingRequested: function(on) { if (root.service) root.service.setStatsCounting(on) }
-        onClearRequested: if (root.service) root.service.clearStats()
+        contentHeight: statsView.implicitHeight
+        StatsView {
+          id: statsView
+          objectName: "statsView"
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
+          foreground: root.foreground
+          accent: root.accent
+          fontFamily: root.fontFamily
+          stats: root.service && root.serviceCurrent ? root.service.stats : null
+          counting: !root.service || !root.serviceCurrent || root.service.statsCounting
+          error: !root.serviceCurrent ? root.restartNote : root.service ? (root.service.statsError || "") : ""
+          urgent: root.urgent
+          onBackRequested: root.setStats(false)
+          onCountingRequested: function(on) { if (root.service && root.serviceCurrent) root.service.setStatsCounting(on) }
+          onClearRequested: if (root.service && root.serviceCurrent) root.service.clearStats()
+        }
       }
 
       // Over everything in the panel: the right-click menu, and a catcher
@@ -617,32 +668,37 @@ Panel {
       }
 
       // The gear's page: every setting, from the manifest's schema.
-      SettingsView {
-        id: settingsView
-        objectName: "settingsView"
+      PageFlick {
+        objectName: "settingsFlick"
         visible: root.showSettings
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        foreground: root.foreground
-        accent: root.accent
-        fontFamily: root.fontFamily
-        schema: root.manifestData && root.manifestData.barWidget ? (root.manifestData.barWidget.schema || []) : []
-        defaults: root.manifestData && root.manifestData.barWidget ? (root.manifestData.barWidget.defaults || {}) : ({})
-        values: root.service ? root.service.settings : ({})
-        problem: root.service ? (root.service.settingsError || root.service.settingsProblem) : ""
-        savedIn: root.service ? root.service.settingsPath : ""
-        videoTransparency: root.service ? root.service.videoTransparency : 0
-        videoPinned: !root.service || root.service.videoPinned
-        onVideoTransparencyRequested: function(level) { if (root.service) root.service.setVideoTransparency(level) }
-        onVideoPinnedRequested: function(pinned) { if (root.service) root.service.setVideoPinned(pinned ? "on" : "off") }
-        localFeeds: !!root.service && root.service.localFeeds
-        onLocalFeedsRequested: function(on) { if (root.service) root.service.setLocalFeeds(on) }
-        onBackRequested: root.setSettings(false)
-        onChangeRequested: function(key, value) {
-          var change = {}
-          change[key] = value
-          root.persistSettings(change)
+        contentHeight: settingsView.implicitHeight
+        SettingsView {
+          id: settingsView
+          objectName: "settingsView"
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
+          foreground: root.foreground
+          accent: root.accent
+          fontFamily: root.fontFamily
+          schema: root.manifestData && root.manifestData.barWidget ? (root.manifestData.barWidget.schema || []) : []
+          defaults: root.manifestData && root.manifestData.barWidget ? (root.manifestData.barWidget.defaults || {}) : ({})
+          values: root.service && root.serviceCurrent ? root.service.settings : ({})
+          problem: !root.serviceCurrent ? root.restartNote
+            : root.service ? (root.service.settingsError || root.service.settingsProblem || "") : ""
+          savedIn: root.service && root.serviceCurrent ? root.service.settingsPath : ""
+          videoTransparency: root.service ? root.service.videoTransparency : 0
+          videoPinned: !root.service || root.service.videoPinned
+          onVideoTransparencyRequested: function(level) { if (root.service) root.service.setVideoTransparency(level) }
+          onVideoPinnedRequested: function(pinned) { if (root.service) root.service.setVideoPinned(pinned ? "on" : "off") }
+          localFeeds: !!root.service && root.service.localFeeds
+          onLocalFeedsRequested: function(on) { if (root.service) root.service.setLocalFeeds(on) }
+          onBackRequested: root.setSettings(false)
+          onChangeRequested: function(key, value) {
+            var change = {}
+            change[key] = value
+            root.persistSettings(change)
+          }
         }
       }
 

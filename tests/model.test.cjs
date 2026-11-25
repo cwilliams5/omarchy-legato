@@ -77,16 +77,16 @@ test("the stats page opens from the header, `a` and closes like the others; it r
   assert.match(panel, /t === "a"\) \{ root\.setStats\(!root\.showStats\)/)
   assert.match(panel, /if \(root\.showStats\) \{ root\.setStats\(false\); return \}/)
   assert.match(panel, /if \(!opened\) \{[\s\S]*?showStats = false/)
-  assert.match(panel, /if \(service\) service\.loadStats\(\)/)  // read when the page opens
+  assert.match(panel, /if \(service && serviceCurrent\) service\.loadStats\(\)/)  // read when the page opens
   assert.match(service, /call\(\["stats"\]/)
   assert.doesNotMatch(view, /\bTimer\b/)
   // The Stats page carries the switch and Clear (the Settings page had no room:
   // tests/qml/pages.qml lays both out); the panel wires them to the service.
   const settings = fs.readFileSync(path.join(ROOT, "SettingsView.qml"), "utf8")
   assert.doesNotMatch(settings, /stats/i)
-  assert.match(panel, /onCountingRequested: function\(on\) \{ if \(root\.service\) root\.service\.setStatsCounting\(on\) \}/)
-  assert.match(panel, /onClearRequested: if \(root\.service\) root\.service\.clearStats\(\)/)
-  assert.match(panel, /error: root\.service \? root\.service\.statsError : ""/)
+  assert.match(panel, /onCountingRequested: function\(on\) \{ if \(root\.service && root\.serviceCurrent\) root\.service\.setStatsCounting\(on\) \}/)
+  assert.match(panel, /onClearRequested: if \(root\.service && root\.serviceCurrent\) root\.service\.clearStats\(\)/)
+  assert.match(panel, /error: !root\.serviceCurrent \? root\.restartNote : root\.service \? \(root\.service\.statsError \|\| ""\) : ""/)
   // (The service's handling of these answers is run in tests/qml/panel.qml.)
   assert.match(service, /call\(\["stats", on \? "on" : "off"\]/)
   assert.match(service, /call\(\["stats", "clear"\]/)
@@ -208,7 +208,7 @@ test("a gathered seek never lands on another episode", () => {
   assert.match(body("sendSeek"), /\["--episode", _seekEpisode\]/)
 })
 
-test("errors from keybinds reach the OSD; the sleep guard backs off; the title resets", () => {
+test("errors from keybinds go out as notifications; the sleep guard backs off; the title resets", () => {
   const service = fs.readFileSync(path.join(ROOT, "Service.qml"), "utf8")
   const bar = fs.readFileSync(path.join(ROOT, "BarWidget.qml"), "utf8")
   assert.match(service, /function cycleSpeed\(\) \{\s*call\(\["speed", "cycle"\], function\(result\) \{\s*if \(!result\.ok\) \{ root\.reportError/)
@@ -520,4 +520,18 @@ test("settings come from the service (settings.json), never the widget's bar ent
   }
   const widget = fs.readFileSync(path.join(ROOT, "BarWidget.qml"), "utf8")
   for (const key of ["showTitle", "scrollTitle", "maxLabelWidth"]) assert.match(widget, new RegExp("service\\.setting\\(\"" + key + "\""))
+})
+
+test("the progress bar lets only up/down wheel events reach the slider", () => {
+  // Omarchy's PanelSlider reads a sideways swipe (no vertical delta) as a
+  // step back; the stand-in slider has no wheel, so this is checked here.
+  const panel = fs.readFileSync(path.join(ROOT, "Panel.qml"), "utf8")
+  assert.match(panel, /acceptedButtons: Qt\.NoButton\s*\n\s*onWheel: function\(wheel\) \{ wheel\.accepted = wheel\.angleDelta\.y === 0 \}/)
+})
+
+test("no keepLoaded: an update reloads the service along with the panel", () => {
+  // Omarchy keeps a keepLoaded service through a plugin reload, so an
+  // update left the old service under the new panel (strict review 10).
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"))
+  assert.notEqual(manifest.keepLoaded, true)
 })

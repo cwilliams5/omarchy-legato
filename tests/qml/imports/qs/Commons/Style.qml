@@ -3,6 +3,12 @@ pragma Singleton
 import QtQuick
 QtObject {
   function space(px) { return Math.max(1, Math.round(px)) }
+  function spaceReal(px) { return px }
+  property QtObject bar: QtObject {
+    property int iconSlot: 24
+    property int iconCanvas: 18
+    property int sizeHorizontal: 30
+  }
   property int cornerRadius: 6
   function controlFill(focused, hot, foreground, accent) { return "#222222" }
   function hoverFillFor(c) { return c }

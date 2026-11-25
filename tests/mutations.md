@@ -12,11 +12,13 @@ python3 -B tests/mutate.py .       # all of them, about 2 hours
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (200 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (294 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
-it.
+it. A mutation whose pattern no longer matches the code is reported STALE
+and fails the run (fix its pattern), as does one whose tests fail
+unmutated (SKIP).
 
-## The set (200; strict review rounds 1 to 8, 2026-11-24)
+## The set (294; strict review rounds 1 to 10, 2026-11-24)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
@@ -127,6 +129,25 @@ caught each mutant. By area:
   evidence can tell (an HLS segment that comes back empty, a host without
   ranges that goes silent, the self-check's warn-level reconnect line), and
   one had numbers that moved nothing. Final: 200 of 200 killed.
+- Round 9: this set after round 9's fixes: 211 of 215. Two survivors were
+  the older `recordSeen` guard masked by round 9's followed-show rule (the
+  tests used a followed show), one a seek clearing the cut that FFmpeg's
+  continuing reconnects logged again (the test now waits until FFmpeg has
+  given up, at 1x so the cut is still ahead), one notification text never
+  given markup. The round's reviewer's own `recordSeen` mutant is listed
+  now. All killed.
+- Round 10 (the reviewers' own): 16 of 23 survived (fit; 12 of 13 in QML:
+  BarWidget was never loaded, the Settings page had no rows, nothing could
+  fail to start), and the claim path Omarchy takes (safety). All listed
+  now, with tests: tests/qml/chip.qml loads the real BarWidget, the
+  stand-ins read real files and can fail starts, and a script error in
+  Legato's QML fails the run. Twelve older patterns had gone stale with
+  the round's changes and would have been skipped quietly: the runner
+  fails on them now. Survivors on the way, each fixed in the test: the
+  test's own steps moving on after a timeout without failing, `recordSeen`
+  masked again by the new list check (Up Next's sync data hides it too
+  now), positions within the one-second rule, a page's visibility set
+  twice (the Flickable alone now), an import over a file made by a script.
 - Equivalent and left out: dropping `after > before` from the skip count
   (`add_stats` ignores values that aren't positive).
 
@@ -134,8 +155,13 @@ caught each mutant. By area:
 
 - The QML runs with stand-ins for Omarchy's Commons and Ui and for
   Quickshell's processes (`tests/qml/imports`): sizes read about 20 px
-  short of the real shell's, clicks are signals emitted by the test, and
-  the bridge never runs (the test answers its calls). BarWidget.qml isn't
-  loaded; its IPC is checked by pattern.
+  short of the real shell's, clicks and wheel turns are signals emitted by
+  the test, and the bridge never runs (the test answers its calls). The
+  progress bar's sideways-swipe guard is checked as text (the stand-in
+  slider has no wheel); a disabled IpcHandler's registration can't show.
+- The resume check's seek is skipped for a file other than the recorded
+  one (round 10); only `sync_now`'s check of the same is planted.
+- Autoplay that can't find out what's next (a lookup error after an end)
+  stops there; not planted (a failure path with no rule to break).
 - The Hyprland rules are checked as text; that Hyprland applies them as
   intended was tested live (docs/PLAN.md SR10, CLAUDE.md).

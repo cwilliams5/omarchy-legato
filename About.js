@@ -18,7 +18,7 @@ var SUPPORT_URL = "https://github.com/cwilliams5/omarchy-legato/issues"
 // Must stay true to what the plugin does. Network: only bin/legato-bridge
 // (API, SHOW_HOSTS, ART_HOST_RE) and mpv streaming the episode's own audio
 // URL; the panel shows covers only from the bridge's cache. Files: auth.json, playback.json, prefs.json,
-// podcasts-cache.json, stats.json, settings.json (all 0600), the art cache.
+// podcasts-cache.json, stats.json, settings.json (0600 as Legato writes them), the art cache.
 var PRIVACY = "No telemetry and no servers of Legato's own: it talks only to Pocket Casts and "
   + "to the podcasts you play. Your email and password go to api.pocketcasts.com once, at sign-in; the "
   + "password is never stored. With your login token, api.pocketcasts.com then serves your Up Next, "

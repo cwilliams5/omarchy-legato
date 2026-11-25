@@ -14,12 +14,12 @@ Cody's work setup.
 
 Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
-(docs/PLAN.md phases H and SR: rounds 1-9 so far; the fit reviewer has
+(docs/PLAN.md phases H and SR: rounds 1-10 so far; the fit reviewer has
 found nothing critical or high since round 7, the safety reviewer still
-found highs in round 9, fixed). Cody, 2026-11-24: SR86 (settings in
-Legato's own file) and SR63 (one live service on a replacement bar) are
-folded into 1.1.0 before round 10, and the review loop runs past round 10
-for as long as rounds keep finding critical or high issues. Then push,
+found a high in round 10, fixed). Cody, 2026-11-24: SR86 (settings in
+Legato's own file) and SR63 (one live service on a replacement bar) were
+folded into 1.1.0 before round 10, and the review loop runs for as long
+as rounds keep finding critical or high issues: round 11 next. Then push,
 release, the stats screenshot re-shot, and the marketplace verification
 request last of all, each on Cody's go. Committed and installed on Cody's
 laptop at each round's end (`./install.sh`), not pushed. Listed on the Omarchy plugin marketplace on 2026-11-23
@@ -161,7 +161,11 @@ docs/PLAN.md         what's left to build
    last push under `RECHECK_AFTER` ago (not after an unguarded sleep). After
    a long stall the position is `unconfirmed` until Pocket Casts answers.
    An episode that ended here is never pushed as in progress (only
-   `play_again` reopens it). Why: Pocket Casts keeps the last write, so re-sending an
+   `play_again` reopens it). Only the file mpv plays is ever pushed, as the
+   episode playback.json names (`sync_now` checks mpv's `path`: a load cut
+   off before it was recorded, or another program opening a file through
+   mpv-mpris, left the old episode named while mpv played another; round
+   10). Why: Pocket Casts keeps the last write, so re-sending an
    old position rewinds the phone. The original did this; it was
    reproduced live on 2026-11-21 (phone at 25:00, rewound to 3:20 within
    12 seconds of resuming on the laptop). A fresh-eyes review found two
@@ -169,7 +173,9 @@ docs/PLAN.md         what's left to build
 2. **Every resume asks Pocket Casts first** (`check_server`): the top of Up
    Next and this episode's record. Its answer wins: seek to where another
    device left off, follow it to a different episode, or stop if it finished
-   everything. This covers resumes the bridge didn't cause: a poll that sees
+   everything. A local place further on is kept only if it played here
+   confirmed and its push failed, never what played after a resume Pocket
+   Casts couldn't confirm (`unconfirmed`: that stretch is no news). This covers resumes the bridge didn't cause: a poll that sees
    a pause sets `checkServer`, and a gap of `RECHECK_AFTER` (90 s) since the
    last push while playing (sleep, shell down) counts as a resume. Nothing
    is pushed until Pocket Casts has answered.
@@ -187,7 +193,8 @@ docs/PLAN.md         what's left to build
    `SYNC_INTERVAL`, so each one pushes) and the slider tick while a panel is
    open. Everything else arrives as an mpv event on the socket.
    `tests/model.test.cjs` enforces it. Why: each bridge call is a fresh
-   Python process (75 to 85 ms of CPU); the original's polling started 37
+   Python process (about 0.1 to 0.2 s of CPU, depending on the machine;
+   the script is compiled at every call); the original's polling started 37
    per 3 minutes while playing and 5 per 3 minutes forever while idle.
 5. **Don't observe mpv's `time-pos` from QML.** It changes many times a
    second and would wake the shell process each time; read it on demand.
@@ -228,17 +235,28 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
 - **A top-bar widget?** Yes, and it's the product: the widget is the
   plugin. Taking the chip off the bar turns Legato off; there's no "works
   without its widget" mode, no hide-the-icon switch, no way back to build.
-  Without a chip, the shell's service is never claimed and stays dormant.
+  Without a chip, the shell's service is never claimed and stays dormant;
+  a panel that goes lets go of it (`claim`/`release`), and the last one
+  gone leaves it dormant a moment later (`dormantAfterMs`, 3 s: a bar
+  rebuilding its widgets claims it again first). An episode playing then
+  plays on, unsynced, until it's stopped or the chip is back (whose first
+  poll asks Pocket Casts first: the 90 s gap); README Known limits.
 - **Where do settings live?** In Legato's own file, `settings.json` in the
   state folder, written only by the bridge (`cmd_settings`: checked against
   the schema, re-read under `settings.lock` before each save, keys it
   doesn't know kept, never saved over a file it can't read whole; a
-  broken one leaves autoplay and the idle unload off, `SETTINGS_SAFE`). The
-  service reads it with `status`, again when the Settings page opens, and
-  from each change's answer; the chip and the panel read the service's
-  copy. A 1.0 user's bar entry is copied in once, when there's no
-  settings.json yet (`settings import`, only after the bar has handed the
-  panel its entry: `settled`), and never read again. Nothing writes
+  broken one, and a mistyped autoplay or idle unload, leave those two off,
+  `SETTINGS_SAFE`; any problem is said once, with a notification while the
+  panel is closed, and again if it comes back). The service reads it with
+  `status`, again when the Settings page opens, and from each change's
+  answer; the chip and the panel read the service's copy. The bridge acts
+  on the file itself for the three settings that act (`setting_now`):
+  the poll's autoplay, the idle unload's "never" and the sleep guard's
+  pause, so a second service (a replacement bar on two screens) or a hand
+  edit can't make it act against the file. A 1.0 user's bar entry is
+  copied in once ever (`settings import`, only after the bar has handed the
+  panel its entry: `settled`; prefs.json `settingsImported` remembers it,
+  so a settings.json deleted later means the defaults), never read again. Nothing writes
   shell.json. Stats (stats.json) and the player's choices (prefs.json)
   were already in the state folder.
 
@@ -292,12 +310,17 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   empty answer, a redirect) for a show you follow (`record_expected`:
   every episode of one has a record, played or not; checked live
   2026-11-24, down to the oldest of 1906) or for an episode a record came
-  back for (`recordSeen`) is no answer: the resume check says unverified,
+  back for (`recordSeen`), or one Pocket Casts lists a place in elsewhere
+  (`position_known_elsewhere`: Up Next's sync data or In Progress; an
+  episode of a show you don't follow has a record once anyone played it,
+  Legato's own push included) is no answer: the resume check says unverified,
   and `resolve_episode` refuses (`no_record`, "Pocket Casts didn't answer:
   try again") rather than start it from the show's public list at 0 and
   push that, on every path (Play from a list, a reload, following the
-  phone to another episode). Shows you never followed have no record, and
-  play from the public list as before.
+  phone to another episode). Next and autoplay start from Up Next's sync
+  data, or from the record when the reply leaves an episode's out
+  (`next_in_up_next`). Episodes of shows you never followed, played by
+  nobody, have no record and play from the public list as before.
 - **Idle unload:** paused for `unloadAfterMinutes` (15), the player closes
   (`stop --if-paused`). The next play goes through `resume_last`, which asks
   Pocket Casts what to play.
@@ -361,8 +384,8 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   (`ffmpeg-version`) not yet checked (`watch_check_due`, `watchcheck.json`
   in the state folder), a detached process serves a short silent WAV from
   127.0.0.1 with its size and ranges, hangs up a third of the way in, and
-  plays it in a private muted mpv with the watcher: both lines must show
-  within 12 s (`seen`: reconnect, short, error; any one passes). If none,
+  plays it in a private muted mpv with the watcher: a line on any of the
+  three channels must show within 12 s (`seen`: reconnect, short, error). If none,
   `ffmpeg_lines_trusted` is false for that pair of versions (mpv's and
   FFmpeg's, `player_versions`): ranged hosts go by the length rule, and a
   notification says so once. A check that never finished counts as failed
@@ -513,9 +536,26 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   copy starts dormant (`active: false`: no bridge call, mpv connection,
   timer, sleep guard or IPC target) and wakes when a panel finds it and
   claims it (`Panel.qml` `claimService`); on a replacement bar no panel
-  can, the panel's own copy runs, and the shell's stays dormant. One copy
-  per screen remains if a replacement bar shows the chip on two screens
-  (README Known limits).
+  can, the panel's own copy runs, and the shell's stays dormant; switched
+  to a replacement bar at run time, Omarchy's bar's panels go, release it,
+  and it goes dormant again. One copy per screen remains if a replacement
+  bar shows the chip on two screens (README Known limits); the bridge acts
+  on settings.json for the settings that act, so they can't disagree.
+- **Omarchy keeps a `keepLoaded` service through a plugin reload** (any
+  file change in the plugin folder: `omarchy plugin update`, install.sh)
+  and rebuilds the widgets from the new files, and it decides what to keep
+  from the manifest it had before the rescan (`reloadPlugins`:
+  `unloadPluginServices`, then `rescan`). Legato 1.0's manifest said
+  keepLoaded (from the original), so updating to 1.1 leaves the 1.0 service
+  running under the 1.1 panel until the shell restarts: the panel sees no
+  `apiVersion` (`serviceCurrent`), says "restart the shell to finish",
+  hands it the bar entry the 1.0 way and leaves Settings and Stats alone
+  (tests/qml/service.qml runs it against 1.0.2's real Service.qml,
+  tests/qml/v1_0). 1.1 has no keepLoaded: later updates reload the service
+  too (mpv is detached; the guard and the proxy restart).
+- **A Process that fails to start sends no `exited`** (Quickshell): each
+  bridge call has a start watchdog (`startWatchdogMs`, 10 s) that answers
+  it as failed, or the poll it was (`playerLoading`) stayed stuck for good.
 - **Qt 6.12** adds a QtQuick `Color` type: a bare `Color.x` in plugin QML no
   longer reaches `qs.Commons`' Color and renders black. The original has 7
   such references (PLAN A2).
@@ -686,8 +726,14 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   read about 20 px short of the real pages), and `tests/qml/panel.qml`: the
   real Panel.qml and Service.qml with stand-ins for Quickshell's processes,
   answering the bridge calls the service starts; `tests/qml/service.qml`:
-  the shell's service dormant until claimed, a replacement bar's panel
-  running its own, and settings from settings.json (the entry copied once). About 13 minutes; nothing
+  the shell's service dormant until claimed (the bar handed over after
+  loading, as Omarchy does), dormant again when its panel goes, a
+  replacement bar's panel running its own, settings from settings.json,
+  the 1.1 panel under 1.0.2's real service (`tests/qml/v1_0`, never edit);
+  `tests/qml/chip.qml`: the real BarWidget (clicks, wheel, title) and the
+  service's own rules. The stand-ins in `tests/qml/imports` read real files
+  (FileView) and can fail to start a process (`Processes.failStarts`); a
+  script error in Legato's QML fails the run. About 15 minutes; nothing
   appears on screen, and the test players load no mpv-mpris (they'd be
   media players on the desktop). `tests/mutations.md` lists the planted
   regressions the suite must catch.
@@ -695,9 +741,10 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   network does: `self.fake["fail"] = {"/sync/update_episode": 1}`.
 - **Live:** push, then `omarchy plugin update io.github.cwilliams5.legato
   --yes` (it refuses without `--yes`, and refuses a live clone with local
-  changes) and `omarchy restart shell` (QML stays cached otherwise; the bar
-  blinks once; playback continues, mpv is detached). Bridge-only changes
-  need no restart.
+  changes). Omarchy reloads the plugin on any file change (service and
+  widgets, since 1.1 has no keepLoaded); `omarchy restart shell` is the
+  clean way to be sure (the bar blinks once; playback continues, mpv is
+  detached). Bridge-only changes need nothing.
 - **A running mpv keeps the options it started with.** New mpv flags reach
   only players started afterwards (after Stop or the idle unload). Anything
   the current player needs (window keys, `menu-data`, OSD settings) is also

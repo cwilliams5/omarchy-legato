@@ -16,7 +16,11 @@ QtObject {
   function write(text) { written += text }
   // A user of Process that declares its own `started` property hides the
   // signal from this file (Service's interpreter probe does): skip it then.
-  onRunningChanged: if (running) { Processes.add(p); if (typeof started === "function") started() }
+  onRunningChanged: if (running) {
+    Processes.add(p)
+    if (Processes.failStarts) { running = false; return }
+    if (typeof started === "function") started()
+  }
   function finish(code, out, err) {
     if (stdout) stdout.text = out || ""
     if (stderr) stderr.text = err || ""

@@ -112,7 +112,8 @@ your Pocket Casts email and password.
 **Dependencies:** none beyond Omarchy. It plays through `mpv` (with
 `mpv-mpris` for media keys), runs its helper on Python 3, and uses the
 stock `systemd-inhibit`, `setpriv` and `dbus-monitor` (to pause before
-sleep) and `hyprctl` (for the video window): all part of Omarchy. You need
+sleep), `notify-send` (messages while the panel is closed) and `hyprctl`
+(for the video window): all part of Omarchy. You need
 a Pocket Casts **email and password;** if you sign in to Pocket Casts with
 Apple or Google, set a password on your account first. Only for
 development: Node.js and, optionally, `qmllint` (Qt 6) for the tests.
@@ -124,6 +125,9 @@ development: Node.js and, optionally, `qmllint` (Qt 6) for the tests.
 - `~/.cache/omarchy-legato/`: cover art
 - its own entry in `~/.config/omarchy/shell.json` (where the chip sits;
   Omarchy writes it)
+- while it runs: mpv's socket in `$XDG_RUNTIME_DIR/omarchy-legato/`, and
+  once per mpv or FFmpeg update a few seconds' test folder,
+  `/tmp/legato-check-*`, removed when the check ends
 
 While the video window is shown, Legato adds its window rules to the
 running Hyprland through `hyprctl` (where the window goes, no title bar, its
@@ -145,13 +149,17 @@ Hyprland stay until it reloads its config: `hyprctl reload`, or log out.
 
 ## Resources
 
-- **Paused or idle, Legato runs nothing on a timer.** Pause, resume, seeks
-  and the end of an episode all arrive as events from mpv.
+- **Paused or idle, nothing repeats.** Pause, resume, seeks and the end of
+  an episode all arrive as events from mpv. Paused, one timer waits for
+  the idle unload (15 minutes by default) and starts one process when it
+  fires.
 - **While playing,** one short Python process every 30 seconds sends your
-  position to Pocket Casts (about 80 ms of CPU each); with the Stats page
-  open, one more after each, to keep its numbers current.
-- **While an episode is loaded,** two small helpers wait with no timer: the
-  sleep guard (for the pause before sleep) and the feed proxy mpv fetches
+  position to Pocket Casts (about 0.1 to 0.2 s of CPU each, depending on
+  the machine); with the Stats page open, one more after each, to keep its
+  numbers current.
+- **While an episode is loaded,** helpers wait with no timer (about 40 MB
+  between them): the sleep guard (for the pause before sleep, with
+  `dbus-monitor` and `systemd-inhibit`) and the feed proxy mpv fetches
   through. They end with the player. The proxy's connection to the show's
   server is checked by the kernel every 20 seconds while idle (TCP
   keepalive), so a dead link is noticed.
@@ -228,14 +236,23 @@ devices.
 - **On a bar that replaces Omarchy's,** the panel can't reach the shell's
   copy of Legato's service, so it runs its own and the shell's stays
   asleep. If that bar shows Legato's chip on two screens, each screen's
-  panel runs one (polls and notifications repeat). Omarchy's own bar is
-  fine on any number of screens.
+  panel runs one: polls and notifications repeat, and a skip length or the
+  first tab changed on one screen reaches the other at its next status
+  read (autoplay, the idle unload's "never" and pause before sleep follow
+  settings.json at once on both). Omarchy's own bar is fine on any number
+  of screens.
+- **Taking the chip off the bar, or disabling Legato, mid-episode** leaves
+  the episode playing (mpv runs on its own), not synced and not paused
+  before sleep, until you stop it or Legato is back; then its first check
+  asks Pocket Casts before anything is sent.
+- **Updating from 1.0:** restart the shell once afterwards (`omarchy
+  restart shell`, or log out and in). Omarchy keeps 1.0's background part
+  running through the update, so the panel says so and Settings and Stats
+  wait until then.
 - **On a host without byte ranges,** when Pocket Casts has you earlier
   than this machine (you went back on the phone) and the episode is bigger
   than mpv's buffer, Legato can't seek back there; it plays on from where
   it was.
-- **On a screen under 760 pixels tall,** the Settings page and About with
-  its license open are taller than the panel can be.
 
 ## Built on
 
@@ -346,8 +363,9 @@ The gear in the panel's header (or `g`) lists them all and saves changes as
 you make them, to `~/.local/state/omarchy-legato/settings.json`. From a
 script: `~/.config/omarchy/plugins/io.github.cwilliams5.legato/bin/legato-bridge
 settings set -- <key> <value>` (the value as JSON: `false`, `30`,
-`"podcasts"`); Legato picks it up when the Settings page next opens or the
-shell restarts.
+`"podcasts"`). Autoplay, the idle unload's "never" and pause before sleep
+take effect at once (Legato's helper reads the file whenever it acts);
+the rest when the Settings page next opens or the shell restarts.
 Up to 1.0 they lived in the chip's entry in `~/.config/omarchy/shell.json`;
 1.1 copies them from there once, then no longer reads it, so `omarchy bar
 set` doesn't change them any more.
@@ -374,9 +392,13 @@ video window's menu, the Settings page or (the stats) the Stats page.
 Disabling the plugin (or dragging its chip off the bar, which disables it)
 removes its entry from the bar; your settings, the player's own choices,
 your sign-in and your listening stats all stay, and are there when you turn
-it back on. A `settings.json` that can't be read (a hand edit gone wrong) is
-never saved over: the Settings page says so, and autoplay and the idle
-unload stay off until it's fixed or deleted.
+it back on. A `settings.json` that can't be read (a hand edit gone wrong, or
+a symbolic link: every file in the state folder must be a plain file of
+your own) is never saved over: the Settings page says so, with a
+notification while the panel is closed, and autoplay and the idle unload
+stay off until it's fixed or deleted (deleted, the defaults hold). A value
+that isn't valid gets its default, except autoplay and the idle unload,
+which stay off; a key that isn't a setting is kept and named.
 
 ## How it works
 
