@@ -356,19 +356,30 @@ Item {
     check("a stale poll still reports a broken stream", service.actionError.indexOf("Stream dropped") >= 0, service.actionError)
     settle()
 
-    // Two quick switches answered out of order: the later one wins. And a
-    // Clear answered after a later switch doesn't undo it.
-    service.setStatsCounting(true)
+    // Two quick switches: one write at a time, in order (strict review 16:
+    // started together, they raced for the file, which could end on the
+    // first while the page showed the second); the earlier answer is
+    // superseded, the later one shows.
+    check("(counting, before the switches)", service.statsCounting === true, service.statsCounting)
     service.setStatsCounting(false)
+    service.setStatsCounting(true)
+    check("two quick switches: one write at a time", calls("stats off").length === 1 && calls("stats on").length === 0,
+          calls("stats off").length + " " + calls("stats on").length)
     answer("stats off", Object.assign({}, top.stats, { counting: false }))
+    check("the earlier answer doesn't show (no flicker back)", service.statsCounting === true && named("statsCounting").text === "On",
+          service.statsCounting + " " + named("statsCounting").text)
+    check("then the later one", calls("stats on").length === 1, calls("stats on").length)
     answer("stats on", Object.assign({}, top.stats, { counting: true }))
-    check("a switch's late answer is ignored", service.statsCounting === false && named("statsCounting").text === "Off",
+    check("and the page ends on it", service.statsCounting === true && named("statsCounting").text === "On",
           service.statsCounting + " " + named("statsCounting").text)
     service.clearStats()
     service.setStatsCounting(true)
-    answer("stats on", Object.assign({}, top.stats, { counting: true, listened: 5 }))
+    check("a switch after a Clear waits for it", calls("stats clear").length === 1 && calls("stats on").length === 0,
+          calls("stats clear").length + " " + calls("stats on").length)
     answer("stats clear", Object.assign({}, top.stats, { counting: false, listened: 0 }))
-    check("a Clear's late answer is ignored", statsView.stats.listened === 5 && service.statsCounting === true,
+    check("a Clear's answer a later switch supersedes doesn't show", statsView.stats.listened !== 0, statsView.stats.listened)
+    answer("stats on", Object.assign({}, top.stats, { counting: true, listened: 5 }))
+    check("and the later answer shows", statsView.stats.listened === 5 && service.statsCounting === true,
           statsView.stats.listened + " " + service.statsCounting)
     settle()
     // A switch or Clear that fails says so on the page (round 1: a failed
@@ -478,6 +489,24 @@ Item {
           && calls("pause").length === 0 && calls("resume").length === 0,
           Processes.started.filter(function(p) { try { return p.alive } catch (e) { return false } })
             .map(function(p) { return p.command.slice(-4).join(" ") }).join("; "))
+    settle()
+    // Play on the loaded episode's row goes on from where it is (strict
+    // review 16, N1: loaded again, it started up to a poll behind).
+    var loadedItem = { type: "episode", uuid: "aaaaaaaa-0000-0000-0000-0000000000ee", podcast: "bbbbbbbb-0000-0000-0000-000000000001",
+                       name: "Loaded", show: "A show", duration: 100, playedUpTo: 10, status: 2 }
+    service.applyPlayer({ active: true, playing: false, position: 40, duration: 100, item: loadedItem })
+    service.playItem(loadedItem)
+    check("Play on the loaded episode's row resumes it", calls("resume").length === 1 && calls("play").length === 0,
+          calls("resume").length + " " + calls("play").length)
+    answer("resume", { active: true, playing: true, position: 40, duration: 100, item: loadedItem })
+    service.playItem(loadedItem)
+    check("and does nothing while it plays", calls("resume").length === 0 && calls("play").length === 0 && calls("pause").length === 0,
+          calls("resume").length + " " + calls("play").length)
+    service.playItem(loadedItem, true)
+    check("from the start, it's played again from the top", calls("play").length === 1 && calls("--from-start").length === 1,
+          calls("play").length)
+    answer("play", { active: true, playing: true, position: 0, duration: 100, item: loadedItem })
+    service.applyPlayer({ active: false, playing: false, item: null })
     settle()
     // A show's page that answers late doesn't overwrite the one you opened since.
     service.openDetail({ type: "podcast", uuid: "bbbbbbbb-0000-0000-0000-00000000000a", name: "Show A" })

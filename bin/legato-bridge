@@ -1866,8 +1866,8 @@ def start_mpv(prefs):
 
 VIDEO_APP_ID = "legato-video"
 # The Hyprland tag on the video window, while it's pinned (Always on top),
-# that asks taskbars and window switchers to leave it out (Transom and Latch
-# honor it).
+# that asks taskbars and window switchers to leave it out (Transom honors
+# it).
 SKIP_TASKBAR_TAG = "skip-taskbar"
 GEOMETRY_RE = re.compile(r"^-?\d{1,5}$")
 # How see-through the video window is, in percent. Capped below 100: a
@@ -2294,26 +2294,42 @@ def push_failed(state, position):
     from before the suspend."""
     if not slept_since_start():
         state["unsentPush"] = {"uuid": (state.get("episode") or {}).get("uuid") or "",
-                               "position": float(position), "at": time.time()}
+                               "position": float(position), "at": time.time(),
+                               # Where Pocket Casts had it from here when this failed.
+                               "left": float(state.get("lastSyncPos") or 0)}
 
 
 def unsent_push(state):
-    """This episode's unsent push, if any."""
+    """This episode's unsent push, if any: only while what Pocket Casts is
+    known to have (`lastSyncPos`) is still what it had when the push failed
+    (`left`). A resume check that took another device's place since moved
+    it: the failed place is history then, never pushed over that device
+    (strict review 16, C1: a reload or a switch pushed it after one)."""
     unsent = state.get("unsentPush")
     uuid = (state.get("episode") or {}).get("uuid")
     if (isinstance(unsent, dict) and uuid and unsent.get("uuid") == uuid
-            and number(unsent.get("position")) and number(unsent.get("at"))):
+            and number(unsent.get("position")) and number(unsent.get("at")) and number(unsent.get("left"))
+            and abs(unsent["left"] - float(state.get("lastSyncPos") or 0)) < 0.001):
         return unsent
     return None
 
 
-def kept_place(state, server):
+def where_left(left, place, status):
+    """Whether Pocket Casts still has an episode where this machine left it
+    (`left`, its place when a push failed): about the same place, and
+    neither marked played nor unplayed since (a Mark as unplayed puts it at
+    0, where an episode started here from the top also was). Otherwise
+    another device spoke, and its say stands over a place left unsent."""
+    return abs(place - (left or 0)) <= DRIFT_SLACK and as_int(status) not in (STATUS_PLAYED, STATUS_UNPLAYED)
+
+
+def kept_place(state, server, status=None):
     """Where to start the episode `state` names again instead of Pocket
-    Casts' place `server`, or None: the place of a push that failed
-    (`unsentPush`), within the hour of the failure, while Pocket Casts still
-    holds this machine's last confirmed push (`lastSyncPos`): nobody else
-    has written since, so this machine's place is the latest there is. Any
-    other write (your phone, going back on purpose, or on) wins.
+    Casts' place `server` (with its `status`), or None: the place of a push
+    that failed (`unsentPush`), within the hour of the failure, while Pocket
+    Casts still has it where it was then (`where_left`): nobody else has
+    written since, so this machine's place is the latest there is. Any
+    other write (your phone, going back on purpose, or on; a mark) wins.
 
     Only a reload of the same episode uses it (play_item: Play after the
     player closed, a break's reload, Play from a list). A loaded player needs
@@ -2322,7 +2338,7 @@ def kept_place(state, server):
     unsent = unsent_push(state)
     if unsent is None or time.time() - unsent["at"] >= UNSENT_KEPT:
         return None
-    if abs(server - (state.get("lastSyncPos") or 0)) > DRIFT_SLACK:
+    if not where_left(state.get("lastSyncPos"), server, status):  # (its `left`: unsent_push)
         return None
     return unsent["position"]
 
@@ -2336,12 +2352,12 @@ def moved_unasked(state):
     return abs((state.get("position") or 0) - last) >= 1
 
 
-def kept_elsewhere(state, uuid, server):
+def kept_elsewhere(state, uuid, server, status=None):
     """kept_place for an episode left with its place unsent (stash_unsent):
     (where to start it, its unsent record) or (None, None)."""
     for entry in state.get("unsentPlaces") or []:
         if (entry.get("uuid") == uuid and time.time() - entry["at"] < UNSENT_KEPT
-                and abs(server - (entry.get("left") or 0)) <= DRIFT_SLACK):
+                and where_left(entry.get("left"), server, status)):
             return entry["position"], {"uuid": uuid, "position": entry["position"], "at": entry["at"]}
     return None, None
 
@@ -2365,7 +2381,7 @@ def stash_unsent(previous, incoming):
         places = [p for p in places if p.get("uuid") != outgoing["uuid"]]
         places.append({"uuid": outgoing["uuid"], "podcast": outgoing.get("podcast") or "",
                        "duration": outgoing.get("duration"), "position": float(unsent["position"]),
-                       "at": unsent["at"], "left": float(previous.get("lastSyncPos") or 0), "tried": 0.0})
+                       "at": unsent["at"], "left": unsent["left"], "tried": 0.0})
     return places
 
 
@@ -2379,9 +2395,8 @@ def retry_unsent(state, force=False):
     if not places:
         return
     keep, now = [], time.time()
-    ended = ended_or_pending(state)
     for entry in places:
-        if now - entry["at"] >= UNSENT_KEPT or entry["uuid"] in ended:
+        if now - entry["at"] >= UNSENT_KEPT:
             continue
         if not force and now - (entry.get("tried") or 0) < 60:
             keep.append(entry)
@@ -2395,9 +2410,8 @@ def retry_unsent(state, force=False):
         if not record or not a_place(record.get("playedUpTo")):
             keep.append(entry)  # no answer: ask again later
             continue
-        if (as_int(record.get("playingStatus")) == STATUS_PLAYED
-                or abs(record["playedUpTo"] - (entry.get("left") or 0)) > DRIFT_SLACK):
-            continue  # finished or moved on another device since: its say stands
+        if not where_left(entry.get("left"), record["playedUpTo"], record.get("playingStatus")):
+            continue  # moved, finished or marked on another device since: its say stands
         try:
             push_position(entry, entry["position"])
         except ApiError:
@@ -2658,13 +2672,14 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
     # couldn't send, if nobody moved it since (kept_place), not from Pocket
     # Casts' older one. Never for an episode played to its end.
     kept = unsent = None
-    if not from_start and item.get("status") != STATUS_PLAYED:
+    if not from_start:
         if current.get("uuid") == item.get("uuid"):
-            kept = kept_place(previous, as_int(item.get("playedUpTo")))
+            kept = kept_place(previous, as_int(item.get("playedUpTo")), item.get("status"))
             unsent = previous.get("unsentPush")
         else:
             # One left earlier with its place unsent (stash_unsent).
-            kept, unsent = kept_elsewhere(previous, item.get("uuid"), as_int(item.get("playedUpTo")))
+            kept, unsent = kept_elsewhere(previous, item.get("uuid"), as_int(item.get("playedUpTo")),
+                                          item.get("status"))
     if kept is not None:
         position = kept
     elif (position == 0 and not from_start and start_from
@@ -2696,7 +2711,9 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
              "unsentPlaces": places}
     synced(state)
     if kept is not None:
-        state["unsentPush"] = unsent  # until a push of it goes through
+        # Until a push of it goes through; measured from Pocket Casts' place
+        # now (lastSyncPos), which nobody has moved since (where_left).
+        state["unsentPush"] = dict(unsent, left=server_place)
     strike = previous.get("breakStrike")
     if isinstance(strike, dict) and strike.get("uuid") == item.get("uuid"):
         state["breakStrike"] = strike  # a reload of the episode that just broke (stream_stopped)
@@ -2927,6 +2944,8 @@ def retry_pending_finish(state, force=False):
                 # else has a place in it (every push from here failed).
                 record = {"playedUpTo": entry.get("left") or 0,
                           "playingStatus": STATUS_PLAYED if entry.get("played") else 0}
+            elif not record and left_its_feed(entry["uuid"], entry.get("podcast", "")):
+                continue  # gone from its feed, Pocket Casts forgot it: nothing to tell, nothing to follow
             if not record or not a_place(record.get("playedUpTo")):
                 keep.append(entry)  # no answer: ask again later
                 continue
@@ -4386,7 +4405,6 @@ def resume_last(prefs):
     state = load_playback()
     if state.get("pendingFinish"):
         retry_pending_finish(state, force=True)  # an end Pocket Casts wasn't told of yet
-    retry_unsent(state, force=True)
     episode = state.get("episode") or {}
     item = None
     if episode.get("uuid") and unanswered_end(state, episode["uuid"]):
@@ -4985,6 +5003,20 @@ def setting_value(entry, value):
     return None
 
 
+def clamped(entry, value):
+    """An integer outside `entry`'s range, brought to its nearest end: 1.0
+    used whatever number the bar entry held (`skipBack` 3 skipped 3 s), so
+    the import keeps it as close as 1.1 allows, not silently the default."""
+    if entry.get("type") != "integer" or isinstance(value, bool) or not isinstance(value, (int, float)):
+        return value
+    low, high = entry.get("min"), entry.get("max")
+    if isinstance(low, (int, float)):
+        value = max(low, value)
+    if isinstance(high, (int, float)):
+        value = min(high, value)
+    return value
+
+
 def from_bar_entry(entry, value):
     """A 1.0 bar entry's value as 1.1 keeps it: `omarchy bar set` (without
     --json) stored text, "0" or "false", and 1.0 read numbers from it."""
@@ -5131,7 +5163,10 @@ def cmd_settings(args):
                 copied = {}
                 for entry in schema:
                     if entry["key"] in entry_values:
-                        valid = setting_value(entry, from_bar_entry(entry, entry_values[entry["key"]]))
+                        value = from_bar_entry(entry, entry_values[entry["key"]])
+                        valid = setting_value(entry, value)
+                        if valid is None:
+                            valid = setting_value(entry, clamped(entry, value))
                         if valid is not None:
                             copied[entry["key"]] = valid
                 save_state(SETTINGS_FILE, copied)
@@ -5176,7 +5211,22 @@ def cmd_mark(args):
     else:
         push_position(item, 0, STATUS_UNPLAYED)
         forget_pending(uuid)  # unplayed now: nothing left to mark or take off Up Next
+    forget_unsent(uuid)
     out({"uuid": uuid, "status": STATUS_PLAYED if args.state == "played" else STATUS_UNPLAYED})
+
+
+def forget_unsent(uuid):
+    """You marked an episode played or unplayed: a place of it this machine
+    couldn't send is history (it would undo the mark)."""
+    with StateLock():
+        state = load_playback()
+        places = state.get("unsentPlaces") or []
+        unsent = state.get("unsentPush")
+        if any(p.get("uuid") == uuid for p in places) or (isinstance(unsent, dict) and unsent.get("uuid") == uuid):
+            state["unsentPlaces"] = [p for p in places if p.get("uuid") != uuid]
+            if isinstance(unsent, dict) and unsent.get("uuid") == uuid:
+                del state["unsentPush"]
+            save_playback(state)
 
 
 def forget_pending(uuid):

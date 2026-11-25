@@ -317,7 +317,7 @@ history on other submissions). Fixed, each with a failing-first test:
     session first; concurrent refreshes share one; the panel drops lists
     from an earlier session. Three tests fail on 49b51fa. Replied on the issue.
 - [x] After the listing: tag the video window `skip-taskbar` (a Hyprland
-  tag), and have Transom and Latch skip windows with it (Cody's call,
+  tag), and have Transom and the window switcher skip windows with it (Cody's call,
   2026-11-22: not during the review). Done as H5.
 
 ### H. After the listing (2026-11-23; shipped as 1.1.0)
@@ -355,7 +355,7 @@ history on other submissions). Fixed, each with a failing-first test:
 - [x] H5 The video window tagged `skip-taskbar` (its own runtime rule)
   while it's pinned (Always on top; Cody: unpinned, other windows can cover
   it, and without a button or Alt+Tab entry it would be lost); Transom
-  (cd5ee47, plus a refresh on Hyprland's `pin` event) and Latch (586a6bb)
+  (cd5ee47, plus a refresh on Hyprland's `pin` event) and the window switcher
   leave tagged windows out unless minimized, each with tests that fail
   without the check. Checked live on a stand-in `legato-video` window.
 - [x] H7 The release review (go-public's updates.md: a correctness
@@ -1491,6 +1491,64 @@ second doors into outcomes earlier rounds closed at one door.
 - [ ] SR173 (left) Stand-ins: no first-wins IpcHandler, per-screen test bars
   where Omarchy shares one; the panel built on every screen.
 
+### SR, round 16 (2026-11-25)
+
+- [x] SR174 (critical, C1) A place whose push failed outlived a resume check
+  that took the phone's place: the check set `lastSyncPos` to the phone's
+  place and kept `unsentPush`, so the keep rules (comparing with
+  `lastSyncPos`) read "nobody wrote since", and a reload (Stop, Play) or a
+  switch (Next) pushed the old place over the phone (verified by four
+  paths: a media-key pause at once, a stall, a gap). The unsent place now
+  carries `left`, where Pocket Casts had it when the push failed, and holds
+  only while `lastSyncPos` is still that (`unsent_push`): one gate for
+  every reader, whatever writes `lastSyncPos` next. Tests for the four
+  paths.
+- [x] SR175 (low-medium, M1) A Mark as unplayed (here or on the phone) of an
+  episode left unsent near 0 was undone by the retry: a mark is a say now
+  (`where_left`: played or unplayed is another device speaking), and a mark
+  here drops the episode's unsent places (`forget_unsent`).
+- [x] SR176 (tests, T1) `kept_elsewhere`'s "still where it was left" and the
+  hour were never reached (every test polled first): tests reload before
+  any retry.
+- [x] SR177 (low, L1) An unwatched end that later left its feed (Pocket Casts
+  forgot it) made Play say "try again" for six hours: the retry drops such
+  an end (`left_its_feed`), and Play moves on.
+- [x] SR178 (nit, N1) Play on the loaded episode's row reloaded it from
+  Pocket Casts' place, up to a poll behind: it resumes it now (from the
+  start still plays it again from the top).
+- [x] SR180 (medium, fit M1) The sleep guard's and the feed proxy's exemption
+  from the 120 s call deadline was untested (both mutants survived; under
+  it the guard restarted every two minutes and gave up, the proxy died
+  mid-episode): `Deadlines` runs each past a 1 s deadline.
+- [-] SR181 (low, fit L1, left for after 1.1.0) The whole panel is built on
+  every screen at start and at every plugin reload (about 330 objects a
+  chip); Omarchy's KeyboardPanel offers lazy `content:`. A restructure of
+  Panel.qml (its functions reach into the tree by id) and of the test
+  stand-in; not a correctness issue.
+- [x] SR182 (low, fit L2) Two quick Settings or Stats changes raced for the
+  file's lock: the page could show one value and the file hold the other
+  (the bridge acts on the file). Writes now go one at a time, in order
+  (`write`, with a watchdog), and an answer a later change supersedes
+  never shows.
+- [x] SR183 (low, fit L3) Other ways to "no screen, nothing syncs": a shell
+  started with no screen, a replacement bar's panels gone with the screens
+  (the shell's copy wakes whenever there's no screen: `noScreens`), and the
+  chip left in the tray's drawer after the tray is removed (README).
+- [x] SR184 (low, fit L4-L5, N2-N5) README's mpv memory figure (80-150 MB,
+  measured), "which disables it" (not with Legato in `plugins`), the
+  Hyprland hook and Lua functions left after uninstall; 1.0's out-of-range
+  values clamped at the import, not dropped; an unreleased project's name
+  out of the public files; Model.js comments by their functions.
+- [x] SR185 (tests, fit L6-L7) The event retry's bound and back-off; signed
+  out with no player, no poll; a copy gone dormant with a player keeps no
+  sleep guard (was a source regex only).
+- [ ] SR186 (left) Light themes: `Qt.darker` dims the wrong way (platform-
+  wide: Omarchy's own panels do the same); no i18n; CLAUDE.md's length.
+- [x] SR179 (redundant guards) `retry_unsent`'s ended-episode filter (the
+  record's status covers it) and `resume_last`'s forced send (the switch
+  sends it) removed; `empty_lookup_answers`'s "a show you follow" tested
+  (its failure would mark an unfinished episode played).
+
 ## Testing
 
 - `tests/run` before every commit: all suites, about 17 minutes, nothing on
@@ -1632,6 +1690,19 @@ second doors into outcomes earlier rounds closed at one door.
   480 mutations, round 15's 63 new or changed all killed (one after its
   test was tightened, one after a redundant guard was removed). Round 16
   next (round 15 had highs).
+- 2026-11-25 (morning): round 16 (SR174-SR186): one critical, the second
+  door into round 15's fix: a place whose push failed outlived a resume
+  check that took the phone's place, and a reload or a switch pushed it
+  over the phone (four paths verified). The unsent place now carries its
+  base (`left`) and holds only while `lastSyncPos` is still that: one gate
+  for every reader. Marks are a say over a place left unsent; an end gone
+  from its feed no longer blocks Play; Play on the loaded row resumes it.
+  Fit (no crit/high): the deadline's exemptions tested; settings and stats
+  writes in order; awake whenever there's no screen; 1.0's out-of-range
+  values clamped; README figures; an unreleased project's name out of the
+  public files. 396 Python + 47 node tests; 498 mutations, round 16's 31
+  new or changed all killed (two after a redundant layer was removed, one
+  after its test was tightened). Round 17 next (round 16 had a critical).
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

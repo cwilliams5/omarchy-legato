@@ -2599,6 +2599,161 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         self.assertGreater(run_bridge("toggle")["data"]["position"], 25)
         self.assertGreater(self.fake["progress"][EP_1], 25)
 
+    # --- Strict review 16 (C1): a resume that took the phone's place makes
+    # a place whose push failed history. lastSyncPos became the phone's
+    # place, and the keep rules (comparing with it) read "nobody wrote":
+    # a reload or a switch pushed the old place over the phone.
+    def took_the_phones_place(self):
+        self.unsent_paused()          # unsent 26+, Pocket Casts 20
+        self.fake["fail"] = {}
+        self.other_device(EP_1, 70)   # the phone carried on from 20 to 70
+        run_bridge("toggle")          # Play asks first: seeks to 70
+        self.assertEqual(self.fake["progress"][EP_1], 70)
+
+    def test_a_place_unsent_before_a_resume_took_the_phones_place_never_comes_back_on_a_reload(self):
+        self.took_the_phones_place()
+        self.mpv_set_pause(True)      # a media key, at once
+        run_bridge("player")
+        run_bridge("stop")
+        view = run_bridge("toggle")["data"]
+        self.assertGreaterEqual(view["position"], 68)
+        self.assertGreaterEqual(self.fake["progress"][EP_1], 68)
+
+    def test_a_place_unsent_before_a_resume_took_the_phones_place_never_goes_with_next(self):
+        self.took_the_phones_place()
+        self.mpv_set_pause(True)
+        run_bridge("player")
+        self.assertTrue(run_bridge("next")["ok"])
+        self.assertGreaterEqual(self.fake["progress"][EP_1], 68)
+        self.assertEqual(bridge.load_playback().get("unsentPlaces"), [])
+
+    def test_a_place_unsent_before_a_resume_took_the_phones_place_never_returns_after_a_stall(self):
+        self.took_the_phones_place()
+        with bridge.Mpv.connect() as player:  # the watcher reports a 20 s stall: nothing pushed
+            player.set("user-data/legato", {"watching": True, "stallSince": int(time.time()) - 20})
+        run_bridge("player")
+        self.assertTrue(run_bridge("next")["ok"])
+        self.assertGreaterEqual(self.fake["progress"][EP_1], 68)
+
+    def test_a_place_unsent_before_a_resume_took_the_phones_place_never_returns_after_a_gap(self):
+        self.took_the_phones_place()
+        time.sleep(1.5)
+        self.mpv_set_pause(True)      # a media key while the shell was down
+        self.age_last_push(200)
+        run_bridge("player")
+        run_bridge("stop")
+        self.assertGreaterEqual(run_bridge("toggle")["data"]["position"], 68)
+        self.assertGreaterEqual(self.fake["progress"][EP_1], 68)
+
+    # --- Strict review 16 (T1): kept_elsewhere's own rules, before any retry.
+    def stashed(self):
+        self.unsent_paused()
+        self.age_last_push(120)
+        self.assertTrue(run_bridge("next")["ok"])  # pushes still failing: stashed, tried just now
+        self.assertEqual([p["uuid"] for p in bridge.load_playback()["unsentPlaces"]], [EP_1])
+
+    def test_a_reload_of_an_episode_left_unsent_that_the_phone_moved_follows_the_phone(self):
+        self.stashed()
+        self.other_device(EP_1, 40)
+        self.fake["fail"] = {}
+        run_bridge("stop")
+        view = run_bridge("play", EP_1, "--podcast", PODCAST_A)["data"]  # within the minute: no retry yet
+        self.assertTrue(38 < view["position"] < 45, view["position"])
+        self.assertGreaterEqual(self.fake["progress"][EP_1], 38)
+
+    def test_a_reload_of_an_episode_left_unsent_keeps_its_place_through_a_push_that_fails_too(self):
+        self.stashed()
+        run_bridge("stop")
+        self.assertGreater(run_bridge("play", EP_1, "--podcast", PODCAST_A)["data"]["position"], 25)  # pushes still failing
+        kept = bridge.unsent_push(bridge.load_playback())  # carried, and measured from Pocket Casts' place now
+        self.assertTrue(kept and kept["position"] > 25, kept)
+        run_bridge("stop")
+        self.fake["fail"] = {}
+        self.assertGreater(run_bridge("toggle")["data"]["position"], 25)
+        self.assertGreater(self.fake["progress"][EP_1], 25)
+
+    def test_a_reload_of_an_episode_left_unsent_over_an_hour_ago_starts_at_pocket_casts_place(self):
+        self.stashed()
+        state = bridge.load_playback()
+        state["unsentPlaces"][0]["at"] -= bridge.UNSENT_KEPT + 60
+        bridge.save_playback(state)
+        self.fake["fail"] = {}
+        run_bridge("stop")
+        self.assertLess(run_bridge("play", EP_1, "--podcast", PODCAST_A)["data"]["position"], 23)
+
+    # --- Strict review 16 (M1): a mark is a say about where it stands.
+    def left_unsent_from_the_top(self):
+        """Started from the top here; the pause's push failed; Next stashed
+        it with Pocket Casts at 0 (left)."""
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.position() > 6)
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        run_bridge("pause")
+        run_bridge("player")
+        self.assertTrue(run_bridge("next")["ok"])
+        self.fake["fail"] = {}
+
+    def test_mark_as_unplayed_here_isnt_undone_by_a_place_left_unsent(self):
+        self.left_unsent_from_the_top()
+        self.assertTrue(run_bridge("mark", "unplayed", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.assertEqual(bridge.load_playback()["unsentPlaces"], [])
+        self.age_unsent_tries()
+        run_bridge("player")
+        self.assertEqual((self.fake["progress"][EP_1], self.fake["status"][EP_1]), (0, bridge.STATUS_UNPLAYED))
+
+    def test_mark_as_unplayed_on_the_phone_isnt_undone_by_a_place_left_unsent(self):
+        self.left_unsent_from_the_top()
+        self.other_device(EP_1, 0, bridge.STATUS_UNPLAYED)
+        self.age_unsent_tries()
+        run_bridge("player")
+        self.assertEqual((self.fake["progress"][EP_1], self.fake["status"][EP_1]), (0, bridge.STATUS_UNPLAYED))
+        self.assertEqual(bridge.load_playback()["unsentPlaces"], [])
+
+    def test_a_reload_after_the_phone_marked_it_unplayed_starts_at_the_top(self):
+        self.unsent_then_closed()
+        self.other_device(EP_1, 0, bridge.STATUS_UNPLAYED)
+        self.assertLess(run_bridge("toggle")["data"]["position"], 3)
+        self.assertEqual(self.fake["progress"][EP_1], 0)
+
+    # --- Strict review 16 (L1, R9a): ends whose lookup stays empty.
+    def test_an_unwatched_end_of_an_episode_that_left_its_feed_lets_play_move_on(self):
+        # Unanswered at its end (the player closed); since then the feed
+        # moved on and Pocket Casts forgot it: Play said "try again" for six
+        # hours. Gone, it's nothing to tell and nothing to follow.
+        self.end_through_a_gap()
+        self.fake["fail"] = {"/user/episode": 1}
+        run_bridge("player", "--no-autoplay")
+        self.assertFalse(self.mpv_running())
+        self.fake["shows"][PODCAST_A]["episodes"] = [EP_2]
+        self.fake["episodeReply"] = {EP_1: (404, b'{"errorMessage": "not found"}')}
+        before = len(self.pushes_of(EP_1))
+        view = run_bridge("toggle")["data"]
+        self.assertEqual(self.pushes_of(EP_1)[before:], [])
+        self.assertEqual(view["item"]["uuid"], EP_2)
+        self.assertEqual(bridge.load_playback()["pendingFinish"], [])
+
+    def test_an_empty_lookup_at_an_unwatched_end_of_a_followed_show_is_no_answer(self):
+        # Its record never seen here (loaded from Up Next's sync data), no
+        # place listed anywhere: for a show you follow, an empty lookup is a
+        # glitch, and the phone's place stands (never marked played).
+        bridge.save_prefs({"volume": 0, "speed": 2.0})
+        self.fake["upnext"] = [EP_1, EP_2]
+        self.other_device(EP_2, 105)
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.assertEqual(run_bridge("next")["data"]["item"]["uuid"], EP_2)
+        self.assertFalse(bridge.load_playback().get("recordSeen"))
+        self.wait_for(lambda: self.position() > 111)
+        self.age_last_push(600)
+        self.wait_for(lambda: self.mpv_get("eof-reached") is True, timeout=15)
+        self.other_device(EP_2, 50)
+        self.fake["episodeReply"] = {EP_2: (404, b'{"errorMessage": "not found"}')}
+        self.fake["noSync"] = self.fake["notListed"] = {EP_2}
+        run_bridge("player", "--no-autoplay")
+        self.assertEqual((self.fake["progress"][EP_2], self.fake["status"][EP_2]), (50, bridge.STATUS_IN_PROGRESS))
+        self.assertFalse(self.mpv_running())
+
     # --- Strict review 15 (H2, L1): an end that isn't known to have ended here.
     def test_an_unwatched_end_pocket_casts_couldnt_confirm_is_never_played_again_over_the_phone(self):
         # The end's record read failed (the outage that left it unwatched):
@@ -5387,11 +5542,12 @@ class SettingsFile(TempHome):
         entry = {"id": "io.github.cwilliams5.legato", "autoplay": False, "skipBack": 20, "maxLabelWidth": 5000,
                  "defaultTab": "nowhere", "junk": 1}
         view = run_bridge("settings", "import", "--", json.dumps(entry))["data"]
-        self.assertEqual(self.saved(), {"autoplay": False, "skipBack": 20})  # only valid settings
+        # Settings only, and valid (a number past the range at its end: round 16).
+        self.assertEqual(self.saved(), {"autoplay": False, "skipBack": 20, "maxLabelWidth": 600})
         self.assertEqual((view["values"]["autoplay"], view["values"]["skipBack"], view["stored"]), (False, 20, True))
         self.assertEqual(oct(os.stat(self.path()).st_mode & 0o777), "0o600")
         run_bridge("settings", "import", "--", json.dumps({"autoplay": True, "skipBack": 30}))
-        self.assertEqual(self.saved(), {"autoplay": False, "skipBack": 20})  # a second start changes nothing
+        self.assertEqual(self.saved(), {"autoplay": False, "skipBack": 20, "maxLabelWidth": 600})  # a second start changes nothing
         # Deleted later (to reset, or a broken one): the old entry is never
         # copied in again (strict review 10); the defaults hold.
         os.remove(self.path())
@@ -5411,6 +5567,13 @@ class SettingsFile(TempHome):
         run_bridge("settings", "import", "--", json.dumps({"unloadAfterMinutes": "0", "skipBack": "15",
                                                            "autoplay": "false", "showTitle": "true", "maxLabelWidth": "x"}))
         self.assertEqual(self.saved(), {"unloadAfterMinutes": 0, "skipBack": 15, "autoplay": False, "showTitle": True})
+
+    def test_1_0s_values_outside_the_range_are_brought_to_its_ends(self):
+        # Strict review 16 (L5): 1.0 used any number the bar entry held; the
+        # import dropped them for the defaults, silently.
+        run_bridge("settings", "import", "--", json.dumps({"skipBack": 3, "maxLabelWidth": 1000}))
+        schema = {e["key"]: e for e in bridge.settings_schema()}
+        self.assertEqual(self.saved(), {"skipBack": schema["skipBack"]["min"], "maxLabelWidth": schema["maxLabelWidth"]["max"]})
 
     def test_a_fresh_entry_still_creates_the_file(self):
         run_bridge("settings", "import", "--", json.dumps({"id": "io.github.cwilliams5.legato"}))
@@ -6124,6 +6287,27 @@ class StalledStream(PlayerTestCase):
                              timeout=90)
         self.assertTrue(view.get("streamBroke"), view)
         self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+
+
+class Deadlines(TempHome):
+    def run_slowly(self, argv, name):
+        said = []
+
+        def slow(args):
+            time.sleep(1.5)
+            bridge.out({"done": True})
+        with mock.patch.object(bridge, "BRIDGE_DEADLINE", 1), mock.patch.object(bridge, name, slow), \
+                mock.patch.object(bridge, "out", said.append), mock.patch.object(bridge, "fail", lambda code, *rest: said.append(code)):
+            bridge.main(argv)
+        return said
+
+    def test_the_sleep_guard_and_the_feed_proxy_outlive_the_call_deadline(self):
+        # Strict review 16 (M1): both run for as long as an episode is loaded;
+        # under the deadline the guard restarted every two minutes (then gave
+        # up: no pause before sleep) and the proxy died mid-episode.
+        self.assertEqual(self.run_slowly(["sleepguard"], "cmd_sleepguard"), [{"done": True}])
+        self.assertEqual(self.run_slowly(["proxy", "--watch-pid", "1"], "cmd_proxy"), [{"done": True}])
+        self.assertEqual(self.run_slowly(["status"], "cmd_status"), ["timeout"])  # every other call has one
 
 
 class PositionsThatArent(unittest.TestCase):

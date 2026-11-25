@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell
 import Quickshell.Io
 import "../.." as Legato
 import "v1_0" as V1
@@ -128,9 +129,11 @@ Item {
       var steps = [top.dormantAtFirst, top.onAReplacementBar, top.onOmarchysBar, top.changes, top.brokenFile,
                    top.injectedLate, top.injectedLateSettled, top.importedOnce, top.problemsSaid,
                    top.handedOverLate, top.handedOverLateCheck, top.twoScreens, top.oneScreenGone, top.stillAwakeWithOne,
-                   top.claimingPanelGone, top.dormantAgain, top.dormantSpell, top.claimedAgain, top.rebuildRelease, top.rebuildClaim, top.rebuiltStillAwake,
+                   top.orderedWrites, top.claimingPanelGone, top.dormantAgain, top.dormantSpell, top.claimedAgain, top.rebuildRelease, top.rebuildClaim, top.rebuiltStillAwake,
                    top.tabOnOpen, top.reloadMakesNoCopy, top.reloadMakesNoCopyCheck,
-                   top.neverStarts, top.neverStartsAnswered, top.oldServiceUpdate, top.oldServiceCheck]
+                   top.neverStarts, top.neverStartsAnswered, top.oldServiceUpdate, top.oldServiceCheck,
+                   top.signedOutStartsNothing, top.dormantWithAPlayer, top.dormantWithAPlayerCheck,
+                   top.startedWithNoScreen, top.screenBack, top.screenBackCheck]
       if (top.step >= steps.length) { stop(); Qt.exit(top.failures); return }
       if (top.waits === 0) top.stepStarted = Date.now()
       // A step returns false to wait (up to 1.5 s).
@@ -252,6 +255,79 @@ Item {
     builtinPanel.setSettings(false)
     builtinPanel.close()
     reads().forEach(function(p) { answer(p, view({ autoplay: false, defaultTab: "podcasts", unloadAfterMinutes: 0, skipForward: 45 })) })
+  }
+
+  // Strict review 16 (L2): two changes made together, one write at a time,
+  // in order; the page ends on the file's value.
+  function orderedWrites() {
+    shellService.changeSetting("skipBack", 15)
+    shellService.changeSetting("skipBack", 20)
+    shellService.changeSetting("autoplay", true)
+    var sets = bridgeCalls("settings set")
+    check("changes made together: one write at a time", sets.length === 1 && argsOf(sets[0]).join(" ") === "settings set -- skipBack 15",
+          sets.map(function(p) { return argsOf(p).join(" ") }).join("; "))
+    answer(sets[0], view({ autoplay: false, defaultTab: "podcasts", unloadAfterMinutes: 0, skipForward: 45, skipBack: 15 }))
+    check("an answer a later change supersedes doesn't show (no flicker back)", shellService.settings.skipBack === 20,
+          shellService.settings.skipBack)
+    sets = bridgeCalls("settings set")
+    check("then the next, the same setting's later value only", sets.length === 1 && argsOf(sets[0]).join(" ") === "settings set -- skipBack 20",
+          sets.map(function(p) { return argsOf(p).join(" ") }).join("; "))
+    answer(sets[0], view({ autoplay: false, defaultTab: "podcasts", unloadAfterMinutes: 0, skipForward: 45, skipBack: 20 }))
+    sets = bridgeCalls("settings set")
+    check("then the other setting", sets.length === 1 && argsOf(sets[0]).join(" ") === "settings set -- autoplay true",
+          sets.map(function(p) { return argsOf(p).join(" ") }).join("; "))
+    answer(sets[0], view({ autoplay: true, defaultTab: "podcasts", unloadAfterMinutes: 0, skipForward: 45, skipBack: 20 }))
+    check("and the page ends on the file's values", shellService.settings.skipBack === 20 && shellService.settings.autoplay === true,
+          shellService.settings.skipBack + " " + shellService.settings.autoplay)
+    check("no write left waiting", bridgeCalls("settings set").length === 0 && shellService._writes.length === 0,
+          bridgeCalls("settings set").length)
+  }
+
+  // Strict review 16 (L7, L3): what a copy starts, and when it wakes.
+  Component { id: serviceMaker; Legato.Service { python: "/usr/bin/python3"; dormantAfterMs: 100 } }
+  property var spare: null
+  function signedOutStartsNothing() {
+    running().forEach(function(p) { var a = argsOf(p); if (a !== null) answer(p, {}) })
+    top.spare = serviceMaker.createObject(top)
+    top.spare.claim()
+    var status = bridgeCalls("status")
+    check("(a woken copy reads its status)", status.length === 1, status.length)
+    answer(status[0], { authenticated: false, mpv: "/usr/bin/mpv", socket: "", python: "3.14", running: false })
+    check("signed out, no player: it starts no poll", bridgeCalls("player").length === 0, bridgeCalls("player").length)
+  }
+  function dormantWithAPlayer() {
+    top.spare.authenticated = true
+    top.spare.applyPlayer({ active: true, playing: true, position: 10, duration: 100, item: top.episodeItem })
+    check("(playing: its sleep guard runs)", bridgeCalls("sleepguard").length === 1, bridgeCalls("sleepguard").length)
+    top.spare.release()
+  }
+  function dormantWithAPlayerCheck() {
+    if (Date.now() - top.stepStarted < 300) return false
+    check("(the copy went dormant)", top.spare.active === false, top.spare.active)
+    check("a copy gone dormant with a player loaded keeps no sleep guard", bridgeCalls("sleepguard").length === 0,
+          bridgeCalls("sleepguard").length)
+    running().forEach(function(p) { var a = argsOf(p); if (a !== null) answer(p, {}) })
+    top.spare.destroy()
+    top.spare = null
+  }
+  property var sleeper: null
+  function startedWithNoScreen() {
+    top.sleeper = serviceMaker.createObject(top)
+    check("(a copy nobody claimed sleeps)", top.sleeper.active === false, top.sleeper.active)
+    Quickshell.screens = []
+    check("every screen gone: a sleeping copy wakes (no bar is left to claim it)", top.sleeper.active === true, top.sleeper.active)
+    top.sleeper.destroy()
+    top.sleeper = null
+    top.spare = serviceMaker.createObject(top)
+    check("a copy started with no screen at all is awake (no bar will claim it)", top.spare.active === true, top.spare.active)
+  }
+  function screenBack() {
+    Quickshell.screens = [{ name: "test" }]
+  }
+  function screenBackCheck() {
+    if (Date.now() - top.stepStarted < 300) return false
+    check("with a screen back and no bar claiming it, it sleeps again", top.spare.active === false, top.spare.active)
+    running().forEach(function(p) { var a = argsOf(p); if (a !== null) answer(p, {}) })
   }
 
   function notices() {

@@ -88,8 +88,9 @@ test("the stats page opens from the header, `a` and closes like the others; it r
   assert.match(panel, /onClearRequested: if \(root\.service && root\.serviceCurrent\) root\.service\.clearStats\(\)/)
   assert.match(panel, /error: !root\.serviceCurrent \? root\.restartNote : root\.service \? \(root\.service\.statsError \|\| ""\) : ""/)
   // (The service's handling of these answers is run in tests/qml/panel.qml.)
-  assert.match(service, /call\(\["stats", on \? "on" : "off"\]/)
-  assert.match(service, /call\(\["stats", "clear"\]/)
+  // (Written one at a time, in order: Service.write, round 16.)
+  assert.match(service, /write\("stats counting", \["stats", on \? "on" : "off"\]/)
+  assert.match(service, /write\("stats clear", \["stats", "clear"\]/)
   // A failure is kept for the page (never a blank page or a silent Clear).
   assert.match(service, /function applyStats\(result\) \{\s*if \(!result\.ok\) \{ root\.statsError = result\.error \|\| "[^"]+"; return \}\s*root\.statsError = ""\s*root\.stats = result\.data/)
   // The open page follows what's counted: re-read after each poll while open.

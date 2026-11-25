@@ -163,9 +163,6 @@ function fileUrl(path) {
   return "file://" + String(path).split("/").map(encodeURIComponent).join("/")
 }
 
-// Only the copy the bridge cached on disk (checked, size-capped): Qt's Image
-// never fetches anything from the network itself. No cached copy yet, the
-// placeholder shows.
 // Wheel deltas to steps, as Omarchy's Util.wheelSteps: one event at most one
 // notch (some mice report far more than 120 a notch), a touchpad's small
 // deltas added up, a change of direction starting over.
@@ -177,6 +174,9 @@ function wheelSteps(accumulator, delta) {
   return { steps: steps, remainder: total - steps * 120 }
 }
 
+// Only the copy the bridge cached on disk (checked, size-capped): Qt's Image
+// never fetches anything from the network itself. No cached copy yet, the
+// placeholder shows.
 function artSource(item) {
   if (!item || !item.artPath) return ""
   return fileUrl(item.artPath)
@@ -376,8 +376,6 @@ function pythonProbeCommand(candidate) {
   return python === "" ? [] : [python, "-I", "-c", pythonVersionCheck]
 }
 
-// Empty (so nothing starts) unless the interpreter is trusted and the script
-// path is absolute.
 // The bridge's sleep guard, holding a logind sleep delay while it waits:
 // systemd-inhibit from a trusted directory, or nothing at all.
 // setpriv --pdeathsig: when the panel stops systemd-inhibit (the episode was
@@ -394,6 +392,8 @@ function sleepGuardCommand(python, bridgePath, inhibit, setpriv) {
     orphanGuard, "--pdeathsig", "TERM"].concat(bridge)
 }
 
+// Empty (so nothing starts) unless the interpreter is trusted and the script
+// path is absolute.
 function bridgeCommand(python, bridgePath, args) {
   var interpreter = trustedExecutable(python)
   var script = typeof bridgePath === "string" ? bridgePath : ""

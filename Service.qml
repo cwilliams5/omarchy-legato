@@ -39,6 +39,16 @@ Item {
   property int claims: 0
   property int dormantAfterMs: 3000
   function claim() { claims++; dormantTimer.stop(); active = true }
+  // No screen at all (a shell started with its only monitor off; every
+  // screen gone, a replacement bar's panels and their own copies with
+  // them): no bar is there to claim this copy, and an episode playing would
+  // go unsynced and not pause before sleep. Awake until a screen is back;
+  // then the bars claim it, or it sleeps again a moment later.
+  readonly property bool noScreens: Quickshell.screens.length === 0
+  onNoScreensChanged: {
+    if (noScreens) { dormantTimer.stop(); active = true }
+    else if (claims === 0 && active) dormantTimer.restart()
+  }
   function release() {
     claims = Math.max(0, claims - 1)
     if (claims === 0 && active) dormantTimer.restart()
@@ -51,7 +61,7 @@ Item {
     // monitor off): every bar went with the screens, and no other bar is
     // showing either; asleep, an episode playing would go unsynced and not
     // pause before sleep.
-    onTriggered: if (root.claims === 0 && Quickshell.screens.length > 0) root.active = false
+    onTriggered: if (root.claims === 0 && !root.noScreens) root.active = false
   }
 
   // ---- Settings (the Settings page), from settings.json in the state folder
@@ -1048,7 +1058,7 @@ Item {
   // answer with the stats as they now are, for the Stats page.
   function setStatsCounting(on) {
     var change = ++_statsChanges
-    call(["stats", on ? "on" : "off"], function(result) {
+    write("stats counting", ["stats", on ? "on" : "off"], function(result) {
       if (change !== root._statsChanges) return  // a later change answers
       root.applyStats(result)
       if (result.ok) root.optimistic({ statsCounting: result.data.counting })
@@ -1057,7 +1067,40 @@ Item {
 
   function clearStats() {
     var change = ++_statsChanges
-    call(["stats", "clear"], function(result) { if (change === root._statsChanges) root.applyStats(result) })
+    write("stats clear", ["stats", "clear"], function(result) { if (change === root._statsChanges) root.applyStats(result) })
+  }
+
+  // Writes of a value (a setting, stats on or off): one at a time, in the
+  // order made, a later one of the same thing replacing one still waiting.
+  // Two started together raced for the file's lock, and the file could end
+  // on the first while the page showed the second (strict review 16): the
+  // bridge acts on the file (autoplay, pause before sleep, the idle unload).
+  property var _writes: []
+  property bool _writing: false
+  function write(key, args, done) {
+    _writes = _writes.filter(function(w) { return w.key !== key }).concat([{ key: key, args: args, done: done }])
+    nextWrite()
+  }
+  function nextWrite() {
+    if (_writing || _writes.length === 0) return
+    var w = _writes[0]
+    _writes = _writes.slice(1)
+    _writing = true
+    writeWatchdog.restart()
+    call(w.args, function(result) {
+      writeWatchdog.stop()
+      root._writing = false
+      w.done(result)
+      root.nextWrite()
+    })
+  }
+  Timer {
+    // A write that never answers (its process didn't start) doesn't hold
+    // the rest back for good.
+    id: writeWatchdog
+    interval: 10000
+    repeat: false
+    onTriggered: { root._writing = false; root.nextWrite() }
   }
 
   property int _settingsChanges: 0
@@ -1114,7 +1157,7 @@ Item {
     settings = next
     settingsError = ""
     var change = ++_settingsChanges
-    call(["settings", "set", "--", String(key), JSON.stringify(value)], function(result) {
+    write("setting " + key, ["settings", "set", "--", String(key), JSON.stringify(value)], function(result) {
       if (change !== root._settingsChanges) return  // a later change answers
       if (!result.ok) {
         root.settingsError = result.error || "Not saved"
@@ -1159,6 +1202,13 @@ Item {
 
   function playItem(item, fromStart) {
     if (!item || !item.uuid) return
+    // The episode in the player: Play goes on from where it is. Loaded
+    // again, it started from Pocket Casts' place, up to a poll behind this
+    // machine's (strict review 16).
+    if (!fromStart && isLoaded(item)) {
+      if (!isPlaying) playPause()
+      return
+    }
     cancelSeek()
     var args = ["play", item.uuid]
     if (item.podcast) args.push("--podcast", item.podcast)
@@ -1357,6 +1407,8 @@ Item {
     }
   }
 
+  // (A copy created with no screen wakes too: onNoScreensChanged runs for
+  // the binding's first value.)
   Component.onCompleted: if (active && !probed) refresh()
   // Awake again after a dormant spell: read where things stand now.
   onActiveChanged: if (active) { if (!probed) refresh(); else refreshPlayer() }

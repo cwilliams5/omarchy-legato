@@ -104,6 +104,7 @@ Item {
                    top.noticesOnce, top.quietReloads, top.chipShapes, top.idleWheel, top.idleWheelCheck, top.marquee,
                    top.touchpad, top.touchpadCheck, top.liveStatus, top.liveStatusCheck, top.guardBack,
                    top.guardRestart, top.guardRestartCheck, top.mpvEvents, top.pauseEvent, top.pauseEventPoll, top.pauseEventRetry,
+                   top.retryTwoEarly, top.retryTwo, top.retryThreeEarly, top.retryThree, top.noFourthRetry,
                    top.pauseEventRead, top.seekEventPoll,
                    top.toggles, top.idleUnload, top.volumeDebounce, top.volumeDebounceCheck, top.importFromBar,
                    top.ipcStopAndSpeed, top.ipcStopAndSpeedCheck, top.signOutLists,
@@ -390,13 +391,41 @@ Item {
     check("a pause change from mpv brings a poll", calls("player").length === 1,
           running().map(function(p) { return (argsOf(p) || []).join(" ") }).join("; "))
     // It fails (busy behind a slow push): tried again, the pause still unread.
-    shared.eventRetryBaseMs = 300
+    shared.eventRetryBaseMs = 150
     calls("player")[0].finish(0, JSON.stringify({ ok: false, code: "busy", error: "Legato is busy" }), "")
   }
+  // (Retries at 150, then 300, then 600 ms after each failure; three at most.)
+  function failPoll() {
+    calls("player").forEach(function(p) { p.finish(0, JSON.stringify({ ok: false, code: "busy", error: "Legato is busy" }), "") })
+  }
   function pauseEventRetry() {
-    if (Date.now() - top.stepStarted < 450) return false  // the first retry's wait
+    if (Date.now() - top.stepStarted < 250) return false  // the first retry's wait
     check("a poll that failed with an mpv event unread is tried again", calls("player").length === 1,
           running().map(function(p) { return (argsOf(p) || []).join(" ") }).join("; "))
+    failPoll()
+  }
+  function retryTwoEarly() {
+    if (Date.now() - top.stepStarted < 100) return false  // (about 180 ms after the failure; the retry waits 300)
+    check("each retry waits longer than the last", calls("player").length === 0, calls("player").length)
+  }
+  function retryTwo() {
+    if (Date.now() - top.stepStarted < 250) return false
+    check("(the second retry)", calls("player").length === 1, calls("player").length)
+    failPoll()
+  }
+  function retryThreeEarly() {
+    if (Date.now() - top.stepStarted < 350) return false  // (about 430 ms after; the retry waits 600)
+    check("(and longer again)", calls("player").length === 0, calls("player").length)
+  }
+  function retryThree() {
+    if (Date.now() - top.stepStarted < 300) return false
+    check("(the third retry)", calls("player").length === 1, calls("player").length)
+    failPoll()
+  }
+  function noFourthRetry() {
+    if (Date.now() - top.stepStarted < 1500) return false
+    check("three retries at most", calls("player").length === 0, calls("player").length)
+    shared.refreshPlayer()  // a poll that works resets the count
     answerAll(top.answers)
   }
   function pauseEventRead() {

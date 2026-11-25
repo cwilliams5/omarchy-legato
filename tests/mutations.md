@@ -12,13 +12,13 @@ python3 -B tests/mutate.py .       # all of them, about 2 hours
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (480 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (498 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
 it. A mutation whose pattern no longer matches the code is reported STALE
 and fails the run (fix its pattern), as does one whose tests fail
 unmutated (SKIP).
 
-## The set (480; strict review rounds 1 to 15, 2026-11-25)
+## The set (498; strict review rounds 1 to 16, 2026-11-25)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
@@ -96,6 +96,15 @@ caught each mutant. By area:
   fetched for no panel, Alt+letter, the menu's marks, Enter and Esc with
   the menu open, `4`, ←, the password kept, the wheel's absolute seek, a
   failed poll after an mpv event never retried, the self-check in /tmp).
+- **Round 16**: an unsent place outliving a resume that took the phone's
+  place, or carried from its old base; marks (played, unplayed) not a say;
+  a mark keeping the places left unsent; an end gone from its feed never
+  settled; `kept_elsewhere` without its "where left" or its hour; an empty
+  lookup answering for a show you follow; the deadline on the sleep guard,
+  the proxy, or nothing; 1.0's values past the range dropped; and the QML
+  ones (writes racing, a copy left asleep when
+  the screens go, or awake for good after; signed out, a poll all the
+  same; Play on the loaded row reloading or pausing it).
 
 ## Results
 
@@ -236,6 +245,17 @@ caught each mutant. By area:
   here" was a third guard over the pending entry and the record's played
   status (removed from the code, which made "Play with nothing loaded
   replays an end still pending" killable).
+- Round 16 (the reviewers' own): safety R1 and R22 (`kept_elsewhere`'s
+  gates, never reached: every test polled first) survived and are planted
+  now with tests that reload before any retry; R3, R10 (two redundant
+  guards, removed from the code) and R9a (tested now); fit P1 and P17 (the
+  deadline's exemptions) and Q3, Q4, Q8, Q15 planted with tests. Round
+  16's set, its 31 new or changed: 28 killed at first; two were a second
+  layer over one rule (an unsent place's base checked both by its gate and
+  by `kept_place`; a copy started with no screen woken both at creation
+  and by the change handler, which QML runs for the first value): one
+  layer each removed from the code; the third needed its test to check
+  the carried place is still valid, not just present.
 - Equivalent and left out (round 14): `keep_local` and its rules (the
   loaded player's keep is gone: its check seeks only on another device's
   write); the Stats/About keys while typing (the field takes printable

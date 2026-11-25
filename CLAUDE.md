@@ -184,13 +184,20 @@ docs/PLAN.md         what's left to build
 2. **Every resume asks Pocket Casts first** (`check_server`): the top of Up
    Next and this episode's record. Its answer wins: seek to where another
    device left off, follow it to a different episode, or stop if it finished
-   everything: whenever its place differs from this machine's last push,
-   another device wrote, and that wins over anything that moved here
+   everything: whenever its place differs from the last one this machine
+   knows Pocket Casts has (`lastSyncPos`: its own last push, or a place a
+   resume check took from Pocket Casts), another device wrote, and that wins over anything that moved here
    unpushed (a gap's stretch, an unconfirmed resume's, a stall's, a place
    whose push failed). The one local place kept is where a push failed
-   (`unsentPush`, recorded by the failure itself): within the hour of the
-   failure, and only while Pocket Casts still holds this machine's last
-   push (nobody else has written since). A reload of the same episode
+   (`unsentPush`, recorded by the failure itself, with `left`: where
+   Pocket Casts had it from here then): within the hour of the failure,
+   and only while Pocket Casts still has it there, neither moved nor marked
+   played or unplayed since (`where_left`; a Mark as unplayed puts it at
+   0, where an episode started here also was). It holds only while
+   `lastSyncPos` is still its `left` (`unsent_push`): a resume check that
+   takes another device's place makes it history at once (round 16, C1: a
+   reload or a switch after one pushed the old place over the phone).
+   Marking the episode played or unplayed here drops it (`forget_unsent`). A reload of the same episode
    starts there (Play after the player closed, a break's reload, Play from
    a list: `play_item`'s `kept_place`). Leaving the episode for another
    (Next, Play from a list, the resume check following the phone to
@@ -289,8 +296,10 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   a panel that goes lets go of it (`claim`/`release`), and the last one
   gone leaves it dormant a moment later (`dormantAfterMs`, 3 s: a bar
   rebuilding its widgets claims it again first), but not while the shell
-  has no screen at all (a docked laptop, lid shut, the monitor off: every
-  bar went with the screens, so no other bar is showing either). An
+  has no screen at all (`noScreens`: a docked laptop, lid shut, the
+  monitor off; a shell started that way; a replacement bar, whose panels'
+  own copies went with the screens): it wakes then, and sleeps again 3 s
+  after a screen is back unless a bar claims it (round 16). An
   episode playing then plays on, unsynced, until it's stopped or the chip
   is back (whose first poll asks Pocket Casts first: the 90 s gap); README
   Known limits. A new service reads `status` and the player, not Up Next
@@ -709,7 +718,7 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   exists (as Omarchy's webcam overlay does; see floating workspaces below),
   plain `hl.window_rule` otherwise, plus a `hyprbars:no_bar` rule and two
   `skip-taskbar` tag rules (a convention of Cody's projects, not
-  Hyprland's: Transom and Latch leave tagged windows out unless minimized;
+  Hyprland's: Transom and the window switcher leave tagged windows out unless minimized;
   a tag set by a rule reads back as `skip-taskbar*`). Tagged only while
   pinned (Cody, 2026-11-23): unpinned, other windows can cover it, so it
   keeps its button and Alt+Tab entry. The rules match the window's real

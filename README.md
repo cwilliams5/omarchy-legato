@@ -147,7 +147,9 @@ rm -rf ~/.local/state/omarchy-legato ~/.cache/omarchy-legato   # sign-in tokens,
 ```
 
 If you showed a video, the window rules Legato added to the running
-Hyprland stay until it reloads its config: `hyprctl reload`, or log out.
+Hyprland (and its window-open hook and the three `legato_video_*` Lua
+functions behind them) stay until it reloads its config: `hyprctl reload`,
+or log out.
 
 ## Resources
 
@@ -167,7 +169,9 @@ Hyprland stay until it reloads its config: `hyprctl reload`, or log out.
   through. They end with the player. The proxy's connection to the show's
   server is checked by the kernel every 20 seconds while idle (TCP
   keepalive), so a dead link is noticed.
-- **mpv** uses about 90 MB with an episode loaded and no CPU while paused,
+- **mpv** uses about 80 to 150 MB with an episode loaded (its read-ahead
+  buffer is capped at 64 MB, so long episodes sit near the top) and no CPU
+  while paused,
   plus about 100 MB once its video window has been shown, until the player
   closes. After 15 minutes paused (`unloadAfterMinutes`), the player closes
   altogether; play picks up from wherever Pocket Casts says you are.
@@ -253,7 +257,9 @@ devices.
 - **Taking the chip off the bar, or disabling Legato, mid-episode** leaves
   the episode playing (mpv runs on its own), not synced and not paused
   before sleep, until you stop it or Legato is back; then the next Play
-  asks Pocket Casts, and its answer wins over what played meanwhile.
+  asks Pocket Casts, and its answer wins over what played meanwhile. The
+  same goes for the chip left in the tray's drawer after the tray itself
+  is taken off the bar (Omarchy unloads it there).
 - **After an update, restart the shell** (`omarchy restart shell`, or log
   out and in). The shell keeps running the panel and background part it
   already loaded until it restarts, beside Legato's new helper. From 1.0,
@@ -415,8 +421,9 @@ counted) in
 `~/.local/state/omarchy-legato/prefs.json`. Change them from the panel, the
 video window's menu, the Settings page or (the stats) the Stats page.
 
-Disabling the plugin (or dragging its chip off the bar, which disables it)
-removes its entry from the bar; your settings, the player's own choices,
+Disabling the plugin (or dragging its chip off the bar, which disables it
+unless Legato is also listed in Omarchy's `plugins`, where it stays loaded
+and asleep) removes its entry from the bar; your settings, the player's own choices,
 your sign-in and your listening stats all stay, and are there when you turn
 it back on. A `settings.json` that can't be read (a hand edit gone wrong, or
 a symbolic link: every file in the state folder must be a plain file of
