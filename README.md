@@ -194,9 +194,9 @@ devices.
 - **A dropped stream, on a host that sends no file size:** when the audio
   stops part way ("Stream dropped. Press play to resume."), Legato tells it
   from the end by what mpv's network layer reports (a host with byte ranges
-  reconnects and says so; Legato checks once per FFmpeg update, with a
-  local test stream, that it still reads those reports, and falls back to
-  the episode's length with a notification if not) or by how far it read (a host without them sends
+  reconnects and says so; Legato checks once per mpv or FFmpeg update,
+  with a local test stream, that it still reads those reports, and falls
+  back to the episode's length with a notification if not) or by how far it read (a host without them sends
   the file straight through, to its size). Without a size from the host
   (rare: podcast hosts send it), a cut and the end look the same, so it
   goes by the episode's length, so a stop in the last tenth counts as the end and
@@ -226,9 +226,13 @@ devices.
   as desktop notifications: Omarchy's on-screen display takes none from a
   plugin like Legato.
 - **On a bar that replaces Omarchy's,** the panel can't reach the shell's
-  copy of Legato's service, so it makes its own and two run (each poll
-  twice, errors notified twice). Omarchy's own bar, which hands it over,
-  is fine.
+  copy of Legato's service, so each panel makes its own and the copies all
+  run (polls and notifications repeat). Omarchy's own bar, which hands it
+  over, is fine.
+- **On a host without byte ranges,** when Pocket Casts has you earlier
+  than this machine (you went back on the phone) and the episode is bigger
+  than mpv's buffer, Legato can't seek back there; it plays on from where
+  it was.
 - **On a screen under 760 pixels tall,** the Settings page and About with
   its license open are taller than the panel can be.
 
@@ -409,9 +413,10 @@ it. The player's own choices, your sign-in and your listening stats stay.
 - mpv fetches through a small local check that runs while it does: every
   connection, redirects included, goes only to public addresses (or, if you
   allow it, your local network), never to this computer, and the address is
-  checked again once connected. (Once per FFmpeg update, a private, muted
-  player also plays a test stream Legato serves itself on this computer, to
-  check it still reads mpv's network reports.)
+  checked again once connected. (Once per mpv or FFmpeg update, a private,
+  muted player also plays a test stream Legato serves itself on this
+  computer, to check it still reads mpv's network reports; it reads no
+  clipboard and shows nothing.)
 - The sign-in fields aren't native text inputs, so nothing reads your
   clipboard unless you paste (Ctrl+V, Shift+Insert or a middle-click), and
   then at most 4 KB.

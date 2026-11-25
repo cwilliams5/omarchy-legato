@@ -372,7 +372,9 @@ function sleepGuardCommand(python, bridgePath, inhibit, setpriv) {
   var orphanGuard = trustedExecutable(setpriv || "/usr/bin/setpriv")
   var bridge = bridgeCommand(python, bridgePath, ["sleepguard"])
   if (tool === "" || orphanGuard === "" || bridge.length === 0) return []
-  return [tool, "--what=sleep", "--mode=delay", "--who=Legato",
+  // setpriv twice: systemd-inhibit ends with the shell's process (a Process
+  // child outlives its parent otherwise), and the guard with systemd-inhibit.
+  return [orphanGuard, "--pdeathsig", "TERM", tool, "--what=sleep", "--mode=delay", "--who=Legato",
     "--why=Pause the episode and save your place in Pocket Casts",
     orphanGuard, "--pdeathsig", "TERM"].concat(bridge)
 }

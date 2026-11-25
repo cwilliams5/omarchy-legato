@@ -13,9 +13,13 @@ Cody's work setup.
 ## Status (2026-11-24)
 
 Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
-1.0.2 all on 2026-11-22); 1.1.0 is built and reviewed (docs/PLAN.md phases
-H and SR), to be pushed and released with the marketplace verification
-request. Listed on the Omarchy plugin marketplace on 2026-11-23
+1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
+(docs/PLAN.md phases H and SR: rounds 1-9 so far; the fit reviewer has
+found nothing critical or high since round 7, the safety reviewer still
+found highs in round 9, fixed; round 10 next, then push, release and the
+marketplace verification request, each on Cody's go). Committed and
+installed on Cody's laptop at each round's end (`./install.sh`), not
+pushed. Listed on the Omarchy plugin marketplace on 2026-11-23
 (omarchyplugins.com, id io.github.cwilliams5.legato; issue #15655,
 approved-and-verified at ce22e65, "maintainer-reviewed"; the reviewer
 accepted the `package-manager` and `installer` capabilities as printed advice
@@ -25,11 +29,17 @@ verification" issue form (the go-public skill's omarchy.md, section 5).
 Cody's laptop runs it from GitHub with local network feeds on (his episodes
 come from a home server).
 
-Next (docs/PLAN.md): ship 1.1.0 (H6). Upstream, Nine Point Labs' PRs #7-9
-(the old fork `cwilliams5/omarchy-pocketcasts` carries them): their review
-of 2026-11-23 is answered (#8's default changed); after they merge, two
+Next (docs/PLAN.md): strict review until a round finds no critical or
+high issue and every planted mutation is killed, then ship 1.1.0 (H6).
+After 1.1.0: SR86 (widget settings kept in the plugin's own file, the
+omarchy-plugin skill's pattern) and SR63 (a replacement bar's extra
+service copies). Upstream, Nine Point Labs' PRs #7-9 (the old fork
+`cwilliams5/omarchy-pocketcasts` carries them): their review of
+2026-11-23 is answered (#8's default changed); after they merge, two
 follow-ups were offered: the shorter resume-check timeout and the
-broken-stream fix. Cody approves every post.
+broken-stream fix (now much bigger than offered: the watcher script, the
+self-check, stalls; think again before porting). Cody approves every
+post.
 
 ## What Legato is
 
@@ -86,7 +96,7 @@ what the API lists, or touch the user's Hyprland config.
     `localFeeds`, `stats`)
   - state `$XDG_STATE_HOME/omarchy-legato/` (auth.json, playback.json,
     prefs.json, podcasts-cache.json, stats.json, lock, prefs.lock,
-    auth.lock; all 0600, folder 0700)
+    auth.lock, watchcheck.json; all 0600, folder 0700)
   - cache `$XDG_CACHE_HOME/omarchy-legato/art/`
   - runtime `$XDG_RUNTIME_DIR/omarchy-legato/mpv.sock`
   - IPC targets `legato` (playPause, next, skipBack, skipForward, stop,
@@ -101,7 +111,7 @@ what the API lists, or touch the user's Hyprland config.
     globals in Hyprland `legato_video_alpha`, `legato_video_apply`,
     `legato_video_hook` (the opacity hook)
   - User-Agent `legato/1.0 (+https://github.com/cwilliams5/omarchy-legato)`
-- Version: 1.1.0 (listening stats, the broken-stream fix, the shorter resume check, the video window's skip-taskbar tag; PLAN H1-H5); 1.0.2 was the version first listed on the marketplace, 1.0.0 the first public release (2026-11-22).
+- Version: 1.1.0 (listening stats, the broken-stream fix with its mpv watcher and FFmpeg self-check, stalls as interruptions, the shorter resume check, errors as desktop notifications, the video window's skip-taskbar tag; PLAN H1-H5 and SR); 1.0.2 was the version first listed on the marketplace, 1.0.0 the first public release (2026-11-22).
 - Branding: `branding/` (`python3 branding/build.py` regenerates it). See
   BRANDING.md for words to avoid in later renames.
 
@@ -167,7 +177,9 @@ docs/PLAN.md         what's left to build
 4. **Nothing runs on a timer while paused or idle.** (While an episode is
    loaded, playing or paused, two processes wait with no timer: the sleep
    guard, blocked on D-Bus, and the feed proxy mpv fetches through, which
-   ends with mpv; with nothing loaded, nothing at all.) The only
+   ends with mpv; with nothing loaded, nothing at all. Both also end with
+   the shell: Quickshell leaves a Process's children running when it
+   exits, so `systemd-inhibit` runs under `setpriv --pdeathsig` too.) The only
    repeating timers run while playing: one poll every 32 s (just over the bridge's 30 s
    `SYNC_INTERVAL`, so each one pushes) and the slider tick while a panel is
    open. Everything else arrives as an mpv event on the socket.
@@ -229,7 +241,9 @@ docs/PLAN.md         what's left to build
   push meanwhile (`sync_now`, `stream_stopped`), and the position is
   `unconfirmed` until Pocket Casts answers: once it plays again the poll
   asks first (`stallHandled` marks the stall done), and a pause before
-  that pushes nothing. The watcher keeps the last eight stalls, so a short
+  that pushes nothing (nor the periodic push: it waits on `unconfirmed`
+  too). Where a stall left it doesn't count as a local place Pocket Casts
+  never got (`stalledPlace`): a rewind on the phone meanwhile wins. The watcher keeps the last eight stalls, so a short
   hiccup after a long one doesn't hide it. A periodic push that fails
   twice in a row is said once (`pushFailures`, `syncFailed`). A stalled
   stream used to push its stall over the phone you carried on with. Pocket Casts keeps the playing episode at the
@@ -250,12 +264,16 @@ docs/PLAN.md         what's left to build
   Next; playing it from the top there pushed 0 over it); the next Play
   plays it again. Dragged back from the end, it waits there, paused,
   pushing nothing (`sync_now` leaves an episode that ended here alone);
-  Play plays it again from there. If Pocket Casts knew an episode (a
-  record came back: `recordSeen`) and its lookup now comes back empty (a
-  404, an empty answer, a redirect), that's no answer: the resume check
-  says unverified, and a reload refuses to start it from the show's public
-  list at 0 ("Pocket Casts didn't answer: try again"). Shows you never
-  followed have no record, and go on as before.
+  Play plays it again from there. An empty episode lookup (a 404, an
+  empty answer, a redirect) for a show you follow (`record_expected`:
+  every episode of one has a record, played or not; checked live
+  2026-11-24, down to the oldest of 1906) or for an episode a record came
+  back for (`recordSeen`) is no answer: the resume check says unverified,
+  and `resolve_episode` refuses (`no_record`, "Pocket Casts didn't answer:
+  try again") rather than start it from the show's public list at 0 and
+  push that, on every path (Play from a list, a reload, following the
+  phone to another episode). Shows you never followed have no record, and
+  play from the public list as before.
 - **Idle unload:** paused for `unloadAfterMinutes` (15), the player closes
   (`stop --if-paused`). The next play goes through `resume_last`, which asks
   Pocket Casts what to play.
@@ -278,7 +296,9 @@ docs/PLAN.md         what's left to build
   a reconnect that worked reads on, to the size): a break. So is any other
   warning or error from FFmpeg's network layers since the last seek
   (`failed`: a seek's new request refused logs only "HTTP error 403";
-  round 8), unless mpv read to the size. Nothing recorded, with a size
+  round 8), unless mpv read to the size; a reconnect or short-end line
+  after it takes over (its offset says whether mpv read on), so a drop
+  that recovered doesn't leave it set. Nothing recorded, with a size
   from the host: on a host with byte ranges (mpv's `seekable`) the end,
   since FFmpeg reconnects (and says so) on a failure while reading there,
   unless this FFmpeg failed the self-check (below); on
@@ -308,18 +328,25 @@ docs/PLAN.md         what's left to build
   (`unsentBreak`). Where it starts is never "from the top" because it's at
   or past the listed length (`start_position`): files run longer than
   listed (ads inserted on the fly), and that pushed 0 to every device.
-- **The FFmpeg self-check** (`cmd_watchcheck`, `bridge watchcheck`): the
-  watcher reads two FFmpeg log lines, and an update could reword them;
+- **The self-check** (`cmd_watchcheck`, `bridge watchcheck`): the watcher
+  hears FFmpeg through mpv's log events, and an mpv or FFmpeg update could
+  change what reaches it (the events, the "layer: " prefix, the levels);
   then every break on a host with ranges would look like the end again,
-  with nothing to show for it. When a player starts with an FFmpeg
+  with nothing to show for it. Rewording just the two lines is harmless
+  (`failed` catches any network-layer line) and passes. When a player starts with an FFmpeg
   (`ffmpeg-version`) not yet checked (`watch_check_due`, `watchcheck.json`
   in the state folder), a detached process serves a short silent WAV from
   127.0.0.1 with its size and ranges, hangs up a third of the way in, and
   plays it in a private muted mpv with the watcher: both lines must show
-  within 12 s (`seen`: reconnect, short). If not, `ffmpeg_lines_trusted`
-  is false for that version: ranged hosts go by the length rule, and a
-  notification says so once. Nothing leaves this computer; it runs once
-  per FFmpeg version (again only if one never finished).
+  within 12 s (`seen`: reconnect, short, error; any one passes). If none,
+  `ffmpeg_lines_trusted` is false for that pair of versions (mpv's and
+  FFmpeg's, `player_versions`): ranged hosts go by the length rule, and a
+  notification says so once. A check that never finished counts as failed
+  after ten minutes; a failure is tried again a day later. Its player gets
+  the main one's hardening (`--no-config --ytdl=no
+  --clipboard-backends-clr`, no `WAYLAND_DISPLAY`) and dies with the check
+  (`setpriv --pdeathsig KILL`); a SIGTERM still removes its
+  `/tmp/legato-check-*` folder. Nothing leaves this computer.
 - **An end that proves nothing** (`end_unproven`): mpv at its end with
   nothing played since the load (Pocket Casts' position past this copy of
   the file: ad-stitched copies differ per request; also an end before

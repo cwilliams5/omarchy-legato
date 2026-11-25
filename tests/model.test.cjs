@@ -142,9 +142,10 @@ test("the video window is offered only for video episodes, and mpv reports it", 
 
 test("the sleep guard holds a logind delay, dies with its parent, and runs only while an episode is loaded", () => {
   const cmd = plain(Model.sleepGuardCommand("/usr/bin/python3", "/plugin/bin/legato-bridge"))
-  assert.deepEqual(cmd.slice(0, 3), ["/usr/bin/systemd-inhibit", "--what=sleep", "--mode=delay"])
-  const setpriv = cmd.indexOf("/usr/bin/setpriv")
-  assert.ok(setpriv > 0)
+  // systemd-inhibit itself ends with the shell's process, and the guard with it.
+  assert.deepEqual(cmd.slice(0, 6), ["/usr/bin/setpriv", "--pdeathsig", "TERM", "/usr/bin/systemd-inhibit", "--what=sleep", "--mode=delay"])
+  const setpriv = cmd.indexOf("/usr/bin/setpriv", 1)
+  assert.ok(setpriv > 3)
   assert.deepEqual(cmd.slice(setpriv, setpriv + 3), ["/usr/bin/setpriv", "--pdeathsig", "TERM"])
   assert.deepEqual(cmd.slice(-5), ["/usr/bin/python3", "-I", "-B", "/plugin/bin/legato-bridge", "sleepguard"])
   assert.deepEqual(plain(Model.sleepGuardCommand("python3", "/plugin/bin/legato-bridge")), [])
@@ -481,6 +482,16 @@ test("install.sh ships the About page and the LICENSE it reads", () => {
   for (const file of ["About.js", "AboutView.qml", "LICENSE", "manifest.json", "Panel.qml", "LegatoMark.qml"]) assert.ok(list.includes(file), file)
   // Every QML file the plugin loads is shipped.
   for (const file of fs.readdirSync(ROOT).filter((f) => f.endsWith(".qml"))) assert.ok(list.includes(file), file)
+})
+
+test("install.sh ships every file the plugin loads", () => {
+  // Read the list it copies, and check it against what the plugin loads:
+  // every QML and JS file at the top, the bridge and its mpv script in bin/.
+  const install = fs.readFileSync(path.join(ROOT, "install.sh"), "utf8")
+  const list = (install.match(/for entry in ([^;]+); do/) || [])[1].split(/\s+/)
+  for (const name of fs.readdirSync(ROOT).filter((f) => /\.(qml|js)$/.test(f))) assert.ok(list.includes(name), name)
+  for (const name of ["manifest.json", "LICENSE", "bin"]) assert.ok(list.includes(name), name)
+  assert.ok(fs.existsSync(path.join(ROOT, "bin", "legato-watch.lua")))
 })
 
 test("no bare Color. references (Qt 6.12 shadows qs.Commons' Color with its own)", () => {

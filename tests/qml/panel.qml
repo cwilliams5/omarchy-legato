@@ -262,6 +262,8 @@ Item {
     // The license shown takes the privacy text's place: the page still fits
     // (both together hung 113 px below the panel).
     var about = named("aboutView")
+    about.forceLayout()
+    check("About fits the panel", about.implicitHeight + 32 <= 760 - 20, about.implicitHeight)
     named("aboutLicense").clicked()
     about.forceLayout()
     check("About with its license open fits the panel", about.implicitHeight + 32 <= 760 - 20
@@ -278,6 +280,13 @@ Item {
     panel.menuItem = top.episode
     keys.textKey("i", 0)
     check("a page closes an open menu", panel.showAbout && panel.menuItem === null, JSON.stringify(panel.menuItem))
+    panel.menuItem = top.episode
+    keys.textKey("g", 0)
+    check("Settings closes an open menu", panel.showSettings && panel.menuItem === null, JSON.stringify(panel.menuItem))
+    panel.menuItem = top.episode
+    keys.textKey("a", 0)
+    check("Stats closes an open menu", panel.showStats && panel.menuItem === null, JSON.stringify(panel.menuItem))
+    keys.textKey("i", 0)
     panel.setSettings(true)
     keys.textKey("a", 0)
     check("Stats replaces Settings", panel.showStats && !panel.showSettings && service.pagesOpen === 1,

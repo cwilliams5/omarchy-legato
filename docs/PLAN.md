@@ -886,6 +886,55 @@ could silently undo the fix.
   `qs ipc`, ~45 ms); an unreadable prefs.json counts stats again; the
   Stats page's own switch and confirm instead of Omarchy's components.
 
+### SR, round 9 (2026-11-24)
+
+reports kept outside the repo. Safety:
+about 15 host shapes built against real mpv and FFmpeg, none taken for the
+end; the break judgment holds. A high in empty lookups (SR72 was partial)
+and a high in the self-check's player.
+
+- [x] SR79 (high) An empty episode lookup still rewound devices on paths SR72
+  missed (Play from a list, following the phone to another episode, an
+  episode started by autoplay or Next): `recordSeen` was set only for
+  episodes loaded from a record. Fixed: for a show you follow, Pocket
+  Casts has a record of every episode (checked live on Cody's account:
+  unplayed and the oldest of 1906 alike), so an empty lookup is no answer
+  everywhere (`record_expected`; `resolve_episode` refuses, check_server
+  says unverified). Shows not followed keep the public list (now tested).
+- [x] SR80 (high, fit) The self-check's mpv lacked the player's hardening:
+  it could read the clipboard at start-up through Wayland (the README says
+  nothing does). Fixed: `--ytdl=no --clipboard-backends-clr`, no
+  `WAYLAND_DISPLAY`; the test suite's homes drop the display too.
+- [x] SR81 (medium) The self-check needed the exact two lines, so a harmless
+  rewording would have switched every ranged host to the length rule for
+  that version, and it didn't test the `failed` channel at all. Fixed:
+  the probe's reconnects get a 403 (the third channel); any channel
+  passes; nothing heard fails. Keyed on mpv's and FFmpeg's versions; a
+  check that never finished counts as failed after ten minutes; a failure
+  is retried a day later. Tests (two lines reworded pass, no log events
+  fail, two players check once).
+- [x] SR82 (medium) A drop that recovered left `failed` set until a seek: an
+  M4A with its index at the back never finished. Fixed: a reconnect or
+  short-end line takes over from it. Lua test; an end-to-end guard.
+- [x] SR83 (low-medium) A self-check stopped by a signal left its player
+  and folder: its mpv now dies with it, and SIGTERM cleans up.
+- [x] SR84 (low) The periodic push ignored `unconfirmed`; a stall's stuck
+  place beat a rewind on the phone (`stalledPlace`); notification text is
+  escaped (bodies are markup, links clickable); systemd-inhibit ends with
+  the shell (the guard survived restarts, since 1.0); the default About
+  page's height (the privacy sentence shortened, a layout check); `a` and
+  `g` close an open menu (tested); keepalive bounded both ways; install
+  ships every QML and JS file (checked from its list); the QML tests don't
+  need the desktop's theme.
+- [x] SR85 (low, left) A host without ranges can't seek back to where the
+  phone rewound past mpv's buffer (README); on two screens the plugin-id
+  IPC handler registers per bar (first wins, works); a replacement bar
+  runs a copy per panel (README).
+- [ ] SR86 (medium, since 1.0; after 1.1.0) Widget settings live only in the
+  bar entry, which Omarchy deletes when the plugin is disabled or its chip
+  dragged off: move them to the plugin's own file (the omarchy-plugin
+  skill's pattern). README says so meanwhile.
+
 - [ ] H6 Ship 1.1.0 (a minor version: the stats are a feature) with the `ship-update` skill (marketplace verification
   request, Cody approves the filing).
 
@@ -947,6 +996,10 @@ could silently undo the fix.
   end); an empty lookup for a known episode is no answer; the outro stop
   on hosts without ranges; Play at an unhandled end finishes it. 247
   Python + 36 node tests; 200 of 200 mutants killed. Round 9 next.
+- 2026-11-24 (late): round 9 (SR79-SR86): empty lookups for followed
+  shows are no answer on every path; the self-check hardened and checking
+  "caught at all"; recovered drops clear `failed`. The break judgment held
+  against every shape the safety reviewer built. Round 10 next.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

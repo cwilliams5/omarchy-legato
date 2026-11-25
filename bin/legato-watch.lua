@@ -23,8 +23,9 @@
 -- `user-data/legato` holds, for the current file: `watching` (this script
 -- runs; a player started by an older Legato has nothing), `cut` (the byte
 -- offset N of the latest such line), `failed` (any other warning or error
--- from FFmpeg's network layers since the last seek), `seen` (which of the
--- two lines came:
+-- from FFmpeg's network layers since the last seek and since the last of
+-- those lines), `seen` (which kinds came, `error` for those others; the
+-- two lines:
 -- `reconnect`, `short`; the bridge's self-check runs this script against a
 -- break it makes, to know these lines still read as written), `stallSince`
 -- (when the stall now under way began, os.time()) and `stalls` ({since,
@@ -91,6 +92,7 @@ mp.register_event("log-message", function(event)
   local at, kind = failed_at(text)
   if at then
     state.cut = tonumber(at)
+    state.failed = nil  -- this line's offset says from here whether mpv read on
     state.seen = state.seen or {}
     state.seen[kind] = true  -- which line it was (the bridge's self-check)
     publish()
@@ -103,6 +105,8 @@ mp.register_event("log-message", function(event)
   local layer = string.match(text, "^(%a+): ")
   if not at and layer and NETWORK[layer] and not string.find(text, UNKNOWN, 1, true) then
     state.failed = true
+    state.seen = state.seen or {}
+    state.seen.error = true
     publish()
   end
 end)

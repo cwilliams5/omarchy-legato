@@ -77,6 +77,10 @@ class TempHome(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, env)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # No desktop: a test player never reaches the real compositor (or its
+        # clipboard); patch.dict puts these back afterwards.
+        for name in ("WAYLAND_DISPLAY", "DISPLAY"):
+            os.environ.pop(name, None)
         self.reset_globals()
         self.addCleanup(self.reset_globals)
 
@@ -637,10 +641,16 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
         s["log"].append((path, body))
         if s.get("slow", {}).get(path):  # a network that hangs
             time.sleep(s["slow"][path])
-        if path == "/user/episode" and s.get("episodeReply"):
+        reply = s.get("episodeReply")
+        if isinstance(reply, dict):
+            reply = reply.get(body.get("uuid"))
+        if path == "/user/episode" and not reply and s.get("unfollowed") and \
+                s["episodes"].get(body.get("uuid"), {}).get("podcast") in s["unfollowed"]:
+            reply = (404, b'{"errorMessage": "not found"}')  # no record: a show you never followed
+        if path == "/user/episode" and reply:
             # Pocket Casts answers the episode lookup oddly (a 404, an empty
-            # 200, a redirect).
-            status, blob = s["episodeReply"]
+            # 200, a redirect): for every episode, or by uuid.
+            status, blob = reply
             self.send_response(status)
             self.send_header("Content-Length", str(len(blob)))
             self.end_headers()
@@ -674,7 +684,7 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
                     entry.update(skips)
                     entry["settings"] = {k: {"value": n, "changed": True} for k, n in skips.items()}
                 return entry
-            self.reply(200, {"podcasts": [show(u, v) for u, v in s["shows"].items()]})
+            self.reply(200, {"podcasts": [show(u, v) for u, v in s["shows"].items() if u not in s.get("unfollowed", ())]})
         elif path == "/up_next/list":
             self.reply(200, {"serverModified": 1, "episodes": [
                 {"uuid": u, "title": eps[u]["title"], "url": eps[u]["url"], "podcast": eps[u]["podcast"],
@@ -1202,12 +1212,20 @@ class EndToEnd(PlayerTestCase):
 
     def test_a_new_ffmpeg_is_checked_when_a_player_starts(self):
         calls = []
-        with mock.patch.object(bridge, "start_watch_check", calls.append):
+        real = bridge.start_watch_check
+
+        def record(version):
+            calls.append(version)
+            bridge.save_state(bridge.WATCH_CHECK, {"ffmpeg": version, "ok": True, "at": int(time.time())})
+        with mock.patch.object(bridge, "start_watch_check", record):
             self.login()
             self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+            run_bridge("stop")
+            self.assertTrue(run_bridge("play", EP_2, "--podcast", PODCAST_A)["ok"])  # a second player: checked already
         self.assertEqual(len(calls), 1)
         with bridge.Mpv.connect() as player:
-            self.assertEqual(calls[0], player.get("ffmpeg-version"))
+            self.assertEqual(calls[0], bridge.player_versions(player))
+            self.assertIn(player.get("ffmpeg-version"), calls[0])
 
     def test_a_drag_back_after_the_end_isnt_pushed_as_in_progress(self):
         # Strict review 8: only Play reopens an episode that ended here.
@@ -1465,6 +1483,62 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         self.fake["episodeReply"] = (404, b'{"errorMessage": "not found"}')
         self.assertFalse(run_bridge("toggle")["ok"])  # "Pocket Casts didn't answer: try again"
         self.assertGreaterEqual(self.fake["progress"][EP_1], 25)
+
+    def test_play_from_a_list_with_an_empty_lookup_pushes_nothing(self):
+        # Strict review 9: a show you follow has a record of every episode; an
+        # empty lookup started it from the public list at 0, pushed.
+        self.other_device(EP_2, 25)
+        self.login()
+        self.fake["episodeReply"] = {EP_2: (404, b'{"errorMessage": "not found"}')}
+        result = run_bridge("play", EP_2, "--podcast", PODCAST_A)
+        self.assertFalse(result["ok"])
+        self.assertEqual(self.fake["progress"][EP_2], 25)
+        self.assertEqual(self.pushes_of(EP_2), [])
+
+    def test_following_the_phone_with_an_empty_lookup_pushes_nothing(self):
+        # The phone moved on to EP_2; its lookup comes back empty.
+        self.play_then_pause()
+        self.other_device(EP_1, 30, bridge.STATUS_PLAYED)
+        self.fake["upnext"] = [EP_2]
+        self.other_device(EP_2, 20)
+        self.fake["episodeReply"] = {EP_2: (200, b"")}
+        run_bridge("resume")
+        self.assertEqual(self.fake["progress"][EP_2], 20)
+        self.assertEqual(self.pushes_of(EP_2), [])
+
+    def test_an_autoplayed_episode_with_an_empty_lookup_never_starts_at_0(self):
+        # Started by Next (no record read for it), closed; the phone listened
+        # to 20; Play's lookup comes back empty.
+        self.play_then_pause()
+        run_bridge("next")
+        self.wait_for(lambda: (run_bridge("player")["data"]["item"] or {}).get("uuid") == EP_2)
+        run_bridge("pause")
+        run_bridge("stop")
+        self.other_device(EP_2, 20)
+        before = len(self.pushes_of(EP_2))
+        self.fake["episodeReply"] = {EP_2: (302, b"")}
+        self.assertFalse(run_bridge("toggle")["ok"])
+        self.assertEqual(self.fake["progress"][EP_2], 20)
+        self.assertEqual(len(self.pushes_of(EP_2)), before)
+
+    def test_a_show_you_dont_follow_still_plays_from_its_public_list(self):
+        # No record exists for it: the empty lookup is the answer there.
+        self.fake["unfollowed"] = {PODCAST_B}
+        self.login()
+        result = run_bridge("play", EP_3, "--podcast", PODCAST_B)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["data"]["item"]["uuid"], EP_3)
+
+    def test_the_periodic_push_waits_while_unconfirmed(self):
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.position() > 1.5)
+        state = bridge.load_playback()
+        state.update(unconfirmed=True, checkServer=False, lastSyncAt=time.time() - 31)
+        bridge.save_playback(state)
+        before = len(self.pushes_of(EP_1))
+        run_bridge("player")
+        self.assertEqual(len(self.pushes_of(EP_1)), before)
 
     def test_play_after_the_player_closed_follows_the_top_of_up_next(self):
         # resume_last's atTop check (a surviving mutant in review 8): the phone
@@ -2289,6 +2363,21 @@ class BrokenStream(PlayerTestCase):
             run_bridge("player")
         self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
 
+    def test_a_seek_within_whats_arrived_keeps_the_breaks_evidence(self):
+        # The cut is logged as the cache fills; a seek back inside what has
+        # arrived, then playback reaches the break: still a break.
+        self.fake["cut"] = {EP_1: int(len(self.audio) * 0.6)}
+        bridge.save_prefs({"volume": 0, "speed": 2.0})
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        with bridge.Mpv.connect() as player:
+            self.wait_for(lambda: isinstance((player.get("user-data/legato") or {}).get("cut"), (int, float)), timeout=20)
+            self.wait_for(lambda: (player.get("time-pos") or 0) > 3, timeout=20)
+        run_bridge("seek", "--episode", EP_1, "--relative", "--", "-2")
+        view = self.settled(EP_1)
+        self.assertTrue(view.get("streamBroke"), view)
+        self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+
     def test_a_break_a_second_after_a_resume_says_stream_dropped(self):
         # Strict review 8: "Stream ends here: mark it played" is for the same
         # spot twice in a row, not a link that dropped right after a resume.
@@ -2972,7 +3061,10 @@ class BrokenStream(PlayerTestCase):
             handlers["log-message"]({ prefix = "ffmpeg", level = "warn", text = "http: Will reconnect at 52000 in 1 second(s), error=Connection timed out.\n" })
             show()
             handlers["log-message"]({ prefix = "ffmpeg", level = "warn", text = "http: HTTP error 403 Forbidden" })
+            io.write(tostring(props["user-data/legato"].failed), tostring(props["user-data/legato"].seen.error), ";")
+            handlers["log-message"]({ prefix = "ffmpeg", level = "warn", text = "https: Will reconnect at 61000 in 0 second(s)" })
             io.write(tostring(props["user-data/legato"].failed), ";")
+            handlers["log-message"]({ prefix = "ffmpeg", level = "error", text = "tls: Error in the pull function." })
             handlers["seek"]({})
             io.write(tostring(props["user-data/legato"].failed), ";")
             handlers["log-message"]({ prefix = "ffmpeg", level = "error", text = "http: Stream ends prematurely at 99, should be 18446744073709551615" })
@@ -2992,7 +3084,7 @@ class BrokenStream(PlayerTestCase):
         """
         done = subprocess.run([lua, "-e", harness], capture_output=True, text=True, timeout=10,
                               env={"WATCH": str(ROOT / "bin" / "legato-watch.lua"), "PATH": "/usr/bin"})
-        self.assertEqual(done.stdout, "true nil;true 24054;true 24054;true 30000;true 41000;true 52000;true;nil;nil;"
+        self.assertEqual(done.stdout, "true nil;true 24054;true 24054;true 30000;true 41000;true 52000;truetrue;nil;nil;nil;"
                                       "true;nil true;true nil;warn", done.stderr)
 
     def test_polls_fill_in_what_a_slow_load_missed(self):
@@ -3419,7 +3511,9 @@ class QmlPages(unittest.TestCase):
 
     def run_qml(self, name):
         env = dict(os.environ, QT_QPA_PLATFORM="offscreen", QML_XHR_ALLOW_FILE_READ="1",
-                   QT_FORCE_STDERR_LOGGING="1")
+                   QT_FORCE_STDERR_LOGGING="1", QT_QPA_PLATFORMTHEME="")  # no desktop theme (gtk3 needs a display)
+        for display in ("WAYLAND_DISPLAY", "DISPLAY"):
+            env.pop(display, None)
         here = pathlib.Path(__file__).resolve().parent
         done = subprocess.run(["/usr/lib/qt6/bin/qml", "-I", str(here / "qml" / "imports"), str(here / "qml" / name)],
                               env=env, capture_output=True, text=True, timeout=60)
@@ -3846,6 +3940,41 @@ class HttpsStreams(PlayerTestCase):
         self.settled()
         self.assertEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
 
+    def test_an_m4a_with_its_index_at_the_back_ends_after_a_drop_that_recovered(self):
+        # Strict review 9: the drop's TLS error set `failed`, nothing cleared
+        # it, and mpv never reads such a file to its size: never finished.
+        self.fake["media"] = {EP_1: encode(["-f", "lavfi", "-i", "sine=duration=600", "-c:a", "aac", "-b:a", "32k"], ".m4a")}
+        self.fake["episodes"][EP_1].update(duration=600, url=self.tls_base + "/audio/%s.m4a" % EP_1)
+        blob = self.fake["media"][EP_1]
+        # The audio ends about 96% in (the index fills the rest): the link
+        # drops at 92.5%, about 0:09:39, and comes back.
+        self.fake["progress"][EP_1] = 570
+        self.fake["status"][EP_1] = bridge.STATUS_IN_PROGRESS
+        self.fake["cut"] = {EP_1: int(len(blob) * 0.925)}
+        self.fake["cutHeal"] = True
+        bridge.save_prefs({"volume": 0, "speed": 3.0})
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.settled()
+        self.assertEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+
+    def test_a_failed_seek_over_https_is_not_the_end(self):
+        self.fake["media"] = {EP_1: encode(["-f", "lavfi", "-i", "sine=duration=40", "-b:a", "320k"], ".mp3")}
+        for episode in self.fake["episodes"].values():
+            episode["duration"] = 40
+        self.fake["progress"][EP_1] = 30
+        self.fake["status"][EP_1] = bridge.STATUS_IN_PROGRESS
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: (lambda v: v if v["playing"] and v["position"] > 31 else None)(run_bridge("player")["data"]),
+                      timeout=20)
+        self.fake["expired"] = 403
+        run_bridge("seek", "--episode", EP_1, "--relative", "--", "-10")
+        time.sleep(3)
+        for _ in range(2):
+            run_bridge("player")
+        self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
+
     def test_a_reconnect_that_works_near_the_end_plays_on_to_it(self):
         self.fake["cut"] = {EP_1: len(self.audio) - 20000}  # within READ_PAST_CUT of the end
         self.fake["cutHeal"] = True
@@ -3920,6 +4049,24 @@ class HttpsStreams(PlayerTestCase):
             run_bridge("player")
             run_bridge("player")
             self.assertEqual(self.fake["progress"][EP_1], 25)
+
+    def test_after_a_stall_a_rewind_on_the_phone_wins(self):
+        # Strict review 9: the stuck place counted as a local one Pocket Casts
+        # never got, and beat the phone's deliberate rewind.
+        with mock.patch.object(bridge, "STALL_AFTER", 2):
+            self.fake["hang"] = {EP_1: int(len(self.audio) * 0.6)}
+            self.fake["hangFor"] = 22
+            self.fake["hangResume"] = True
+            self.login()
+            self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+            self.wait_for(lambda: (lambda v: v if v["buffering"] and v["position"] > 15 else None)(run_bridge("player")["data"]),
+                          timeout=40)
+            time.sleep(3)
+            self.fake["progress"][EP_1] = 5  # you went back, on the phone
+            view = self.wait_for(lambda: (lambda v: v if not v["buffering"] and v["playing"] else None)(run_bridge("player")["data"]),
+                                 timeout=40)
+            run_bridge("player")
+            self.assertLess(run_bridge("player")["data"]["position"], 10)
 
     def test_a_break_after_a_long_stall_pushes_nothing(self):
         # No poll sees the stall (it falls between two): the break's own push
@@ -4023,6 +4170,7 @@ class Round5Units(TempHome):
                 idle, interval, count = (sock.getsockopt(socket.IPPROTO_TCP, getattr(socket, name))
                                          for name in ("TCP_KEEPIDLE", "TCP_KEEPINTVL", "TCP_KEEPCNT"))
                 self.assertLessEqual(idle + interval * count, 75)
+                self.assertGreaterEqual(idle, 15)  # and not a probe every few seconds on an idle (paused) stream
         finally:
             server.close()
 
@@ -4144,19 +4292,66 @@ class FfmpegSelfCheck(TempHome):
     def test_this_ffmpeg_passes(self):
         verdict, notified = self.run_check()
         self.assertTrue(verdict["ok"], verdict)
-        self.assertEqual(verdict["seen"], ["reconnect", "short"])
+        self.assertEqual(verdict["seen"], ["error", "reconnect", "short"])
+        self.assertIn(" / ", verdict["ffmpeg"])  # mpv's version and FFmpeg's
         saved = bridge.load_state(bridge.WATCH_CHECK)
         self.assertEqual((saved["ffmpeg"], saved["ok"]), (verdict["ffmpeg"], True))
         self.assertTrue(saved["ffmpeg"])
         self.assertEqual(notified, [])
         self.assertFalse(bridge.watch_check_due(saved["ffmpeg"]))
 
-    def test_a_reworded_ffmpeg_fails_loudly(self):
-        # As if FFmpeg now said "Reconnecting at N": the watcher never sees
-        # it, the check fails, a notification says so, and breaks on hosts
-        # with ranges are judged by their length from then on.
+    def watcher_with(self, old, new):
         with open(bridge.watch_script()) as fh:
-            lua = fh.read().replace('"Will reconnect at (%d+)"', '"Reconnecting at (%d+)"')
+            lua = fh.read()
+        self.assertIn(old, lua)
+        folder = tempfile.mkdtemp(dir=os.environ["HOME"])
+        os.chmod(folder, 0o700)
+        changed = os.path.join(folder, "legato-watch.lua")
+        with open(changed, "w") as fh:
+            fh.write(lua.replace(old, new))
+        return changed
+
+    def test_its_player_is_hardened(self):
+        # Strict review 9: the main player's flags, no display (mpv 0.41
+        # reads the clipboard at start-up through Wayland), and it dies with
+        # the check.
+        started = []
+        real = subprocess.Popen
+
+        def spy(argv, **kwargs):
+            started.append((list(argv), dict(kwargs.get("env") or {})))
+            return real(argv, **kwargs)
+        with mock.patch.dict(os.environ, {"WAYLAND_DISPLAY": "wayland-9"}), \
+                mock.patch.object(bridge.subprocess, "Popen", spy):
+            self.run_check()
+        argv, env = next((a, e) for a, e in started if any(str(w).endswith("/mpv") for w in a))
+        for flag in ("--no-config", "--ytdl=no", "--clipboard-backends-clr", "--no-video", "--ao=null"):
+            self.assertIn(flag, argv)
+        self.assertNotIn("WAYLAND_DISPLAY", env)
+        if bridge.trusted_tool("setpriv"):
+            self.assertEqual(argv[1:3], ["--pdeathsig", "KILL"])
+
+    def test_the_two_lines_reworded_still_pass(self):
+        # The break is still caught (`failed`, any network-layer line): no
+        # alarm for a harmless rewording.
+        changed = self.watcher_with('"Will reconnect at (%d+)"', '"Reconnecting at (%d+)"')
+        changed2 = changed.replace("legato-watch.lua", "legato-watch2.lua")
+        with open(changed) as fh:
+            lua = fh.read().replace('"Stream ends prematurely at (%d+), should be (%d+)"', '"Cut short at (%d+) of (%d+)"')
+        with open(changed2, "w") as fh:
+            fh.write(lua)
+        with mock.patch.object(bridge, "watch_script", lambda: changed2):
+            verdict, notified = self.run_check()
+        self.assertTrue(verdict["ok"], verdict)
+        self.assertEqual(verdict["seen"], ["error"])
+        self.assertEqual(notified, [])
+
+    def test_a_reworded_ffmpeg_fails_loudly(self):
+        # As if mpv's log events (or FFmpeg's "layer: " prefix) changed: the
+        # watcher hears nothing, the check fails, a notification says so, and
+        # breaks on hosts with ranges are judged by their length from then on.
+        with open(bridge.watch_script()) as fh:
+            lua = fh.read().replace('mp.enable_messages("warn")', 'mp.enable_messages("fatal")')
         folder = tempfile.mkdtemp(dir=os.environ["HOME"])
         os.chmod(folder, 0o700)
         reworded = os.path.join(folder, "legato-watch.lua")
@@ -4173,14 +4368,18 @@ class FfmpegSelfCheck(TempHome):
 
 class FfmpegSelfCheckUse(TempHome):
     def test_a_failed_check_means_judging_by_length(self):
-        bridge.save_state(bridge.WATCH_CHECK, {"ffmpeg": "n99", "ok": False, "at": int(time.time())})
+        bridge.save_state(bridge.WATCH_CHECK, {"ffmpeg": "mpv 1 / n99", "ok": False, "at": int(time.time())})
         url = "http://example.com/a.mp3"
         snap = {"eof-reached": True, "path": url, "time-pos": 1200.0, "duration": 3600.0, "seekable": True,
                 "stream-end": 100_000_000, "stream-pos": 40_000_000, "file-local-options/end": "none",
-                "user-data/legato": {"watching": True}}
+                "user-data/legato": {"watching": True}, "mpv-version": "mpv 1"}
         self.assertTrue(bridge.stream_broke(dict(snap, **{"ffmpeg-version": "n99"}), {}))   # judged by length: a break
         self.assertFalse(bridge.stream_broke(dict(snap, **{"ffmpeg-version": "n98"}), {}))  # not checked: trusted
         self.assertFalse(bridge.stream_broke(dict(snap, **{"ffmpeg-version": "n99", "time-pos": 3590.0}), {}))
+        self.assertFalse(bridge.stream_broke(dict(snap, **{"ffmpeg-version": "n99", "mpv-version": "mpv 2"}), {}))
+        # A check that never finished, after ten minutes: not trusted.
+        bridge.save_state(bridge.WATCH_CHECK, {"ffmpeg": "mpv 1 / n99", "ok": None, "at": int(time.time()) - 700})
+        self.assertTrue(bridge.stream_broke(dict(snap, **{"ffmpeg-version": "n99"}), {}))
 
     def test_the_check_runs_once_per_ffmpeg(self):
         self.assertTrue(bridge.watch_check_due("n9"))
@@ -4194,6 +4393,10 @@ class FfmpegSelfCheckUse(TempHome):
         bridge.save_state(bridge.WATCH_CHECK, {"ffmpeg": "n9", "ok": True, "at": int(time.time()) - 7000})
         self.assertFalse(bridge.watch_check_due("n9"))
         self.assertTrue(bridge.watch_check_due("n10"))  # an update
+        bridge.save_state(bridge.WATCH_CHECK, {"ffmpeg": "n9", "ok": False, "at": int(time.time()) - 3600})
+        self.assertFalse(bridge.watch_check_due("n9"))  # failed an hour ago
+        bridge.save_state(bridge.WATCH_CHECK, {"ffmpeg": "n9", "ok": False, "at": int(time.time()) - 90000})
+        self.assertTrue(bridge.watch_check_due("n9"))   # failed yesterday: once more
 
 
 if __name__ == "__main__":
