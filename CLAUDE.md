@@ -14,10 +14,9 @@ Cody's work setup.
 
 Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
-(docs/PLAN.md phases H and SR: rounds 1-17 fixed; round 16's critical, a
-failed push's place outliving a resume check that took the phone's place,
-and round 17's rewind, Play at a told end over a phone that went back into
-it, are fixed; round 18 next). Cody, 2026-11-24: SR86 (settings in Legato's own file)
+(docs/PLAN.md phases H and SR: rounds 1-18 fixed; rounds 16-18 each found
+a critical or a rewind, the last two through "play again" (every way back
+into an end handled here asks Pocket Casts first now); round 19 next). Cody, 2026-11-24: SR86 (settings in Legato's own file)
 and SR63 (one live service on a replacement bar) were folded into 1.1.0
 before round 10, and the review loop runs for as long as rounds keep
 finding critical or high issues (stop: a round with none, and every
@@ -277,11 +276,17 @@ docs/PLAN.md         what's left to build
    (4 KiB, 2 s, wl-paste's whole process group killed after); every file is
    opened relative to a checked directory descriptor; HOME and the XDG
    directories are honoured only as absolute paths (normalized). A HOME set
-   but unusable (empty, relative) stops the call (`bad_env`) rather than
+   but unusable (empty, relative; the service passes an empty one on as
+   empty, `Model.closedEnvironment`) stops the call (`bad_env`) rather than
    fall back to the account's real home (a reviewer's `..` path once acted
    on the real account that way); an XDG variable that isn't an absolute
    path is ignored, as the XDG spec says, and its default under HOME
-   applies (a typo like `~/.local/state` doesn't stop Legato). The About page's privacy text must stay
+   applies (a typo like `~/.local/state` doesn't stop Legato). A scratch
+   HOME doesn't isolate the player, though: mpv's socket is in
+   `XDG_RUNTIME_DIR` (or `/run/user/<uid>`), never under HOME, so a test
+   harness must pin every XDG folder, the runtime one too, inside its
+   scratch home (TempHome does). Refusing a HOME other than the account's
+   would refuse real setups (round 18, F5: documented, not enforced). The About page's privacy text must stay
    true (tests compare it with the hosts the bridge can reach).
 7. **Every text that comes from outside renders as plain text**
    (`Text.PlainText`): episode titles, error messages, mpv's error strings.
@@ -386,10 +391,15 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   (`forget_pending`). Play on an
   ended episode starts what was queued since (if autoplay was on) or plays
   it again (`play_again`, which pushes it as in progress itself, since
-  Pocket Casts would say "played" and stop it), after asking whether it
-  still is played (`reopened_elsewhere`: another device went back into it,
-  and Play follows it there; no answer, "try again"; round 17, F2: it
-  pushed 0 over the phone). Play with nothing loaded lets the record decide
+  Pocket Casts would say "played" and stop it), only after asking whether
+  it still is ended (`end_still_stands`, on every way back in: Play at its
+  end or after a skip or drag back, a media key, a drag back while it
+  plays; a pending finish is retried and must get an answer, a told end
+  reads its record: `reopened_elsewhere`). Another device went back into
+  it: Play follows it there, a media key's resume is asked like any (the
+  next check takes the phone's place); no answer: "try again", nothing
+  pushed (round 17, F2; round 18, F1-F2: a skip back then Play, or a
+  watched end whose mark failed, pushed over the phone). Play with nothing loaded lets the record decide
   for an end told here (played: the next; reopened: from there). The
   resume check's switch never follows Up Next to an episode whose record
   says played (round 17, F1), and an end handled here isn't judged again
@@ -398,7 +408,14 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   Next; playing it from the top there pushed 0 over it); the next Play
   plays it again. Dragged back from the end, it waits there, paused,
   pushing nothing (`sync_now` leaves an episode that ended here alone);
-  Play plays it again from there. An empty episode lookup (a 404, an
+  Play plays it again from there, once Pocket Casts says it's still ended.
+  The resume check takes Pocket Casts' place only once mpv was sent there
+  (round 18, F3: a stalled socket skipped the seek, and the next push sent
+  mpv's old place over the phone). `lastSyncPos` starts at Pocket Casts'
+  own place whatever the load starts from (from the start, a played
+  episode replayed: F4), and a played episode replayed here isn't
+  "finished elsewhere" while Pocket Casts still has it played where it
+  was. An empty episode lookup (a 404, an
   empty answer, a redirect) for a show you follow (`record_expected`:
   every episode of one has a record, played or not; checked live
   2026-11-24, down to the oldest of 1906) or for an episode a record came

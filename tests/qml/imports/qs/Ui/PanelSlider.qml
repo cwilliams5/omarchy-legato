@@ -17,6 +17,17 @@ Item {
   signal released(real value)
   signal rightClicked()
   implicitHeight: 16
+  // A drag, as the real one: `moved` as it goes, `released` where it ends.
+  function dragTo(v) {
+    dragging = true
+    liveValue = Math.max(minimum, Math.min(maximum, integer ? Math.round(v) : v))
+    moved(liveValue)
+  }
+  function releaseDrag() {
+    dragging = false
+    released(liveValue)
+    liveValue = value
+  }
   MouseArea {
     anchors.fill: parent
     onWheel: function(wheel) {

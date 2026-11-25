@@ -132,7 +132,7 @@ test("the video window is offered only for video episodes, and mpv reports it", 
   assert.match(service, /function toggleBoost\(\): string/)
   assert.match(service, /"idle-active", "vid"\]/)
   assert.match(service, /message\.args\[0\] === "legato-video-pin"[\s\S]{0,40}setVideoPinned\("toggle"\)/)
-  assert.match(service, /function setVideoPinned\(value\) \{\s*call\(\["videopin", value\]/)
+  assert.match(service, /function setVideoPinned\(value\) \{[\s\S]*?write\("videopin", \["videopin", value\]/)
   // The menu's transparency reaches the bridge only as one of its levels.
   assert.match(service, /message\.args\[0\] === "legato-video-transparency"[\s\S]{0,40}setVideoTransparency\(Number\(message\.args\[1\]\)\)/)
   assert.match(service, /function setVideoTransparency\(level\) \{\s*if \(!Number\.isInteger\(level\) \|\| level < 0 \|\| level > 80 \|\| level % 10 !== 0\) return/)
@@ -350,6 +350,10 @@ test("closedEnvironment keeps only listed single-line values and pins PATH", () 
     USER: ""
   }, ["HOME", "PATH", "DBUS_SESSION_BUS_ADDRESS", "USER"], Model.trustedPathEnvironment))
   assert.deepEqual(env, { HOME: "/home/x", PATH: Model.trustedPathEnvironment })
+  // An empty HOME goes on, empty, for the bridge to refuse (strict review 18:
+  // left out, the bridge fell back to the account's own home).
+  const empty = plain(Model.closedEnvironment({ HOME: "", USER: "" }, ["HOME", "USER"], Model.trustedPathEnvironment))
+  assert.deepEqual(empty, { HOME: "", PATH: Model.trustedPathEnvironment })
 })
 
 test("no environment allow-list carries a code-loading or command variable", () => {

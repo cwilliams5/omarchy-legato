@@ -1606,6 +1606,60 @@ another device (the worst outcome), so another round follows.
   target and `{panel=}` can); `media/preview.png` shows Cody's real Up
   Next (his call with the other screenshots).
 
+### SR, round 18 (2026-11-25)
+
+Fit: no critical or high.
+
+- [x] SR199 (medium, fit M1) No test reached the progress bar's drag or
+  click (the PanelSlider stand-in had no drag): sent as relative, a drag
+  would jump to the end and the poll mark the episode played. The stand-in
+  drags now (`dragTo`, `releaseDrag`); tests for the absolute seek, a skip
+  folded into it, and the volume drag.
+- [x] SR200 (medium, fit M2) The idle unload's "only while paused" was
+  untested (its timer unnamed): named and tested.
+- [x] SR201 (low, fit L1) An empty HOME still reached the account's home on
+  the plugin's own path: `closedEnvironment` dropped it, so the bridge saw
+  none. It goes on empty now, and the bridge refuses it.
+- [x] SR202 (low, fit L2) Since round 17, the loaded episode's row at its
+  end sent "resume", which with autoplay on starts Up Next's next: at its
+  end it's a play you chose, played again.
+- [x] SR203 (low, fit L3-L4) The poll retry's "not for a dormant answer"
+  tested; the Settings page's always-on-top, local feeds and transparency
+  show at once and write in order (a quick second click acted on the old
+  value), an answer a later click supersedes never showing (`write` tells
+  its callback `latest`).
+- [x] SR204 (fit nits) The service's dead `Component.onCompleted` refresh
+  (onActiveChanged runs for the first value) removed; `call()` answers
+  when its Process can't be made; a stale comment.
+
+Safety: two criticals, both more doors into "play again".
+
+- [x] SR205 (critical, F1) After an end told here, a skip or drag back and
+  then Play, or a media key, pushed this machine's place without asking
+  (only Play at the very end asked, round 17). Every way back in asks now
+  (`end_still_stands`); another device back in it, Play follows it and a
+  media key's resume is asked; no answer, nothing pushed.
+- [x] SR206 (critical, F2) Play at a watched end whose mark failed played
+  it again from 0 when Pocket Casts couldn't be asked (only an unconfirmed
+  end said "try again"; a test pinned it as intended): a pending finish
+  must get an answer (`retry_pending_finish(answered=)`) before playing it
+  again.
+- [x] SR207 (medium, F3) The resume check took Pocket Casts' place though
+  mpv was never sent there (a stalled `path` read, no connection): the
+  next push sent mpv's old place over a phone that went back. It adopts
+  only after the seek; otherwise "unverified".
+- [x] SR208 (low, F4) `lastSyncPos` was 0 for a load from the start or a
+  played episode replayed: it's Pocket Casts' place; a played episode
+  replayed here with its push failing isn't "finished elsewhere".
+- [-] SR209 (medium for harness safety, F5) A scratch HOME doesn't isolate
+  the player (mpv's socket is in the runtime folder). Refusing a HOME
+  other than the account's would refuse real setups: documented (rule 6),
+  and the harness pins every XDG folder.
+- [x] SR210 (lows) L1: a self-check under way isn't trusted; L2: a mark
+  drops the episode's retries and sends, under the state lock; L3: a load
+  just as the sleep guard pauses for a suspend loads paused (`mark_sleeping`,
+  `sleeping_soon`).
+
 ## Testing
 
 - `tests/run` before every commit: all suites, about 23 minutes, nothing on
@@ -1772,6 +1826,17 @@ another device (the worst outcome), so another round follows.
   machine running low on memory (not the suite's doing). 409 Python + 47
   node tests; 510 mutations, round 17's 28 new or changed all killed (two
   after their tests were tightened). Round 18 next (round 17 had a rewind).
+- 2026-11-25 (afternoon): round 18 (SR199-SR210): fit no crit/high (drag
+  and idle-unload tests, an empty HOME refused on the plugin's own path,
+  the ended row, Settings toggles at once and in order); safety two
+  criticals, both more doors into "play again": every way back into an end
+  handled here asks first now (`end_still_stands`), a pending finish must
+  get an answer; the check adopts only after its seek; lastSyncPos is
+  Pocket Casts' place whatever the start; lows (a self-check under way, a
+  mark under the lock, the sleep guard's mark). A scratch HOME's limits
+  documented, not enforced (refusing would refuse real setups). 418 Python
+  + 47 node tests; 526 mutations, round 18's 30 new or changed all killed.
+  Round 19 next (round 18 had criticals).
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

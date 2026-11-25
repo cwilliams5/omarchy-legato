@@ -427,6 +427,38 @@ Item {
     for (w = 0; w < 4; w++) events.mouseWheel(volume, 20, 5, 0, -30)
     check("four small deltas over the volume: one 5 step", service.volume === loudness - 5, loudness + " to " + service.volume)
     settle()
+    // A drag of the progress bar: an absolute seek to where it's let go, a
+    // skip made before it's sent folded into it (strict review 18: no test
+    // reached the drag; sent as relative, it jumped to the end).
+    service.applyPlayer({ active: true, playing: true, position: 30, duration: 100, item: top.episode })
+    progress.dragTo(80)
+    progress.releaseDrag()
+    check("a drag seeks to where it's let go", service._seekTarget === 80 && service._seekDelta === 0,
+          service._seekTarget + " " + service._seekDelta)
+    service.skip(10)
+    // (Playing, the place it skips from moves on by the milliseconds since:
+    // sent rounded, as the bridge gets it.)
+    check("a skip just after it is folded in", Math.round(service._seekTarget) === 90, service._seekTarget)
+    service.sendSeek()
+    var sent = calls("seek").map(function(p) { return p.command.slice(-3).join(" ") })
+    check("sent as one absolute seek", sent.length === 1 && sent[0].indexOf("--relative") < 0 && /\s90$/.test(sent[0]), sent.join("; "))
+    calls("seek").forEach(function(p) { p.finish(0, JSON.stringify({ ok: true, data: {} }), "") })
+    service.cancelSeek()
+    volume.dragTo(40)
+    volume.releaseDrag()
+    check("a drag of the volume sets it", service.volume === 40, service.volume)
+    settle()
+    // The idle unload's wait runs only while paused (strict review 18: never
+    // tested; running while playing, it never fired after a long listen).
+    var unload = null
+    for (ti = 0; ti < service.data.length; ti++) if (service.data[ti] && service.data[ti].objectName === "unloadTimer") unload = service.data[ti]
+    service.applyPlayer({ active: true, playing: true, position: 30, duration: 100, item: top.episode })
+    check("playing: the idle unload doesn't wait", unload && !unload.running, unload && unload.running)
+    service.applyPlayer({ active: true, playing: false, position: 30, duration: 100, item: top.episode })
+    check("paused: it waits", unload && unload.running, unload && unload.running)
+    service.applyPlayer({ active: false, playing: false, item: null })
+    check("idle: it doesn't", unload && !unload.running, unload && unload.running)
+    settle()
     keys.textKey("a", 0)
     settle()
     panel.close()
@@ -515,6 +547,29 @@ Item {
     check("loaded, its row plays or pauses it", calls("resume").length === 1 && calls("play").length === 0,
           calls("resume").length + " " + calls("play").length)
     answer("resume", { active: false, playing: false, item: null })
+    service.applyPlayer({ active: true, playing: false, ended: true, position: 100, duration: 100, item: lastItem })
+    panel.activateRow(lastRow)
+    check("loaded at its end, its row plays it again (a play you chose)",
+          exactly("play " + lastItem.uuid + " --podcast " + lastItem.podcast).length === 1 && calls("resume").length === 0,
+          calls("play").length + " " + calls("resume").length)
+    answer("play", { active: false, playing: false, item: null })
+    // The Settings page's toggles show at once and go one at a time (strict
+    // review 18: a quick second click acted on the old value and was lost).
+    check("(local feeds off, before)", service.localFeeds === false, service.localFeeds)
+    service.setLocalFeeds(true)
+    check("local feeds: shown at once", service.localFeeds === true, service.localFeeds)
+    service.setLocalFeeds(false)
+    check("and a second click at once too", service.localFeeds === false, service.localFeeds)
+    check("written one at a time", calls("localfeeds").length === 1 && calls("localfeeds")[0].command.indexOf("on") >= 0,
+          calls("localfeeds").length)
+    answer("localfeeds", { localFeeds: true })
+    check("the earlier answer doesn't show", service.localFeeds === false, service.localFeeds)
+    check("then the later click's", calls("localfeeds").length === 1 && calls("localfeeds")[0].command.indexOf("off") >= 0,
+          calls("localfeeds").length)
+    answer("localfeeds", { localFeeds: false })
+    service.setVideoTransparency(30)
+    check("transparency: shown at once", service.videoTransparency === 30, service.videoTransparency)
+    answer("videotransparency", { videoTransparency: 30 })
     service.applyPlayer({ active: false, playing: false, item: null })
     service.newReleases = savedNew
     panel.setTab("upnext")

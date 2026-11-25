@@ -295,7 +295,12 @@ Item {
       return null
     }
     var proc = bridgeProcess.createObject(root, { command: command, callback: callback, secret: secret || "" })
-    if (!proc) return null
+    if (!proc) {
+      // (Never made: the caller still hears, or its loading flag, a write's
+      // turn, stays set for good.)
+      if (callback) Qt.callLater(function() { callback({ ok: false, code: "no_start", error: "legato-bridge didn't start" }) })
+      return null
+    }
     proc.running = true
     return proc
   }
@@ -789,6 +794,7 @@ Item {
   readonly property int unloadAfterMs: Math.max(1, unloadAfterMinutes) * 60000
   Timer {
     id: unloadTimer
+    objectName: "unloadTimer"
     interval: root.unloadAfterMs
     repeat: false
     running: root.active && root.unloadAfterMinutes > 0 && root.playerActive && !root.isPlaying
@@ -1048,9 +1054,12 @@ Item {
 
   // Always on top for the video window: "on", "off" or "toggle".
   function setVideoPinned(value) {
-    call(["videopin", value], function(result) {
-      if (!result.ok) { root.reportError(result.error); return }
-      root.optimistic({ videoPinned: result.data.videoPinned })
+    // Shown at once and written in order (`write`): a quick second click
+    // acted on the old value and was lost (strict review 18).
+    if (value === "on" || value === "off") optimistic({ videoPinned: value === "on" })
+    write("videopin", ["videopin", value], function(result, latest) {
+      if (!result.ok) { root.reportError(result.error); root.settle(); return }
+      if (latest) root.optimistic({ videoPinned: result.data.videoPinned })
     })
   }
 
@@ -1077,8 +1086,12 @@ Item {
   // bridge acts on the file (autoplay, pause before sleep, the idle unload).
   property var _writes: []
   property bool _writing: false
+  property var _writeSerials: ({})  // the latest change of each thing written
   function write(key, args, done) {
-    _writes = _writes.filter(function(w) { return w.key !== key }).concat([{ key: key, args: args, done: done }])
+    var serials = _writeSerials
+    serials[key] = (serials[key] || 0) + 1
+    var serial = serials[key]
+    _writes = _writes.filter(function(w) { return w.key !== key }).concat([{ key: key, args: args, serial: serial, done: done }])
     nextWrite()
   }
   function nextWrite() {
@@ -1090,7 +1103,9 @@ Item {
     // watchdog says "didn't start", and the next goes.)
     call(w.args, function(result) {
       root._writing = false
-      w.done(result)
+      // `latest`: no later change of the same thing was made since (its
+      // answer would show, then flick back).
+      w.done(result, w.serial === root._writeSerials[w.key])
       root.nextWrite()
     })
   }
@@ -1161,17 +1176,20 @@ Item {
   }
 
   function setLocalFeeds(on) {
-    call(["localfeeds", on ? "on" : "off"], function(result) {
-      if (!result.ok) { root.reportError(result.error); return }
-      root.optimistic({ localFeeds: result.data.localFeeds })
+    optimistic({ localFeeds: !!on })
+    write("localfeeds", ["localfeeds", on ? "on" : "off"], function(result, latest) {
+      if (!result.ok) { root.reportError(result.error); root.settle(); return }
+      if (latest) root.optimistic({ localFeeds: result.data.localFeeds })
     })
   }
 
   // How see-through the video window is, in percent: 0 to 80 in tens.
   function setVideoTransparency(level) {
     if (!Number.isInteger(level) || level < 0 || level > 80 || level % 10 !== 0) return
-    call(["videotransparency", String(level)], function(result) {
-      if (!result.ok) { root.reportError(result.error); return }
+    optimistic({ videoTransparency: level })
+    write("videotransparency", ["videotransparency", String(level)], function(result, latest) {
+      if (!result.ok) { root.reportError(result.error); root.settle(); return }
+      if (!latest) return
       root.optimistic({ videoTransparency: result.data.videoTransparency })
     })
   }
@@ -1392,9 +1410,8 @@ Item {
     }
   }
 
-  // (A copy created with no screen wakes too: onNoScreensChanged runs for
-  // the binding's first value.)
-  Component.onCompleted: if (active && !probed) refresh()
+  // (A copy created awake, or with no screen, starts through
+  // onActiveChanged: QML runs these handlers for a property's first value.)
   // Awake again after a dormant spell: read where things stand now.
   onActiveChanged: if (active) { if (!probed) refresh(); else refreshPlayer() }
 }

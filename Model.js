@@ -356,13 +356,16 @@ function trustedExecutable(value, directories) {
 
 // A complete environment for a Process with clearEnvironment: the listed
 // names that hold a bounded single-line value, then PATH, which nothing
-// inherited can override.
+// inherited can override. An empty HOME is passed on as empty: the bridge
+// refuses it, where a HOME left out would fall back to the account's own
+// home (strict review 18; round 14's incident class).
 function closedEnvironment(inherited, names, path) {
   var environment = {}
   var source = isObjectMap(inherited) ? inherited : {}
   var list = Array.isArray(names) ? names : []
   for (var i = 0; i < list.length; i++) {
     var value = source[list[i]]
+    if (value === "" && list[i] === "HOME") { environment.HOME = ""; continue }
     if (typeof value !== "string" || value === "" || value.length > 4096) continue
     if (/[\x00-\x1f\x7f]/.test(value)) continue
     environment[list[i]] = value

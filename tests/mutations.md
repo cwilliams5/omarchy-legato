@@ -12,13 +12,13 @@ python3 -B tests/mutate.py .       # all of them, about 2 hours
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (510 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (526 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
 it. A mutation whose pattern no longer matches the code is reported STALE
 and fails the run (fix its pattern), as does one whose tests fail
 unmutated (SKIP).
 
-## The set (510; strict review rounds 1 to 17, 2026-11-25)
+## The set (526; strict review rounds 1 to 18, 2026-11-25)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
@@ -116,6 +116,18 @@ caught each mutant. By area:
   place; a relative XDG value stopping the call (the spec ignores it); and
   the QML ones (the last episode's row resuming with nothing loaded; a
   waiting write never replaced).
+- **Round 18**: an empty HOME left out for the bridge (node); and the QML
+  ones (the loaded row at its end resuming; a toggle shown only on its
+  answer, or a superseded answer shown; the idle unload waiting while
+  playing; a drag's seek sent as relative, its release skipping, a skip
+  after it not folded in; the volume drag doing nothing; a dormant answer
+  retried). Safety: a skip back from a told end then Play, a media key, a
+  drag back while it plays, each into the end unasked; no answer for a
+  pending end taken for one; the check taking a place mpv was never sent
+  to; from the start, the base 0; a played episode replayed read as
+  finished elsewhere; the sleep guard's mark left out, or a load ignoring
+  it; a self-check under way trusted. (Three older ones retired: the one
+  guard, end_still_stands, replaced the paths they planted.)
 
 ## Results
 
@@ -277,6 +289,17 @@ caught each mutant. By area:
   reached the line (Pocket Casts unreachable raised before the empty
   record's check; a positionless record crashed the mutant to the same
   outcome): tightened, both killed.
+- Round 18 (the reviewers' own): safety 2 of 15 survived (the adoption's
+  `lastSyncStatus`, the check's forced pending retry: both reached now by
+  the told-end tests), fit 11 of 44 QML (the drag, the idle unload, the
+  dormant answer: planted with tests; the rest equivalent). Round 18's
+  set, its 30 new or changed: 19 killed at first, 11 QML ones skipped by a
+  baseline that failed once (a timing flake in a new test: a skip folded
+  into a drag reads the live place, a few milliseconds on: now compared
+  rounded); rerun, 9 killed, 2 survived: a toggle's "shown at once" was
+  checked against the value it already had (now on, then off), and the
+  volume slider set the volume both as it moved and on release (Omarchy's
+  slider releases at the last place it moved to: the second set removed).
 - Equivalent and left out (round 14): `keep_local` and its rules (the
   loaded player's keep is gone: its check seeks only on another device's
   write); the Stats/About keys while typing (the field takes printable

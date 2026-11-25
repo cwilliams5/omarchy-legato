@@ -105,6 +105,7 @@ Item {
                    top.touchpad, top.touchpadCheck, top.liveStatus, top.liveStatusCheck, top.guardBack,
                    top.guardRestart, top.guardRestartCheck, top.mpvEvents, top.pauseEvent, top.pauseEventPoll, top.pauseEventRetry,
                    top.retryTwoEarly, top.retryTwo, top.retryThreeEarly, top.retryThree, top.noFourthRetry,
+                   top.dormantNotRetried, top.dormantNotRetriedCheck,
                    top.pauseEventRead, top.seekEventPoll,
                    top.toggles, top.idleUnload, top.volumeDebounce, top.volumeDebounceCheck, top.importFromBar,
                    top.ipcStopAndSpeed, top.ipcStopAndSpeedCheck, top.signOutLists,
@@ -426,6 +427,18 @@ Item {
     if (Date.now() - top.stepStarted < 1500) return false
     check("three retries at most", calls("player").length === 0, calls("player").length)
     shared.refreshPlayer()  // a poll that works resets the count
+    answerAll(top.answers)
+    // An answer that says no poll can work now (dormant) isn't retried.
+    eventSocket.parser.read(JSON.stringify({ event: "property-change", id: 1, name: "pause", data: true }))
+  }
+  function dormantNotRetried() {
+    if (Date.now() - top.stepStarted < 800) return false
+    calls("player").forEach(function(p) { p.finish(0, JSON.stringify({ ok: false, code: "dormant", error: "Legato isn't on a bar" }), "") })
+  }
+  function dormantNotRetriedCheck() {
+    if (Date.now() - top.stepStarted < 400) return false
+    check("a dormant answer isn't retried", calls("player").length === 0, calls("player").length)
+    shared.refreshPlayer()
     answerAll(top.answers)
   }
   function pauseEventRead() {

@@ -318,7 +318,9 @@ Panel {
     // The episode in the player: play or pause it. Not just the last one
     // played (nowUuid, with nothing loaded): that's a play you chose, which
     // replays one that ended (resume_last would skip it for the next).
-    if (service.isLoaded(item)) service.playPause()
+    // At its end it's a play you chose too: played again (resume there would
+    // start Up Next's next with autoplay on; strict review 18).
+    if (service.isLoaded(item) && !service.ended) service.playPause()
     else service.playItem(item, false)
   }
 
@@ -1168,8 +1170,9 @@ Panel {
                   knobSize: Style.space(12)
                   trackHeight: Style.space(4)
                   anchors.verticalCenter: parent.verticalCenter
+                  // (Live as it moves; Omarchy's slider releases at the last
+                  // place it moved to, so no second set on release.)
                   onMoved: function(v) { if (root.service) root.service.setVolume(v) }
-                  onReleased: function(v) { if (root.service) root.service.setVolume(v) }
 
                   WheelNotches {
                     onNotch: function(steps) { if (root.service) root.service.nudgeVolume(steps * volumeSlider.step) }

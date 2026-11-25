@@ -258,9 +258,10 @@ TRUSTED_BIN_DIRS = ("/usr/bin", "/bin", "/usr/sbin", "/sbin", "/run/current-syst
 TRUSTED_PATH = ":".join(TRUSTED_BIN_DIRS)
 
 # Directory variables, honoured only as absolute paths (normalized: "/a/b/../c"
-# is "/a/c", as the caller meant). One set but unusable stops the call rather
-# than fall back to the account's real home: a test pointing HOME at a scratch
-# folder through ".." once acted on the real state and Pocket Casts account.
+# is "/a/c", as the caller meant). A HOME set but unusable stops the call
+# rather than fall back to the account's real home (a test pointing HOME at a
+# scratch folder through ".." once acted on the real state and Pocket Casts
+# account); an XDG variable that isn't absolute is ignored (scrub_environment).
 # XDG_RUNTIME_DIR is also where mpv finds PipeWire/PulseAudio.
 PATH_ENV_NAMES = ("HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME",
                   "XDG_DATA_HOME", "XDG_RUNTIME_DIR")
@@ -2651,7 +2652,9 @@ def load_into_mpv(item, prefs, position, skip_last=0, on_loaded=None):
         with deadline_held():
             player.command("loadfile", url, "replace", -1, options)
             player.wait_for_load()
-            if not slept and slept_since_start():
+            if not slept and (slept_since_start() or sleeping_soon()):
+                # (A sleep during the load, or the sleep guard pausing for one
+                # before or while it ran: paused once loaded.)
                 player.set("pause", True)
             size, duration = player.get("stream-end"), player.get("duration")
             if skip_last and outro_applies(as_int(item.get("duration")), duration, position, skip_last):
@@ -2675,7 +2678,9 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
     (another device moved on): the outgoing episode's local position is out
     of date then, and pushing it would rewind that device."""
     position = start_position(item, from_start)
-    server_place = position
+    # Pocket Casts' place, whatever this load starts from (from the start,
+    # a played episode replayed: strict review 18, F4).
+    server_place = as_int(item.get("playedUpTo"))
     start_from, skip_last = show_skips(item.get("podcast", ""))
     duration = as_int(item.get("duration"))
     intro = 0
@@ -2929,7 +2934,7 @@ def tell_finished(entry):
     return entry
 
 
-def retry_pending_finish(state, force=False):
+def retry_pending_finish(state, force=False, answered=None):
     """Tell Pocket Casts about episodes that ended here while it couldn't be
     reached, unless another device has spoken since: its record is read
     first, and if it moved from where this machine left it (you carried on
@@ -2966,6 +2971,8 @@ def retry_pending_finish(state, force=False):
             if not record or not a_place(record.get("playedUpTo")):
                 keep.append(entry)  # no answer: ask again later
                 continue
+            if answered is not None:
+                answered.add(entry["uuid"])
             played = as_int(record.get("playingStatus")) == STATUS_PLAYED
             if entry.get("played"):
                 if not played:
@@ -2992,6 +2999,32 @@ def retry_pending_finish(state, force=False):
     return carried
 
 
+def end_still_stands(state):
+    """Before an episode that ended here plays again (Play at its end or
+    after a skip or drag back, a media key, a drag back while it plays):
+    whether Pocket Casts still has it ended, so that this machine's place in
+    it is nobody else's. False when another device went back into it (or
+    carried on before the end was told); raises "try again" when Pocket
+    Casts can't say (strict review 18, F1-F2: playing it again unasked
+    pushed this machine's place, or 0, over the phone)."""
+    uuid = (state.get("episode") or {}).get("uuid", "")
+    if any(p.get("uuid") == uuid for p in state.get("pendingFinish") or []):
+        answered = set()
+        if uuid in retry_pending_finish(state, force=True, answered=answered):
+            return False
+        if uuid not in answered:
+            raise ApiError("network", "Pocket Casts didn't answer: try again")
+        return True
+    return not reopened_elsewhere(uuid)
+
+
+def forget_end(state):
+    """Not "ended here" any more: another device went back into it."""
+    state["handledEnd"] = ""
+    state.pop("endedAutoplay", None)
+    save_playback(state)
+
+
 def reopened_elsewhere(uuid):
     """Whether Pocket Casts has an episode that ended here (and was told) as
     not played any more: another device went back into it. No answer: try
@@ -3004,10 +3037,11 @@ def reopened_elsewhere(uuid):
 
 def play_again(player, state, from_start):
     """Play again an episode that played to its end here (and was marked
-    played): from the top, or from where it was dragged back to. That makes
-    it in progress again, and this machine produced that, so it's pushed at
-    once with no question to Pocket Casts (which would answer "played" and
-    stop it)."""
+    played): from the top, or from where it was dragged back to. Only after
+    end_still_stands (Pocket Casts still has it ended: nobody else has a
+    place in it). That makes it in progress again, and this machine
+    produced that, so it's pushed at once (the resume check would read
+    "played" as finished elsewhere and stop it)."""
     if from_start:
         player.command("seek", 0, "absolute")
     if player.get("pause") is not False and not slept_since_start():
@@ -3150,19 +3184,19 @@ def player_versions(player):
 def ffmpeg_lines_trusted(version):
     """Whether FFmpeg's silence can be taken as the end: not when the
     self-check ran with this FFmpeg and didn't see its lines (an update may
-    have reworded them). Not checked yet: trusted (the check runs within
-    seconds of the first player on a new version)."""
+    have reworded them), nor while that check is under way. Never checked
+    (no verdict for this version): trusted (the check starts with the first
+    player on a new version, and is under way from then)."""
     try:
         check = load_state(WATCH_CHECK)
     except ApiError:
         return False  # a verdict file that can't be trusted: judge by length
     if not isinstance(check, dict) or check.get("ffmpeg") != version:
         return True
-    if check.get("ok") is False:
-        return False
-    # Under way for minutes means it never finished: not trusted until a
-    # check does (one runs again with the next player).
-    return not (check.get("ok") is None and time.time() - float(check.get("at") or 0) > 600)
+    # Under way (or crashed, its verdict never written): not trusted until
+    # a check says so (strict review 18, L1); one that never finished runs
+    # again with the next player.
+    return check.get("ok") is True
 
 
 def watch_check_due(version):
@@ -3499,7 +3533,11 @@ def check_server(state, prefs, player=None, quick=False):
         return "unverified", state
     if record:
         state["recordSeen"] = True
-    finished = as_int(record.get("playingStatus")) == STATUS_PLAYED
+    # Played, as news: not a played episode replayed here whose load push
+    # hasn't landed (Pocket Casts still has it played where it was).
+    finished = (as_int(record.get("playingStatus")) == STATUS_PLAYED
+                and not (as_int(state.get("lastSyncStatus")) == STATUS_PLAYED
+                         and abs(as_int(record.get("playedUpTo")) - (state.get("lastSyncPos") or 0)) <= DRIFT_SLACK))
     moved_on = top is not None and top["uuid"] != uuid and (finished or state.get("atTop") is True)
     if moved_on:
         try:
@@ -3539,11 +3577,12 @@ def check_server(state, prefs, player=None, quick=False):
         if abs(server - last_pushed) > DRIFT_SLACK:
             own = player is None
             player = player or Mpv.connect()
-            refused = False
+            refused = sent = False
             if player:
                 try:
                     if player.get("path") == episode.get("url"):  # not another file (sync_now)
                         player.command("seek", server, "absolute")
+                        sent = True
                         # A host without byte ranges can't go back past what mpv
                         # still holds (its back buffer, minutes of audio): the
                         # seek is refused at once, and mpv plays on from where
@@ -3555,6 +3594,12 @@ def check_server(state, prefs, player=None, quick=False):
                 finally:
                     if own:
                         player.close()
+            if not sent:
+                # mpv was never sent there (no player, its socket stalled, or
+                # another file): Pocket Casts' place isn't where it plays, and
+                # taking it as known would let the next push send mpv's old
+                # place over the phone (strict review 18, F3). Asked again.
+                return "unverified", state
             if refused:
                 # Loaded again from Pocket Casts' place: from the top there,
                 # and nothing pushed below its place until playback gets back
@@ -3623,25 +3668,12 @@ def resume_loaded(player, state, prefs):
         finish_current(state, prefs, False)
         return
     if at_end or ended_here(state):
-        uuid = (state.get("episode") or {}).get("uuid", "")
-        if any(p.get("uuid") == uuid for p in state.get("pendingFinish") or []):
-            # Pocket Casts hasn't had all of this end yet (or never said
-            # whether another device carried on: a call cut off while
-            # asking): ask now. Carried on elsewhere, Play follows it there.
-            if uuid in retry_pending_finish(state, force=True):
-                quit_mpv(player)
-                resume_last(prefs)
-                return
-            if unanswered_end(state, uuid):
-                raise ApiError("network", "Pocket Casts didn't answer: try again")
-        elif at_end and reopened_elsewhere(uuid):
-            # Told (played, off Up Next), and another device went back into it
-            # since (the player stays loaded here up to the idle unload):
-            # Play follows it there, rather than play it again from 0 over it
-            # (strict review 17, F2).
-            state["handledEnd"] = ""
-            state.pop("endedAutoplay", None)
-            save_playback(state)
+        if not end_still_stands(state):
+            # Another device went back into it since (the player stays
+            # loaded here up to the idle unload), or carried on before the
+            # end was told: Play follows it there (resume_last), rather
+            # than play it again over it.
+            forget_end(state)
             quit_mpv(player)
             resume_last(prefs)
             return
@@ -3748,8 +3780,21 @@ def poll(autoplay=True, seeked=False):
         save_playback(state)
         return player_view(snap, state, prefs)
     if ended_here(state) and snap.get("pause") is False and isinstance(position, (int, float)):
-        # Dragged back into an episode that ended here (a media widget's
-        # seek), and it plays on: it's in progress again.
+        # Dragged back into an episode that ended here and played on (a
+        # media widget's seek, a media key): in progress again, if Pocket
+        # Casts still has it ended (end_still_stands). Another device back
+        # in it: asked like a media key's resume, nothing pushed till then.
+        # No answer: nothing pushed (it's still "ended here").
+        try:
+            stands = end_still_stands(state)
+        except ApiError:
+            save_playback(state)
+            return player_view(snap, state, prefs)
+        if not stands:
+            state["checkServer"] = True
+            state["unconfirmed"] = True
+            forget_end(state)
+            return player_view(snap, state, prefs)
         reopen_ended(state, position)
         return player_view(snap, state, prefs)
     now = time.time()
@@ -4585,12 +4630,21 @@ def cmd_seek(args):
             state["listening"] = {}  # a new count from here: the jump itself isn't listening
             count_listening(state, listen_snap(player), prefs)
             playing = player.get("pause") is False and player.get("eof-reached") is not True
-            if (playing and ended_here(state) and player.get("path") == (state.get("episode") or {}).get("url")
-                    and not unanswered_end(state, loaded)):
+            if playing and ended_here(state) and player.get("path") == (state.get("episode") or {}).get("url"):
                 # Dragged back from the end of an episode that ended here
-                # while mpv still played (it pauses itself at the end a
-                # moment later; paused, Play plays it again from here).
-                play_again(player, state, from_start=False)
+                # while mpv still played: in progress again only if Pocket
+                # Casts still has it ended (end_still_stands; no answer,
+                # nothing pushed: it stays "ended here").
+                try:
+                    stands = end_still_stands(state)
+                except ApiError:
+                    stands = None
+                if stands:
+                    play_again(player, state, from_start=False)
+                elif stands is False:
+                    state["checkServer"] = True
+                    state["unconfirmed"] = True
+                    forget_end(state)
             else:
                 # While paused, sync_now's rule decides: a seek right after
                 # pausing is sent; later, the next resume asks Pocket Casts.
@@ -4712,6 +4766,9 @@ def pause_for_sleep():
             return pause_after_play(player)
         # Paused first, before the state lock: a poll pushing on a slow link
         # can hold that for many seconds, and the machine is about to sleep.
+        # A load already under way (a Play, Next, the switch, holding the
+        # lock) sees the mark and loads paused (strict review 18, L3).
+        mark_sleeping()
         player.set("pause", True)
         try:
             lock = StateLock(timeout=2)
@@ -4728,6 +4785,25 @@ def pause_for_sleep():
         finally:
             lock.__exit__(None, None, None)
     return True
+
+
+def mark_sleeping():
+    """The sleep guard is pausing for a suspend about to happen."""
+    try:
+        with runtime_dir(create=True) as held:
+            fd = os.open("sleeping", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=held.fd)
+            os.close(fd)
+    except (OSError, ApiError):
+        pass
+
+
+def sleeping_soon():
+    """The sleep guard paused for a suspend in the last half minute."""
+    try:
+        with runtime_dir() as held:
+            return time.time() - os.stat("sleeping", dir_fd=held.fd, follow_symlinks=False).st_mtime < 30
+    except (OSError, ApiError):
+        return False
 
 
 def pause_after_play(player):
@@ -5245,50 +5321,53 @@ def cmd_mark(args):
     podcast = safe_uuid(args.podcast)
     refuse_loaded(uuid)
     item = {"uuid": uuid, "podcast": podcast}
-    if args.state == "played":
-        push_position(item, 0, STATUS_PLAYED)
-        try:
-            up_next_remove([uuid])
-        except ApiError:
-            # Played, still on Up Next: a pending finish, so Next, autoplay
-            # and the resume check skip it (ended_or_pending) and a later
-            # retry takes it off.
-            with StateLock():
+    # Under the state lock, the episode's own retries dropped first: a poll's
+    # retry that read its record just before couldn't write its place, or
+    # "played", over the mark just after (strict review 18, L2).
+    with StateLock():
+        state = load_playback()
+        drop_unsent(state, uuid)  # a place unsent would undo the mark
+        if args.state != "played":
+            drop_pending(state, uuid)  # unplayed now: nothing left to mark or take off Up Next
+        save_playback(state)
+        if args.state == "played":
+            push_position(item, 0, STATUS_PLAYED)
+            try:
+                up_next_remove([uuid])
+            except ApiError:
+                # Played, still on Up Next: a pending finish, so Next, autoplay
+                # and the resume check skip it (ended_or_pending) and a later
+                # retry takes it off.
                 state = load_playback()
                 entry = {"uuid": uuid, "podcast": podcast, "played": True, "removed": False,
                          "left": 0.0, "at": time.time(), "tried": time.time()}
                 state["pendingFinish"] = [p for p in state.get("pendingFinish") or [] if p.get("uuid") != uuid] + [entry]
                 save_playback(state)
-    else:
-        push_position(item, 0, STATUS_UNPLAYED)
-        forget_pending(uuid)  # unplayed now: nothing left to mark or take off Up Next
-    forget_unsent(uuid)
+        else:
+            push_position(item, 0, STATUS_UNPLAYED)
     out({"uuid": uuid, "status": STATUS_PLAYED if args.state == "played" else STATUS_UNPLAYED})
 
 
-def forget_unsent(uuid):
+def drop_unsent(state, uuid):
     """You marked an episode played or unplayed: a place of it this machine
     couldn't send is history (it would undo the mark)."""
-    with StateLock():
-        state = load_playback()
-        places = state.get("unsentPlaces") or []
-        unsent = state.get("unsentPush")
-        if any(p.get("uuid") == uuid for p in places) or (isinstance(unsent, dict) and unsent.get("uuid") == uuid):
-            state["unsentPlaces"] = [p for p in places if p.get("uuid") != uuid]
-            if isinstance(unsent, dict) and unsent.get("uuid") == uuid:
-                del state["unsentPush"]
-            save_playback(state)
+    state["unsentPlaces"] = [p for p in state.get("unsentPlaces") or [] if p.get("uuid") != uuid]
+    unsent = state.get("unsentPush")
+    if isinstance(unsent, dict) and unsent.get("uuid") == uuid:
+        del state["unsentPush"]
+
+
+def drop_pending(state, uuid):
+    """You put an episode that ended here back (Mark as unplayed, or onto
+    Up Next): a retry of its end mustn't take it off again."""
+    state["pendingFinish"] = [p for p in state.get("pendingFinish") or [] if p.get("uuid") != uuid]
 
 
 def forget_pending(uuid):
-    """You put an episode that ended here back (Mark as unplayed, or onto
-    Up Next): a retry of its end mustn't take it off again."""
     with StateLock():
         state = load_playback()
-        pending = state.get("pendingFinish") or []
-        if any(p.get("uuid") == uuid for p in pending):
-            state["pendingFinish"] = [p for p in pending if p.get("uuid") != uuid]
-            save_playback(state)
+        drop_pending(state, uuid)
+        save_playback(state)
 
 
 def cmd_queue(args):

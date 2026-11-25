@@ -1923,6 +1923,9 @@ class EndToEnd(PlayerTestCase):
             self.assertLess(time.monotonic() - started, 4)
             with bridge.Mpv.connect() as player:
                 self.assertIs(player.get("pause"), True)
+            # And it leaves its mark: the call holding the lock, if it loads
+            # an episode now, loads it paused (strict review 18, L3).
+            self.assertTrue(bridge.sleeping_soon())
         finally:
             held.__exit__(None, None, None)
 
@@ -2977,6 +2980,118 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         self.assertTrue(run_bridge("play", EP_3, "--podcast", PODCAST_B)["ok"])
         self.assertTrue(bridge.load_playback()["recordSeen"])
 
+    # --- Strict review 18 (F1): every way back into an end told here asks.
+    def dragged_back_after_a_told_end(self, to):
+        self.watched_end_told()
+        with bridge.Mpv.connect() as player:
+            self.wait_for(lambda: player.get("pause") is True)  # (mpv pauses itself at the end, a moment after)
+        run_bridge("seek", "--episode", EP_1, str(to))  # dragged back while paused: nothing pushed
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
+
+    def test_play_after_a_skip_back_from_a_told_end_follows_the_phone(self):
+        self.dragged_back_after_a_told_end(10)
+        self.other_device(EP_1, 50)  # the phone went back into it meanwhile
+        before = len(self.pushes_of(EP_1))
+        run_bridge("toggle")
+        run_bridge("player", "--no-autoplay")  # (the poll its resume brings)
+        pushed = [b["position"] for b in self.pushes_of(EP_1)[before:]]
+        self.assertTrue(48 <= self.fake["progress"][EP_1] < 60, (pushed, self.fake["progress"][EP_1]))
+        self.assertNotIn(10, pushed)
+
+    def test_play_after_a_drag_from_a_told_end_follows_the_phone(self):
+        self.dragged_back_after_a_told_end(100)
+        self.other_device(EP_1, 50)
+        before = len(self.pushes_of(EP_1))
+        run_bridge("toggle")
+        run_bridge("player", "--no-autoplay")
+        pushed = [b["position"] for b in self.pushes_of(EP_1)[before:]]
+        self.assertTrue(48 <= self.fake["progress"][EP_1] < 60, (pushed, self.fake["progress"][EP_1]))
+
+    def test_a_media_key_after_a_drag_from_a_told_end_asks_first(self):
+        self.dragged_back_after_a_told_end(100)
+        self.other_device(EP_1, 50)
+        before = len(self.pushes_of(EP_1))
+        self.mpv_set_pause(False)  # a media key, playerctl
+        run_bridge("player", "--no-autoplay")
+        run_bridge("player", "--no-autoplay")  # (the next poll asks Pocket Casts)
+        pushed = [b["position"] for b in self.pushes_of(EP_1)[before:]]
+        self.assertTrue(48 <= self.fake["progress"][EP_1] < 60, (pushed, self.fake["progress"][EP_1]))
+
+    def test_a_media_key_at_a_told_end_pocket_casts_cant_be_asked_about_pushes_nothing(self):
+        self.dragged_back_after_a_told_end(100)
+        before = len(self.pushes_of(EP_1))
+        self.fake["fail"] = {"/user/episode": 1000}
+        self.mpv_set_pause(False)
+        run_bridge("player", "--no-autoplay")
+        self.assertEqual(self.pushes_of(EP_1)[before:], [])
+        self.assertEqual(bridge.load_playback()["handledEnd"], EP_1)  # still ended here till it can ask
+
+    def test_a_drag_back_from_a_told_end_still_played_plays_it_again_from_there(self):
+        # Nobody else went back into it: playing it again from the drag is
+        # this machine's place, pushed in progress.
+        self.dragged_back_after_a_told_end(100)
+        run_bridge("toggle")
+        run_bridge("player", "--no-autoplay")
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_IN_PROGRESS)
+        self.assertGreaterEqual(self.fake["progress"][EP_1], 98)
+
+    # --- Strict review 18 (F3, F4, L3).
+    def test_a_resume_check_whose_seek_never_happened_never_takes_the_place(self):
+        # Fault injection: mpv's `path` read fails inside the poll's check (a
+        # stall in its IPC): it took Pocket Casts' place as known though mpv
+        # never went there, and the next push sent mpv's old place over it.
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.position() > 14, timeout=25)
+        run_bridge("pause")
+        self.other_device(EP_1, 2)  # the phone went back near the start
+        self.mpv_set_pause(False)   # a media key
+        real_get = bridge.Mpv.get
+        calls = {"n": 0}
+
+        def flaky(player, name, default=None):
+            if name == "path":
+                calls["n"] += 1
+                if calls["n"] == 2:  # the check's own read (the snapshot's is the first)
+                    return default
+            return real_get(player, name, default)
+        with mock.patch.object(bridge.Mpv, "get", flaky):
+            run_bridge("player")
+        self.age_last_push(31)
+        run_bridge("player")
+        self.assertLess(self.fake["progress"][EP_1], 6)
+
+    def test_a_load_from_the_start_whose_push_failed_keeps_the_place_played(self):
+        self.other_device(EP_1, 60)
+        self.login()
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A, "--from-start")["ok"])
+        self.wait_for(lambda: self.position() > 12, timeout=25)
+        run_bridge("pause")
+        self.fake["fail"] = {}
+        self.assertLess(run_bridge("toggle")["data"]["position"], 40)  # Pocket Casts' 60 isn't another write
+
+    def test_a_played_episode_replayed_while_its_push_fails_isnt_finished_elsewhere(self):
+        self.other_device(EP_1, 120, bridge.STATUS_PLAYED)
+        self.login()
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])  # from a list: replayed from 0
+        self.wait_for(lambda: self.position() > 5, timeout=25)
+        run_bridge("pause")
+        self.fake["fail"] = {}
+        view = run_bridge("toggle")["data"]
+        self.assertEqual(view["item"]["uuid"], EP_1)
+        self.assertTrue(view["playing"])
+        self.assertLess(view["position"], 40)
+
+    def test_a_load_just_as_the_sleep_guard_pauses_loads_paused(self):
+        # L3: a Play holding the state lock when the guard paused for a
+        # suspend loaded with pause=no and played behind the lock screen.
+        self.login()
+        bridge.mark_sleeping()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.assertIs(self.mpv_paused(), True)
+
     # --- Strict review 15 (H2, L1): an end that isn't known to have ended here.
     def test_an_unwatched_end_pocket_casts_couldnt_confirm_is_never_played_again_over_the_phone(self):
         # The end's record read failed (the outage that left it unwatched):
@@ -3147,15 +3262,21 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         self.assertEqual(view["item"]["uuid"], EP_1)
         self.assertTrue(48 < view["position"] < 60, view["position"])
 
-    def test_play_at_a_watched_end_pocket_casts_wasnt_told_of_plays_it_again_unasked(self):
-        # Watched to its end here (confirmed by that): with Pocket Casts out
-        # of reach, Play plays it again, as for any end here (play_again).
+    def test_play_at_a_watched_end_pocket_casts_wasnt_told_of_asks_first(self):
+        # Strict review 18 (F2): with Pocket Casts out of reach, Play played
+        # it again from 0 over a phone that had carried on in it (its mark
+        # never landed, so the phone showed it in progress). No answer now:
+        # "try again"; then it follows the phone.
         self.watched_end_unmarked()
+        self.other_device(EP_1, 50)
+        before = len(self.pushes_of(EP_1))
         self.fake["fail"] = {"/user/episode": 1}
-        result = run_bridge("toggle")
-        self.assertTrue(result["ok"], result)
-        self.assertEqual(result["data"]["item"]["uuid"], EP_1)
-        self.assertLess(result["data"]["position"], 5)
+        self.assertFalse(run_bridge("toggle")["ok"])
+        self.assertEqual(self.pushes_of(EP_1)[before:], [])
+        view = run_bridge("toggle")["data"]
+        self.assertEqual(view["item"]["uuid"], EP_1)
+        self.assertTrue(48 < view["position"] < 60, view["position"])
+        self.assertNotIn(0, [b["position"] for b in self.pushes_of(EP_1)[before:]])
 
     def test_play_at_an_end_pocket_casts_wasnt_told_of_follows_the_phone(self):
         # Pressed before any retry: Play asks first, and follows the phone
@@ -6802,6 +6923,10 @@ class FfmpegSelfCheckUse(TempHome):
         # A check that never finished, after ten minutes: not trusted.
         bridge.save_state(bridge.WATCH_CHECK, {"ffmpeg": "mpv 1 / n99", "ok": None, "at": int(time.time()) - 700})
         self.assertTrue(bridge.stream_broke(dict(snap, **{"ffmpeg-version": "n99"}), {}))
+        # Nor one under way (strict review 18, L1: a check that crashed left
+        # silence trusted for ten minutes, right after an update).
+        bridge.save_state(bridge.WATCH_CHECK, {"ffmpeg": "mpv 1 / n99", "ok": None, "at": int(time.time()) - 300})
+        self.assertFalse(bridge.ffmpeg_lines_trusted("mpv 1 / n99"))
 
     def test_a_verdict_file_that_cant_be_trusted_means_judging_by_length(self):
         # Strict review 13 (R3): a watchcheck.json that isn't safe to read (a
