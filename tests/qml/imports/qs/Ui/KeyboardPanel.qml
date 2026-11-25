@@ -9,6 +9,10 @@ Item {
   property var owner: null
   property var bar: null
   property bool open: false
+  // As the real one: shown while open and while its card fades out after a
+  // close (a test sets `fading`).
+  property bool fading: false
+  visible: open || fading
   property Item focusTarget: null
   property int contentWidth: 280
   property int contentHeight: 200

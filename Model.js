@@ -217,7 +217,6 @@ function volumeGlyph(volume) {
 // keyboard cursor can walk it: `header` rows are skipped by the cursor,
 // `item` rows activate, and `note` rows are inert copy.
 
-function headerRow(label) { return { kind: "header", label: label } }
 function noteRow(text, dim) { return { kind: "note", text: text, dim: dim !== false } }
 function itemRow(item, extra) {
   var row = { kind: "item", item: item, key: item.uuid || item.name }

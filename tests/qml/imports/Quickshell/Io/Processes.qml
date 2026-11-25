@@ -9,7 +9,7 @@ QtObject {
   function add(p) { started = started.concat([p]) }
   // The running processes whose command contains `word`, newest last.
   function running(word) {
-    return started.filter(function(p) { return p.running && p.command.join(" ").indexOf(word) >= 0 })
+    return started.filter(function(p) { return p.alive && p.command.join(" ").indexOf(word) >= 0 })
   }
   function clear() { started = [] }
 }

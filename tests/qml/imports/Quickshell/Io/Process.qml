@@ -1,10 +1,14 @@
 import QtQuick
 // Stand-in for Quickshell.Io's Process: runs nothing; a test answers it with
-// finish() (tests/qml only).
+// finish() (tests/qml only). As Quickshell's, an exit leaves `running`'s
+// binding in place (Quickshell writes it from C++; a QML write here would
+// delete the binding, so a restart through it could never be tested):
+// `alive` says whether this stand-in is running now.
 QtObject {
   id: p
   property var command: []
   property bool running: false
+  property bool alive: false
   property var environment: ({})
   property bool clearEnvironment: false
   property bool stdinEnabled: false
@@ -16,7 +20,9 @@ QtObject {
   function write(text) { written += text }
   // A user of Process that declares its own `started` property hides the
   // signal from this file (Service's interpreter probe does): skip it then.
-  onRunningChanged: if (running) {
+  onRunningChanged: {
+    alive = running
+    if (!running) return
     Processes.add(p)
     if (Processes.failStarts) { running = false; return }
     if (typeof started === "function") started()
@@ -24,7 +30,7 @@ QtObject {
   function finish(code, out, err) {
     if (stdout) stdout.text = out || ""
     if (stderr) stderr.text = err || ""
-    running = false
+    alive = false
     exited(code, 0)
   }
 }

@@ -83,7 +83,9 @@ by Nine Point Labs (MIT). What's new compared to the original:
 
 - **Pauses before your computer sleeps.** Close the lid and Legato pauses
   the episode and saves your place in Pocket Casts first, so nothing plays
-  on behind the lock screen and your phone knows where you are.
+  on behind the lock screen and your phone knows where you are. A Play
+  pressed just as the lid closes loads the episode paused once you're
+  back: press Play again (Legato asks Pocket Casts afresh).
 - **Listening stats,** for fun: how long you've listened on this computer,
   and how much time speed, Trim Silence, skipping forward and the shows'
   intro and outro skips saved you (the chart button in the panel's header,
@@ -153,9 +155,10 @@ Hyprland stay until it reloads its config: `hyprctl reload`, or log out.
   of an episode all arrive as events from mpv. Paused, one timer waits for
   the idle unload (15 minutes by default) and starts one process when it
   fires.
-- **While playing,** one short Python process every 30 seconds sends your
+- **While playing,** one short Python process every 32 seconds sends your
   position to Pocket Casts (about 0.1 to 0.2 s of CPU each, depending on
-  the machine); with the Stats page open, one more after each, to keep its
+  the machine), and with the video window showing, asks Hyprland where the
+  window is; with the Stats page open, one more after each, to keep its
   numbers current.
 - **While an episode is loaded,** helpers wait with no timer (about 75 MB
   of memory between them, two of them Python): the sleep guard (for the pause before sleep, with
@@ -194,6 +197,11 @@ devices.
   Episodes served from this computer itself never play.
 - **A cover isn't a video:** some feeds pack the episode's cover into the
   file as a video stream. Legato treats those episodes as audio.
+- **A place whose send failed wins for an hour:** with the network down
+  here, the place this computer couldn't send is kept over Pocket Casts'
+  older one at the next Play, within the hour; if you went back on your
+  phone meanwhile, on purpose, that's undone. (Anything that played while
+  Legato wasn't watching is never kept.)
 - **A host that can't start part way** (it serves no byte ranges): a
   resume plays from the top ("Server can't resume: playing from top"), and
   Legato sends no position until playback passes where you were, so your
@@ -211,7 +219,7 @@ devices.
   marks the episode played; a host that reconnects without one can also
   take a real end for a break. With no length either, every stop counts as
   the end, as before 1.1. An HLS episode (a playlist of segments) is
-  judged by its exact length the same way.
+  judged by its playlist's exact length: a stop within 10 seconds of it.
 - **An end that proves nothing isn't marked played:** an episode that ends
   the moment it loads (Pocket Casts has you past the end of this copy of
   the file: ad-stitched copies differ), or before half the length Pocket
@@ -240,7 +248,8 @@ devices.
   first tab changed on one screen reaches the other at its next status
   read (autoplay, the idle unload's "never" and pause before sleep follow
   settings.json at once on both). Omarchy's own bar is fine on any number
-  of screens.
+  of screens (bind the panel through Omarchy's `panel` route, below, so a
+  key opens it on the screen you're on).
 - **Taking the chip off the bar, or disabling Legato, mid-episode** leaves
   the episode playing (mpv runs on its own), not synced and not paused
   before sleep, until you stop it or Legato is back; then the next Play
@@ -254,9 +263,10 @@ devices.
   moment; a play cut short starts over at the next Play. Rarely, a sign-in
   renewal cut in its last instant means signing in again.
 - **On a host without byte ranges,** when Pocket Casts has you earlier
-  than this machine (you went back on the phone) and the episode is bigger
-  than mpv's buffer, Legato can't seek back there; it plays on from where
-  it was.
+  than this machine (you went back on the phone) by more than mpv still
+  holds, mpv can't seek back there: Legato loads the episode again, which
+  on such a host plays from the top, sending nothing until playback gets
+  back to your place.
 
 ## Built on
 
@@ -297,7 +307,11 @@ it) hides the video and the episode plays on.
 **At the end of an episode** with nothing to follow (autoplay off, or Up
 Next empty), Legato stops there and Pocket Casts has it as played. Play
 then starts what you've queued since (with autoplay on), or the episode
-again.
+again. An episode that ended while Legato wasn't watching (its chip off,
+the shell down, a sleep it missed) starts nothing by itself: Legato asks
+Pocket Casts first, and if your phone moved in that episode meanwhile, it
+isn't marked played; the player closes, and Play picks up from your
+phone's place.
 
 **The episode in the player** only offers play or pause in its right-click
 menu, and can't be removed from Up Next or marked from a list: Next (`n`)
@@ -340,26 +354,30 @@ In the video window: Space, `f` `b` and ← → (skip), `n`, `s`, `p`, `t`,
 
 ### Your own keybindings
 
-The service answers `omarchy-shell` under the `legato` target, and the panel
-under the plugin's id, while Legato's chip is on a bar (without it, Legato
-is off):
+While Legato's chip is on a bar (without it, Legato is off), the service
+answers `omarchy-shell` under the `legato` target, Omarchy opens and closes
+the panel on the screen you're on, and the chip answers under the plugin's
+id:
 
 ```bash
 omarchy-shell legato playPause
-omarchy-shell legato status                        # JSON: playing, title, show, position, speed
-omarchy-shell io.github.cwilliams5.legato toggle   # open or close the panel
-omarchy-shell io.github.cwilliams5.legato about    # the panel's About page
-omarchy-shell io.github.cwilliams5.legato stats    # the listening stats
+omarchy-shell legato status                              # JSON: playing, title, show, position, speed
+omarchy-shell shell toggle io.github.cwilliams5.legato   # open or close the panel, on this screen
+omarchy-shell io.github.cwilliams5.legato about          # the panel's About page
+omarchy-shell io.github.cwilliams5.legato stats          # the listening stats
 ```
 
 The `legato` commands are `playPause`, `next`, `skipBack`, `skipForward`,
 `stop`, `volumeUp`, `volumeDown`, `cycleSpeed`, `cycleTrim`, `toggleBoost`,
-`toggleVideo`, `refresh` and `status`. For example, in
+`toggleVideo`, `refresh` and `status`. Under the plugin's id: `open` (or
+`show`), `close` (or `hide`), `toggle`, `isOpen`, `about`, `stats`, `refresh`, `playPause`,
+`next`, `skipBack` and `skipForward`; with the chip on two screens, these
+go to the one that loaded first. For example, in
 `~/.config/hypr/bindings.lua`:
 
 ```lua
 o.bind("SUPER + ALT + P", "Legato play/pause", { ipc = "legato.playPause" })
-o.bind("SUPER + ALT + O", "Legato panel", "omarchy-shell io.github.cwilliams5.legato toggle")
+o.bind("SUPER + ALT + O", "Legato panel", { panel = "io.github.cwilliams5.legato" })
 ```
 
 ## Settings
@@ -414,7 +432,7 @@ which stay off; a key that isn't a setting is kept and named.
   object.
 - **mpv** runs detached, so playback survives a shell restart. The service
   listens on mpv's control socket for events (pause, seek, end of file),
-  and polls only while playing, once every 30 seconds, to send your
+  and polls only while playing, once every 32 seconds, to send your
   position.
 - **Every resume asks Pocket Casts first** where you are, and its answer
   wins. A position is sent only if it played here since Pocket Casts last
@@ -422,7 +440,9 @@ which stay off; a key that isn't a setting is kept and named.
   key), a sleep Legato missed, or a long stall, and a paused one only if it
   moved since the last send under 90 seconds ago. Anything older waits for
   the next resume to ask, so a pause, stop or skip here doesn't rewind your
-  phone.
+  phone. The one place of this computer's kept over Pocket Casts' answer is
+  one whose send failed (the network was down), further on, within the
+  hour; never what played while Legato wasn't watching.
 - **Before sleep,** a small guard holds a logind sleep delay while an
   episode is loaded. When the computer is about to sleep it pauses the
   episode, sends your position (within 4 seconds) and lets go.

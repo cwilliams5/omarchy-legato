@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell.Io
+import qs.Commons
 import "../.." as Legato
 
 // The real BarWidget.qml (the bar chip) with its real Panel.qml and the
@@ -34,7 +35,7 @@ Item {
   function running() {
     var out = []
     Processes.started.forEach(function(p) {
-      try { if (p.running && out.indexOf(p) < 0) out.push(p) } catch (e) {}
+      try { if (p.alive && out.indexOf(p) < 0) out.push(p) } catch (e) {}
     })
     return out
   }
@@ -100,7 +101,9 @@ Item {
       var steps = [top.handOver, top.awake, top.label, top.clicks, top.wheel, top.afterWheel,
                    top.sleepGuardSwitch, top.guardBackOff, top.socketRetries, top.staleStatus,
                    top.noticesOnce, top.quietReloads, top.chipShapes, top.idleWheel, top.idleWheelCheck, top.marquee,
-                   top.touchpad, top.touchpadCheck, top.liveStatus, top.liveStatusCheck, top.guardBack]
+                   top.touchpad, top.touchpadCheck, top.liveStatus, top.liveStatusCheck, top.guardBack,
+                   top.guardRestart, top.guardRestartCheck, top.mpvEvents, top.pauseEvent, top.pauseEventPoll, top.seekEventPoll,
+                   top.toggles, top.idleUnload]
       if (top.step >= steps.length) { stop(); Qt.exit(top.failures); return }
       if (top.waits === 0) top.stepStarted = Date.now()
       // A step returns false to wait for a debounced call (up to 2 s).
@@ -279,6 +282,9 @@ Item {
     chip.open()
     check("but not with the panel open over it", label && label.scrolling === false, label && label.scrolling)
     chip.close()
+    Style.reduceMotion = true
+    check("nor with Omarchy's animations off", label && label.scrolling === false, label && label.scrolling)
+    Style.reduceMotion = false
     var paused = JSON.parse(JSON.stringify(long))
     paused.playing = false
     shared.applyPlayer(paused)
@@ -315,6 +321,12 @@ Item {
     var ipc = find(shared, function(i) { return i.objectName === "ipcLoader" }).item
     var position = JSON.parse(ipc.status()).position
     check("the IPC status reports the live position", position >= 101, position)
+    var paused = JSON.parse(JSON.stringify(top.playing))
+    paused.playing = false
+    shared.applyPlayer(paused)
+    check("and paused, it says so", JSON.parse(ipc.status()).playing === false, ipc.status())
+    shared.applyPlayer(top.playing)
+    check("playing, it says that", JSON.parse(ipc.status()).playing === true, ipc.status())
   }
 
   // A sleep guard that gave up (five failures) tries again for the next
@@ -324,5 +336,91 @@ Item {
     shared.applyPlayer({ active: false, playing: false, item: null })
     shared.applyPlayer(top.playing)  // the next episode loaded
     check("a new episode gets a sleep guard again", shared._guardFailures === 0, shared._guardFailures)
+  }
+
+  // The guard exits once it has handled a sleep; a fresh one starts a
+  // moment later, or the next lid close would pause nothing.
+  function guards() { return running().filter(function(p) { var a = argsOf(p); return a && a.indexOf("sleepguard") >= 0 }) }
+  function guardRestart() {
+    shared.guardRetryBaseMs = 100
+    if (guards().length === 0) return false
+    answerAll(top.answers)
+    guards().forEach(function(p) { p.finish(0, JSON.stringify({ ok: true, data: { sleeping: true, paused: true } }), "") })
+    check("(the guard has exited)", guards().length === 0, guards().length)
+  }
+  function guardRestartCheck() {
+    if (guards().length === 0) return false
+    check("after a sleep, a fresh guard starts", guards().length === 1 && shared._guardFailures === 0,
+          guards().length + " " + shared._guardFailures)
+    shared.guardRetryBaseMs = 3000
+  }
+
+  // mpv's events: the properties observed, and a change in one (a media
+  // key's pause or resume, which no timer sees while paused) brings a poll;
+  // a seek brings one that says so.
+  property var eventSocket: null
+  function mpvEvents() {
+    answerAll(top.answers)
+    eventSocket = find(shared, function(i) { return i.objectName === "playerEvents" })
+    eventSocket.connected = false
+    eventSocket.sent = []
+    shared._eventAttempts = 0
+    shared.syncPlayerEvents()
+    var observed = eventSocket.sent.map(function(t) { try { return JSON.parse(t).command[2] } catch (e) { return "" } })
+    check("mpv's pause, end, file, idle state and video are observed",
+          ["pause", "eof-reached", "path", "idle-active", "vid"].every(function(n) { return observed.indexOf(n) >= 0 }),
+          observed.join(" "))
+  }
+  // (The reconnection above brings a poll of its own: answered first.)
+  function pauseEvent() {
+    if (Date.now() - top.stepStarted < 800) return false
+    answerAll(top.answers)
+    check("(no poll left waiting)", calls("player").length === 0, calls("player").length)
+    eventSocket.parser.read(JSON.stringify({ event: "property-change", id: 1, name: "pause", data: false }))
+  }
+  function pauseEventPoll() {
+    if (Date.now() - top.stepStarted < 800) return false  // the settle delay (600 ms)
+    check("a pause change from mpv brings a poll", calls("player").length === 1,
+          running().map(function(p) { return (argsOf(p) || []).join(" ") }).join("; "))
+    answerAll(top.answers)
+    eventSocket.parser.read(JSON.stringify({ event: "playback-restart" }))
+  }
+  // A click on the chip opens the panel and closes it again; so does the
+  // plugin id's IPC toggle, and isOpen says which.
+  function toggles() {
+    answerAll(top.answers)
+    var ipc = find(chip, function(i) { return typeof i.isOpen === "function" && typeof i.toggle === "function" })
+    button.pressed(Qt.LeftButton)
+    check("a click opens the panel", chip.opened === true && ipc.isOpen() === "true", chip.opened + " " + ipc.isOpen())
+    button.pressed(Qt.LeftButton)
+    check("a second click closes it", chip.opened === false && ipc.isOpen() === "false", chip.opened + " " + ipc.isOpen())
+    ipc.toggle()
+    check("the IPC toggle opens it", chip.opened === true, chip.opened)
+    var tick = find(shared, function(i) { return i.objectName === "tickTimer" })
+    var buffering = JSON.parse(JSON.stringify(top.playing))
+    buffering.buffering = true
+    shared.applyPlayer(buffering)
+    check("the slider doesn't tick while buffering", tick.running === false, tick.running)
+    shared.applyPlayer(top.playing)
+    check("(and ticks once it plays)", tick.running === true, tick.running)
+    ipc.toggle()
+    check("and closes it", chip.opened === false, chip.opened)
+    answerAll(top.answers)
+  }
+
+  // The idle unload leaves a player a media key resumed since (--if-paused).
+  function idleUnload() {
+    answerAll(top.answers)
+    shared.unloadPlayer()
+    check("the idle unload stops only a paused player", calls("stop --if-paused").length === 1,
+          running().map(function(p) { return (argsOf(p) || []).join(" ") }).join("; "))
+    answerAll(top.answers)
+  }
+
+  function seekEventPoll() {
+    if (Date.now() - top.stepStarted < 800) return false
+    check("a seek from mpv brings a poll that says so", calls("player --seeked").length === 1,
+          running().map(function(p) { return (argsOf(p) || []).join(" ") }).join("; "))
+    answerAll(top.answers)
   }
 }

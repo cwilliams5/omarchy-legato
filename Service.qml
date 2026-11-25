@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import qs.Commons
 import "Model.js" as Model
 
 // The plugin's data layer, instantiated once per shell as its `service`
@@ -603,7 +604,8 @@ Item {
     // expired): said once per run of failures, or nobody would know.
     if (view.syncFailed === true) reportError("Pocket Casts not reached: not synced")
     // Every message here fits the panel's status line (and a notification's
-    // single line; about 38 characters); the README has the detail. The stream broke off part way (the network or the episode's
+    // single line; about 38 characters); the README has the detail.
+    // The stream broke off part way (the network or the episode's
     // server went): not finished, the player is closed, play loads it again.
     // If the reload got nothing at all, it may be the end, misjudged: it asks
     // you to mark it played (Up Next's right-click; the bridge never does
@@ -763,7 +765,8 @@ Item {
   // next loaded. Never a loop of processes and polls while paused.
   property int _guardFailures: 0
   readonly property int guardMaxFailures: 5
-  readonly property int guardRetryMs: 3000 * Math.pow(2, _guardFailures)
+  property int guardRetryBaseMs: 3000
+  readonly property int guardRetryMs: guardRetryBaseMs * Math.pow(2, _guardFailures)
   onWantSleepGuardChanged: _guardFailures = 0
 
   Process {
@@ -775,7 +778,11 @@ Item {
     stdout: StdioCollector { id: sleepGuardOut; waitForEnd: true }
     onExited: {
       // It exits once it has handled a sleep: read the player again, and
-      // start a fresh guard a moment later if still wanted.
+      // start a fresh guard a moment later if still wanted. The restart
+      // timer first: Quickshell keeps `running`'s binding through an exit,
+      // and a change to the count below re-evaluates it, which would start
+      // a guard at once (and stop it again a moment later).
+      sleepGuardRestart.restart()
       var result = null
       try { result = JSON.parse(String(sleepGuardOut.text || "")) } catch (e) { result = null }
       if (result && result.ok === true && result.data && result.data.sleeping === true) {
@@ -786,7 +793,6 @@ Item {
         if (root._guardFailures === root.guardMaxFailures)
           root.reportError("Couldn't set up pause-before-sleep" + (result && result.error ? ": " + result.error : ""))
       }
-      sleepGuardRestart.restart()
     }
   }
 
@@ -1271,8 +1277,11 @@ Item {
 
   // ----------------------------------------------------------------- IPC --
 
-  // Only the copy in use registers the target: Quickshell keeps even a
-  // disabled IpcHandler registered, and the first of a target wins.
+  // Only the copy in use has the target (of two handlers for one target the
+  // first wins; a Loader leaves no dormant copy to win). Omarchy's ShellIpc:
+  // an IpcHandler the shell also answers over its own socket, so
+  // `omarchy-shell legato ...` and an `{ ipc = "legato..." }` binding start
+  // no qs ipc client.
   Loader {
     id: ipcLoader
     objectName: "ipcLoader"
@@ -1281,7 +1290,7 @@ Item {
   }
   Component {
     id: legatoIpc
-    IpcHandler {
+    ShellIpc {
       target: "legato"
 
       function playPause(): string { return root.playPause() ? "ok" : "unhandled" }

@@ -311,7 +311,7 @@ test("up next leaves out the playing episode", () => {
 })
 
 test("the cursor only lands on items", () => {
-  const rows = [{ kind: "note" }, { kind: "item" }, { kind: "header" }, { kind: "item" }]
+  const rows = [{ kind: "note" }, { kind: "item" }, { kind: "note" }, { kind: "item" }]
   assert.equal(Model.firstItemIndex(rows, 0, 1), 1)
   assert.equal(Model.firstItemIndex(rows, 3, -1), 3)
   assert.equal(Model.firstItemIndex([], 0, 1), -1)
@@ -522,11 +522,13 @@ test("settings come from the service (settings.json), never the widget's bar ent
   for (const key of ["showTitle", "scrollTitle", "maxLabelWidth"]) assert.match(widget, new RegExp("service\\.setting\\(\"" + key + "\""))
 })
 
-test("the progress bar lets only up/down wheel events reach the slider", () => {
-  // Omarchy's PanelSlider reads a sideways swipe (no vertical delta) as a
-  // step back; the stand-in slider has no wheel, so this is checked here.
-  const panel = fs.readFileSync(path.join(ROOT, "Panel.qml"), "utf8")
-  assert.match(panel, /acceptedButtons: Qt\.NoButton\s*\n\s*onWheel: function\(wheel\) \{ wheel\.accepted = wheel\.angleDelta\.y === 0 \}/)
+test("both IPC targets are Omarchy's ShellIpc (answered over the shell's socket, no qs ipc client per key)", () => {
+  // (The sliders' wheel is tested with real wheel events in tests/qml/panel.qml.)
+  const service = fs.readFileSync(path.join(ROOT, "Service.qml"), "utf8")
+  const widget = fs.readFileSync(path.join(ROOT, "BarWidget.qml"), "utf8")
+  assert.match(service, /ShellIpc \{\s*\n\s*target: "legato"/)
+  assert.match(widget, /ShellIpc \{\s*\n\s*target: "io\.github\.cwilliams5\.legato"/)
+  assert.doesNotMatch(service + widget, /\bIpcHandler \{/)
 })
 
 test("no keepLoaded: an update reloads the service along with the panel", () => {
@@ -555,4 +557,23 @@ test("wheel steps add up a touchpad's small deltas, as Omarchy's Util.wheelSteps
 
 test("the bridge keeps WAYLAND_DISPLAY (the video window can't draw without it)", () => {
   assert.ok(Model.bridgeEnvironmentNames.includes("WAYLAND_DISPLAY"))
+})
+
+test("transitions follow Omarchy's animations switch (Style.duration), and the marquee stops with it", () => {
+  for (const file of ["BarWidget.qml", "Panel.qml", "SettingsView.qml", "StatsView.qml", "AboutView.qml", "SignInField.qml"]) {
+    const qml = fs.readFileSync(path.join(ROOT, file), "utf8")
+    assert.doesNotMatch(qml, /\bduration:\s*\d/, file)
+  }
+  const widget = fs.readFileSync(path.join(ROOT, "BarWidget.qml"), "utf8")
+  assert.match(widget, /readonly property bool scrolling: [^\n]*!Style\.reduceMotion/)
+})
+
+test("the README binds the panel through Omarchy's panel route (the focused screen's), and lists the chip's IPC", () => {
+  const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8")
+  assert.match(readme, /\{ panel = "io\.github\.cwilliams5\.legato" \}/)
+  assert.doesNotMatch(readme, /"Legato panel", "omarchy-shell io\.github/)
+  const widget = fs.readFileSync(path.join(ROOT, "BarWidget.qml"), "utf8")
+  let target = widget.slice(widget.indexOf('target: "io.github.cwilliams5.legato"'))
+  target = target.slice(0, target.indexOf("\n  }\n"))
+  for (const [, name] of target.matchAll(/function (\w+)\(\)/g)) assert.match(readme, new RegExp("`" + name + "`"), name)
 })

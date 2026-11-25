@@ -39,7 +39,7 @@ Item {
   function named(item, name) { return find(item, function(i) { return i.objectName === name }) }
 
   function running() {
-    return Processes.started.filter(function(p) { try { return p.running } catch (e) { return false } })
+    return Processes.started.filter(function(p) { try { return p.alive } catch (e) { return false } })
   }
   // A bridge call's arguments after the bridge's path, or null for another process.
   function argsOf(p) {
@@ -370,6 +370,14 @@ Item {
   }
 
   function claimingPanelGone() {
+    // A player still loaded as its last panel goes: only dormancy can let go
+    // of mpv's event socket.
+    shellService.mpvSocket = "/run/test/mpv.sock"
+    shellService.applyPlayer({ active: true, playing: false, position: 5, duration: 100, item: top.episodeItem, running: true })
+    shellService._eventAttempts = 0
+    shellService.syncPlayerEvents()
+    check("(its event socket is connected)", named(shellService, "playerEvents").connected === true,
+          named(shellService, "playerEvents").connected)
     builtinPanel.destroy()
   }
   function dormantAgain() {

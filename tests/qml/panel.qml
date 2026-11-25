@@ -1,4 +1,5 @@
 import QtQuick
+import QtTest
 import Quickshell.Io
 import "../.." as Legato
 
@@ -16,7 +17,7 @@ Item {
   // The texts of the running `notify` calls (desktop notifications).
   function notices() {
     return Processes.started.filter(function(p) {
-      try { return p.running && p.command.indexOf("notify") >= 0 } catch (e) { return false }
+      try { return p.alive && p.command.indexOf("notify") >= 0 } catch (e) { return false }
     }).map(function(p) { return p.command[p.command.length - 1] })
   }
 
@@ -43,7 +44,7 @@ Item {
     var want = String(words).trim().split(" ")
     return Processes.started.filter(function(p) {
       try {
-        if (!p.running) return false
+        if (!p.alive) return false
         var args = p.command
         for (var i = 0; i + want.length <= args.length; i++) {
           var all = true
@@ -60,7 +61,7 @@ Item {
     var want = String(words).trim()
     return Processes.started.filter(function(p) {
       try {
-        if (!p.running) return false
+        if (!p.alive) return false
         var at = -1
         for (var i = 0; i < p.command.length; i++) if (String(p.command[i]).indexOf("legato-bridge") >= 0) at = i
         return p.command.slice(at + 1).join(" ") === want
@@ -92,7 +93,7 @@ Item {
     // and every key check would pass for that reason alone.) Each call by
     // its own command: an answer can start another (a list's reload).
     for (var round = 0; round < 5; round++) {
-      var running = Processes.started.filter(function(p) { try { return p.running } catch (e) { return false } })
+      var running = Processes.started.filter(function(p) { try { return p.alive } catch (e) { return false } })
       if (running.length === 0) return
       running.forEach(function(p) {
         var at = -1
@@ -114,7 +115,8 @@ Item {
   Legato.Panel { id: panel; settings: ({}) }
 
   // A second panel sharing the first one's service (as a second screen's).
-  QtObject { id: sharingBar; property color foreground: "#ffffff"; property color urgent: "#ff0000"; property color barForeground: "#ffffff"; property string fontFamily: "monospace"; property bool vertical: false; property var shell: ({ serviceFor: function(id) { return panel.service } }) }
+  QtObject { id: sharingBar; property var switched: null; function switchPanelFrom(id, direction) { switched = direction; return true }
+             property color foreground: "#ffffff"; property color urgent: "#ff0000"; property color barForeground: "#ffffff"; property string fontFamily: "monospace"; property bool vertical: false; property var shell: ({ serviceFor: function(id) { return panel.service } }) }
   Component { id: panelMaker; Legato.Panel { bar: sharingBar; settings: ({}) } }
   // As BarWidget does it: the panel loads first, the bar is handed over just after.
   Component { id: barlessMaker; Legato.Panel { settings: ({}) } }
@@ -124,6 +126,8 @@ Item {
                                   finished: 4, since: 1789300000, counting: true })
 
   Timer { interval: 50; running: true; onTriggered: top.run() }
+  // Real wheel events, offscreen (QtTest's event helpers; no test functions run).
+  TestCase { id: events; name: "events"; when: false }
 
   property bool destroyed: false
   Timer {
@@ -386,6 +390,25 @@ Item {
           panel.showStats + " " + service.statsPagesOpen + " " + service.pagesOpen)
     service.applyPlayer({ active: true, playing: true, position: 11, duration: 100, item: null })
     check("no re-read with the page closed", exactly("stats").length === 0, exactly("stats").length)
+
+    // A touchpad's swipe over the sliders: many small deltas (a notch is
+    // 120) add up to one step, not one each (Omarchy's slider steps per
+    // event: 80 s of seeking, pushed at once). Sideways does nothing.
+    var progress = named("progressSlider"), volume = named("volumeSlider")
+    // (The hero's Columns lay out on the next frame: a stale one hides the
+    // sliders from the wheel's hit test.)
+    for (var lay = progress; lay; lay = lay.parent) if (typeof lay.forceLayout === "function") lay.forceLayout()
+    for (lay = volume; lay; lay = lay.parent) if (typeof lay.forceLayout === "function") lay.forceLayout()
+    for (var w = 0; w < 4; w++) events.mouseWheel(progress, 20, 5, 0, 30)
+    check("four small deltas over the progress bar: one 10 s step", service._seekTarget === 21 && service.localPosition === 21,
+          service._seekTarget + " " + service.localPosition)
+    events.mouseWheel(progress, 20, 5, 120, 0)
+    check("a sideways swipe over it: nothing", service._seekTarget === 21, service._seekTarget)
+    service.cancelSeek()
+    var loudness = service.volume
+    for (w = 0; w < 4; w++) events.mouseWheel(volume, 20, 5, 0, -30)
+    check("four small deltas over the volume: one 5 step", service.volume === loudness - 5, loudness + " to " + service.volume)
+    settle()
     keys.textKey("a", 0)
     settle()
     panel.close()
@@ -431,6 +454,37 @@ Item {
           JSON.stringify(notices()))
     settle()
 
+    // Closing. The rows stay while the card fades out (emptied, it snapped
+    // shorter as it faded), then go; a show page and a typed password don't
+    // outlive it; Esc on the main view closes it.
+    panel.open()
+    settle()
+    var shown = named("rowsRepeater").count
+    card.fading = true
+    panel.close()
+    check("its rows stay while the card fades out", shown > 0 && named("rowsRepeater").count === shown,
+          shown + " then " + named("rowsRepeater").count)
+    card.fading = false
+    check("and go once it's gone", named("rowsRepeater").count === 0, named("rowsRepeater").count)
+    panel.open()
+    settle()
+    service.openDetail({ type: "podcast", uuid: "bbbbbbbb-0000-0000-0000-000000000001", name: "A show" })
+    named("passwordField").text = "hunter2"
+    panel.close()
+    check("closing ends a show page", service.detail === null, JSON.stringify(service.detail))
+    check("and forgets a typed password", named("passwordField").text === "", named("passwordField").text)
+    settle()
+    panel.open()
+    settle()
+    keys.closeRequested()
+    check("Esc on the main view closes the panel", panel.opened === false, panel.opened)
+    service.absorbAuthError({ ok: false, code: "reauth", error: "Sign in again" })
+    check("an expired session asks to sign in again", service.needsReauth === true && service.authenticated === false,
+          service.needsReauth + " " + service.authenticated)
+    service.authenticated = true
+    service.needsReauth = false
+    settle()
+
     // A second panel on the same service (another screen) counts its page,
     // and takes it off when it goes away while showing it.
     var other = panelMaker.createObject(top)
@@ -444,6 +498,8 @@ Item {
     check("and makes no idle copy of it (it would take the legato IPC target)",
           otherLocal && otherLocal.active === false && otherLocal.item === null, otherLocal && otherLocal.item)
     other.open()
+    find(other, function(i) { return typeof i.textKey === "function" && "blocked" in i }).tabRequested(1)
+    check("Tab moves on to the bar's next panel", sharingBar.switched === 1, sharingBar.switched)
     other.setStats(true)
     check("its Stats page is counted", service.statsPagesOpen === 1 && service.pagesOpen === 1,
           service.statsPagesOpen + " " + service.pagesOpen)

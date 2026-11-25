@@ -104,7 +104,7 @@ BarWidget {
     }
   }
 
-  IpcHandler {
+  ShellIpc {
     target: "io.github.cwilliams5.legato"
 
     function open(): void { root.open() }
@@ -207,7 +207,7 @@ BarWidget {
           maskSource: artMask
           // Paused or idle: fade the cover the way the glyph dims.
           opacity: root.isPlaying ? 1.0 : (root.playerActive ? 0.72 : 0.5)
-          Behavior on opacity { NumberAnimation { duration: 160 } }
+          Behavior on opacity { NumberAnimation { duration: Style.duration(160) } }
         }
       }
 
@@ -231,9 +231,10 @@ BarWidget {
           elide: root.scrollTitle ? Text.ElideNone : Text.ElideRight
 
           readonly property bool needsScroll: root.scrollTitle && implicitWidth > scrollClip.width + 1
-          readonly property bool scrolling: needsScroll && root.isPlaying && !root.opened
+          readonly property bool scrolling: needsScroll && root.isPlaying && !root.opened && !Style.reduceMotion
 
-          // Marquee only while playing and the panel is closed; a paused
+          // Marquee only while playing and the panel is closed (and never
+          // with Omarchy's animations off, Style.reduceMotion); a paused
           // chip sits still like the rest of the bar, at the title's start
           // (a stopped animation would leave it wherever it had got to).
           onScrollingChanged: if (!scrolling) x = 0

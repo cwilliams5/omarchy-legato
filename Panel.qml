@@ -16,8 +16,9 @@ import "About.js" as About
 // single keyboard cursor walks whichever is showing. A podcast drills into
 // its episode list.
 //
-// IPC lives on BarWidget.qml; this component only needs moduleName so the
-// shell can inject bar/settings/anchorItem/hostWidget into it.
+// The plugin id's IPC target is the chip's (BarWidget.qml), the `legato`
+// one the service's; this component only needs moduleName so the shell can
+// inject bar/settings/anchorItem/hostWidget into it.
 Panel {
   id: root
   moduleName: "io.github.cwilliams5.legato"
@@ -433,6 +434,25 @@ Panel {
   // A page (About, Stats, Settings) in place of the main view: as tall as
   // the page, up to the panel's cap, and scrolled when it's taller (a
   // problem line on Settings, About with its license, a small screen).
+  // Over a PanelSlider: Omarchy's slider moves a whole step for every wheel
+  // event, so a touchpad swipe (many small deltas) sought a minute or more,
+  // pushed at once, and a sideways one read as a step back. Here the deltas
+  // add up to notches (Model.wheelSteps, as the chip's), up and down only,
+  // and the slider underneath sees none of them.
+  component WheelNotches: MouseArea {
+    signal notch(int steps)
+    property real remainder: 0
+    anchors.fill: parent
+    acceptedButtons: Qt.NoButton
+    onWheel: function(wheel) {
+      wheel.accepted = true  // (a sideways swipe adds nothing up or down)
+      if (!parent.enabled) return
+      var step = Model.wheelSteps(remainder, wheel.angleDelta.y)
+      remainder = step.remainder
+      if (step.steps !== 0) notch(step.steps)
+    }
+  }
+
   component PageFlick: Flickable {
     anchors.fill: parent
     contentWidth: width
@@ -867,6 +887,7 @@ Panel {
 
               SignInField {
                 id: passwordField
+                objectName: "passwordField"
                 width: parent.width - signInButton.width - parent.spacing
                 anchors.verticalCenter: parent.verticalCenter
                 placeholderText: "Password"
@@ -997,6 +1018,7 @@ Panel {
 
                 PanelSlider {
                   id: progressSlider
+                  objectName: "progressSlider"
                   width: parent.width
                   bar: root.bar
                   minimum: 0
@@ -1011,12 +1033,10 @@ Panel {
                   trackHeight: Style.space(4)
                   onReleased: function(v) { if (root.service) root.service.seek(v) }
 
-                  // The slider's own wheel handling reads a sideways swipe
-                  // (no vertical delta) as a step back: let only up/down through.
-                  MouseArea {
-                    anchors.fill: parent
-                    acceptedButtons: Qt.NoButton
-                    onWheel: function(wheel) { wheel.accepted = wheel.angleDelta.y === 0 }
+                  WheelNotches {
+                    onNotch: function(steps) {
+                      if (root.service) root.service.seek(Math.max(0, Math.min(progressSlider.maximum, root.position + steps * progressSlider.step)))
+                    }
                   }
                 }
 
@@ -1122,6 +1142,8 @@ Panel {
                 }
 
                 PanelSlider {
+                  id: volumeSlider
+                  objectName: "volumeSlider"
                   width: Style.space(90)
                   bar: root.bar
                   minimum: 0
@@ -1135,6 +1157,10 @@ Panel {
                   anchors.verticalCenter: parent.verticalCenter
                   onMoved: function(v) { if (root.service) root.service.setVolume(v) }
                   onReleased: function(v) { if (root.service) root.service.setVolume(v) }
+
+                  WheelNotches {
+                    onNotch: function(steps) { if (root.service) root.service.nudgeVolume(steps * volumeSlider.step) }
+                  }
                 }
               }
             }
@@ -1295,9 +1321,10 @@ Panel {
             Repeater {
               id: rowsRepeater
               objectName: "rowsRepeater"
-              // Built while the panel is open: a closed panel (one per
-              // screen) holds no rows and no covers.
-              model: root.opened ? root.rows : []
+              // Built while the panel shows (open, or fading out after a
+              // close: emptied then, the card snapped shorter as it faded): a
+              // closed panel (one per screen) holds no rows and no covers.
+              model: root.opened || panel.visible ? root.rows : []
 
               Item {
                 id: rowItem
@@ -1314,20 +1341,7 @@ Panel {
                 readonly property real progress: isEpisode ? Model.progressFraction(item) : 0
 
                 width: listColumn.width
-                height: modelData.kind === "header" ? headerText.implicitHeight + Style.space(10)
-                      : modelData.kind === "note" ? noteText.implicitHeight + Style.space(12)
-                      : Style.space(46)
-
-                PanelSectionHeader {
-                  id: headerText
-                  visible: rowItem.modelData.kind === "header"
-                  anchors.left: parent.left
-                  anchors.bottom: parent.bottom
-                  anchors.bottomMargin: Style.space(3)
-                  text: rowItem.modelData.kind === "header" ? rowItem.modelData.label : ""
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                }
+                height: modelData.kind === "note" ? noteText.implicitHeight + Style.space(12) : Style.space(46)
 
                 // Inert copy (empty states, loading, errors)
                 Text {

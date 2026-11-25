@@ -1418,14 +1418,15 @@ def up_next_put(item, where):
     return True
 
 
-def up_next_top():
+def up_next_top(skip=()):
     """The episode at the top of Up Next (where Pocket Casts keeps the one
-    playing on whichever device played last), or None when it is empty."""
+    playing on whichever device played last), or None when it is empty;
+    past `skip` (episodes that ended here, whose removal may be pending)."""
     episodes, sync = up_next_raw()
     for e in episodes:
         uuid = str((e or {}).get("uuid") or "").lower()
         item = norm_episode(e, sync=sync.get(uuid))
-        if item:
+        if item and uuid not in skip:
             return item
     return None
 
@@ -2168,12 +2169,124 @@ def clamp_speed(value):
 # what is playing and where to sync it), when its position was last pushed,
 # and which episode's ending was already handled.
 
+def number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+# playback.json's fields and the shape each must have. One of another shape
+# (a hand edit, a damaged file) is dropped as the file is read: a string
+# where a time belongs raised in every command that read it, so Stop
+# couldn't stop and an end was never handled until the file was deleted.
+PLAYBACK_NUMBERS = ("lastSyncAt", "lastSyncPos", "lastSyncSleep", "position", "stallHandled", "pushFailures")
+PLAYBACK_OBJECTS = ("episode", "stream", "listening", "breakStrike", "unsentBreak", "unsentPush")
+ENTRY_NUMBERS = ("at", "tried", "left", "position", "duration")  # pendingFinish's entries, unsent places
+
+
+def clean_playback(state):
+    for key in PLAYBACK_NUMBERS:
+        if key in state and not number(state[key]):
+            del state[key]
+    for key in PLAYBACK_OBJECTS:
+        if key in state and not isinstance(state[key], dict):
+            del state[key]
+    if not isinstance(state.get("handledEnd", ""), str):
+        state["handledEnd"] = ""
+
+    def well_formed(entry):
+        return (isinstance(entry, dict) and isinstance(entry.get("uuid"), str)
+                and all(entry.get(k) is None or number(entry[k]) for k in ENTRY_NUMBERS))
+    for key in ("unsentBreak", "unsentPush"):
+        if key in state and not well_formed(state[key]):
+            del state[key]
+    if "pendingFinish" in state:
+        pending = state["pendingFinish"]
+        state["pendingFinish"] = [p for p in pending if well_formed(p)] if isinstance(pending, list) else []
+    episode = state.get("episode") or {}
+    for key in ("uuid", "url", "podcast"):
+        if key in episode and not isinstance(episode[key], str):
+            del episode[key]
+    for key in ("duration", "playedUpTo"):
+        if key in episode and episode[key] is not None and not number(episode[key]):
+            del episode[key]
+    return state
+
+
 def load_playback():
-    return load_state("playback.json")
+    return clean_playback(load_state("playback.json"))
 
 
 def save_playback(state):
     save_state("playback.json", state)
+
+
+def synced(state, at=None):
+    """The loaded episode's position was just pushed, or confirmed by Pocket
+    Casts: now, by the clock and by the suspend clock as this call found it
+    when it began (`lastSyncSleep`). A call that slept on its way records a
+    sync that later calls see as old (sync_age): its answer, or the place it
+    loaded, is from before the sleep."""
+    state["lastSyncAt"] = time.time() if at is None else at
+    state["lastSyncSleep"] = _SLEEP_BASE
+
+
+def sync_age(state):
+    """Seconds since the loaded episode's position was last pushed or
+    confirmed (rule 2's gap). Any suspend since then, or during the call
+    that recorded it, makes it RECHECK_AFTER at least, however short the
+    sleep: another device may have moved on meanwhile."""
+    age = time.time() - (state.get("lastSyncAt") or 0)
+    base = state.get("lastSyncSleep")
+    if number(base) and abs(sleep_offset() - base) > SLEEP_SLACK:
+        return max(age, float(RECHECK_AFTER))
+    return age
+
+
+def pushed(state, position):
+    """A push of `position` went through."""
+    synced(state)
+    state["lastSyncPos"] = float(position)
+    state.pop("unsentPush", None)
+
+
+def push_failed(state, position):
+    """A push of a place that played here, confirmed, never reached Pocket
+    Casts (the network dropped): the one local place kept over an answer
+    that's behind it, within the hour (check_server's keep_local). Not from
+    a call that slept: its place is from before the suspend."""
+    if not slept_since_start():
+        state["unsentPush"] = {"uuid": (state.get("episode") or {}).get("uuid") or "",
+                               "position": float(position), "at": time.time()}
+
+
+def unsent_push(state):
+    """This episode's unsent push, if any."""
+    unsent = state.get("unsentPush")
+    uuid = (state.get("episode") or {}).get("uuid")
+    if (isinstance(unsent, dict) and uuid and unsent.get("uuid") == uuid
+            and number(unsent.get("position")) and number(unsent.get("at"))):
+        return unsent
+    return None
+
+
+def moved_unasked(state):
+    """The position moved beyond both its last push and any push tried for
+    it since: played on with nobody pushing or asking (a media key while
+    Legato was off), not just a place whose push failed."""
+    unsent = unsent_push(state)
+    last = unsent["position"] if unsent else (state.get("lastSyncPos") or 0)
+    return abs((state.get("position") or 0) - last) >= 1
+
+
+def ended_or_pending(state):
+    """Episodes that ended here: the one handled last, and any whose "played"
+    mark or removal from Up Next Pocket Casts hasn't had yet. Never "what's
+    next" (Next, autoplay, the resume check following Up Next, Play with
+    nothing loaded): a removal still pending leaves one on Up Next, and
+    played from there it starts at 0 and is pushed in progress."""
+    out = {p.get("uuid") for p in state.get("pendingFinish") or []}
+    out.add(state.get("handledEnd") or "")
+    out.discard("")
+    return out
 
 
 def load_prefs():
@@ -2351,7 +2464,12 @@ def load_into_mpv(item, prefs, position, skip_last=0, on_loaded=None):
         title = item.get("name") or "Legato"
         if item.get("show"):
             title = "%s — %s" % (title, item["show"])
-        options = "start=%d,force-media-title=%s,pause=no" % (int(position), mpv_quote(title))
+        # A call that slept on its way (Play pressed as the lid closed) loads
+        # paused: where it starts is from before the sleep, and nothing plays
+        # on behind the lock screen. The sleep guard's pause can land before
+        # the new file does (loadfile replaces it): paused again once loaded.
+        slept = slept_since_start()
+        options = "start=%d,force-media-title=%s,pause=%s" % (int(position), mpv_quote(title), "yes" if slept else "no")
         # From loadfile until the caller has recorded the new episode
         # (`on_loaded`), the call's deadline waits: cut off in between,
         # mpv would play one episode while playback.json named another
@@ -2359,6 +2477,8 @@ def load_into_mpv(item, prefs, position, skip_last=0, on_loaded=None):
         with deadline_held():
             player.command("loadfile", url, "replace", -1, options)
             player.wait_for_load()
+            if not slept and slept_since_start():
+                player.set("pause", True)
             size, duration = player.get("stream-end"), player.get("duration")
             if skip_last and outro_applies(as_int(item.get("duration")), duration, position, skip_last):
                 # The show's skip-outro: mpv ends the episode that much early, and
@@ -2399,12 +2519,16 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
     # atTop: whether this episode is the top of Up Next, i.e. what Pocket
     # Casts considers playing. If the top later changes, another device has
     # moved on to something else (see check_server).
-    state = {"episode": chip_item(item), "lastSyncAt": time.time(), "lastSyncPos": position,
+    state = {"episode": chip_item(item), "lastSyncPos": position,
              "recordSeen": bool(item.get("fromRecord")),
              "position": position, "handledEnd": "", "atTop": bool(at_top),
-             # Episodes that ended here while Pocket Casts couldn't be told.
+             # Episodes that ended here while Pocket Casts couldn't be told;
+             # not this one, played again (a retry would mark it played under
+             # you). Next, autoplay and the resume check never pick one
+             # (ended_or_pending): only a play you chose gets here.
              "pendingFinish": [p for p in previous.get("pendingFinish") or []
-                               if isinstance(p, dict) and p.get("uuid") != item.get("uuid")]}
+                               if p.get("uuid") != item.get("uuid")]}
+    synced(state)
     strike = previous.get("breakStrike")
     if isinstance(strike, dict) and strike.get("uuid") == item.get("uuid"):
         state["breakStrike"] = strike  # a reload of the episode that just broke (stream_stopped)
@@ -2412,7 +2536,9 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
     def recorded(stream):
         # What mpv knew of the file as it loaded (stream_broke): its size goes
         # when the stream fails, and a duration it estimated can shrink with it.
-        state["lastSyncAt"] = time.time()
+        # A call that slept records a sync later polls see as old (sync_age):
+        # they ask Pocket Casts before anything is pushed.
+        synced(state)
         state["stream"] = stream
         save_playback(state)
 
@@ -2471,9 +2597,11 @@ def player_view(snap, state, prefs, load_failed=False):
     return view
 
 
-def next_in_up_next(skip):
-    """The first episode of Up Next but `skip` (a uuid, or a set of them)."""
-    skip = {skip} if isinstance(skip, str) else set(skip or ())
+def next_in_up_next(state, current=""):
+    """The first episode of Up Next but `current` and any that ended here
+    (ended_or_pending): what Next, autoplay and Play with nothing loaded
+    start."""
+    skip = ended_or_pending(state) | {current}
     episodes, sync = up_next_raw()
     titles = None
     for e in episodes:
@@ -2502,13 +2630,20 @@ def finish_current(state, prefs, autoplay):
     From then on it's never pushed as in progress again (sync_now, poll):
     only playing it again here (play_again) undoes that. Whatever Pocket
     Casts couldn't be told now (the network dropped) is retried on later
-    polls (`pendingFinish`), while the next episode plays too."""
+    polls (`pendingFinish`), while the next episode plays too.
+
+    An end reached while nobody watched (a gap: Legato off, a sleep it
+    missed) or on a resume Pocket Casts never confirmed may be over a phone
+    that went back into the episode meanwhile: its record is read first, as
+    a retry does, and another device's say stands (nothing is marked
+    played). Nothing new starts by itself then: Play does that."""
     episode = state.get("episode") or {}
     uuid = episode.get("uuid", "")
+    unwatched = bool(state.get("unconfirmed")) or sync_age(state) >= RECHECK_AFTER
     add_stats(finished=1)
     state["handledEnd"] = uuid
     state["endedAutoplay"] = bool(autoplay)
-    state["lastSyncAt"] = time.time()
+    synced(state)
     entry = {"uuid": uuid, "podcast": episode.get("podcast", ""), "duration": episode.get("duration"),
              "position": episode.get("duration") or state.get("position") or 0,
              # Where Pocket Casts had it from this machine: a retry that finds
@@ -2520,6 +2655,18 @@ def finish_current(state, prefs, autoplay):
     # to a later retry, not handled and forgotten.
     state["pendingFinish"] = [p for p in state.get("pendingFinish") or [] if p.get("uuid") != uuid] + [entry]
     save_playback(state)
+    if unwatched:
+        if uuid in retry_pending_finish(state, force=True):  # the record first
+            # Another device carried on in it meanwhile: this end is no news.
+            # The player closes, and the next Play asks Pocket Casts what to
+            # play and from where (resume_last).
+            state["handledEnd"] = ""
+            state.pop("endedAutoplay", None)
+            save_playback(state)
+            player = Mpv.connect()
+            if player:
+                quit_mpv(player)
+        return state
     tell_finished(entry)
     if entry["removed"]:
         state["atTop"] = False  # off Up Next: no longer what Pocket Casts thinks is playing
@@ -2529,7 +2676,7 @@ def finish_current(state, prefs, autoplay):
     if not autoplay:
         return state
     try:
-        item = next_in_up_next(uuid)
+        item = next_in_up_next(state, uuid)
     except ApiError:
         return state  # finished; Play asks again for what's next (endedAutoplay)
     if not item:
@@ -2559,36 +2706,44 @@ def tell_finished(entry):
 
 def retry_pending_finish(state, force=False):
     """Tell Pocket Casts about episodes that ended here while it couldn't be
-    reached, unless another device has spoken since: before marking one
-    played, its record is read, and if it moved from where this machine
-    left it (you carried on with your phone), the entry is dropped; with no
-    answer, it waits. Given up after six hours. Runs only from a poll,
-    never on a timer of its own."""
+    reached, unless another device has spoken since: its record is read
+    first, and if it moved from where this machine left it (you carried on
+    with your phone), or was marked played and then started again, the
+    entry is dropped; with no answer, it waits. Given up after six hours.
+    Runs from a poll, a Play with nothing loaded, or an end nobody watched
+    (finish_current), never on a timer of its own. Returns the episodes
+    dropped because another device spoke."""
     pending = state.get("pendingFinish") or []
+    carried = set()
     if not pending:
-        return
+        return carried
     keep = []
     now = time.time()
     for entry in pending:
-        if not isinstance(entry, dict) or not entry.get("uuid") or now - float(entry.get("at") or 0) > 6 * 3600:
+        if not entry.get("uuid") or now - (entry.get("at") or 0) > 6 * 3600:
             continue
-        if force or now - float(entry.get("tried") or 0) >= 60:
+        if force or now - (entry.get("tried") or 0) >= 60:
             # At most once a minute: with the network down, each try holds
             # the state lock while its requests time out.
             entry["tried"] = now
-            if not entry.get("played"):
-                try:
-                    record = user_episode(entry["uuid"])
-                except ApiError:
-                    keep.append(entry)
-                    continue
-                if not record or not isinstance(record.get("playedUpTo"), (int, float)):
-                    keep.append(entry)  # no answer: ask again later
-                    continue
-                if as_int(record.get("playingStatus")) == STATUS_PLAYED:
-                    entry["played"] = True
-                elif abs(float(record["playedUpTo"]) - float(entry.get("left") or 0)) > DRIFT_SLACK:
-                    continue  # another device carried on: its say stands
+            try:
+                record = user_episode(entry["uuid"])
+            except ApiError:
+                keep.append(entry)
+                continue
+            if not record or not number(record.get("playedUpTo")):
+                keep.append(entry)  # no answer: ask again later
+                continue
+            played = as_int(record.get("playingStatus")) == STATUS_PLAYED
+            if entry.get("played"):
+                if not played:
+                    carried.add(entry["uuid"])  # played, then started again elsewhere:
+                    continue                    # never taken off Up Next under it
+            elif played:
+                entry["played"] = True  # the mark went through; its reply was lost
+            elif abs(record["playedUpTo"] - (entry.get("left") or 0)) > DRIFT_SLACK:
+                carried.add(entry["uuid"])  # another device carried on: its say stands
+                continue
             tell_finished(entry)
         if entry.get("removed") and entry["uuid"] == (state.get("episode") or {}).get("uuid"):
             state["atTop"] = False  # off Up Next now: no longer what Pocket Casts thinks is playing
@@ -2596,6 +2751,7 @@ def retry_pending_finish(state, force=False):
             keep.append(entry)
     state["pendingFinish"] = keep
     save_playback(state)
+    return carried
 
 
 def play_again(player, state, from_start):
@@ -2606,8 +2762,8 @@ def play_again(player, state, from_start):
     stop it)."""
     if from_start:
         player.command("seek", 0, "absolute")
-    if player.get("pause") is not False:
-        player.set("pause", False)
+    if player.get("pause") is not False and not slept_since_start():
+        player.set("pause", False)  # (not after a sleep in this call: nothing plays behind the lock screen)
     position = 0.0
     if not from_start:
         at = player.get("time-pos")
@@ -2621,12 +2777,13 @@ def reopen_ended(state, position):
     episode = state.get("episode") or {}
     uuid = episode.get("uuid", "")
     state["pendingFinish"] = [p for p in state.get("pendingFinish") or [] if p.get("uuid") != uuid]
-    state.update({"handledEnd": "", "checkServer": False, "position": float(position), "lastSyncAt": time.time()})
-    state.pop("endedAutoplay", None)
-    state.pop("unconfirmed", None)
+    state.update({"handledEnd": "", "checkServer": False, "position": float(position)})
+    synced(state)
+    for key in ("endedAutoplay", "unconfirmed"):
+        state.pop(key, None)
     try:
         push_position(episode, position)
-        state["lastSyncPos"] = float(position)
+        pushed(state, position)
         episode["playedUpTo"] = int(position)
     except ApiError:
         pass  # the next periodic push sends it
@@ -2681,8 +2838,9 @@ def stream_broke(snap, state):
        without the watcher (started by an older Legato, or refused by
        watch_script): compared with the longest duration given (Pocket
        Casts', mpv's at load or since), it's the end only within
-       NO_SIZE_MARGIN of it, the skip-outro allowed for. With no duration at
-       all, the end, as before 1.1.
+       NO_SIZE_MARGIN of it, the skip-outro allowed for (an HLS playlist's
+       own duration is exact: within BROKE_SLACK of it). With no duration
+       at all, the end, as before 1.1.
 
     A real end misjudged leaves the episode in progress: Play loads it again
     at its end, which stops again and asks you to mark it played
@@ -2694,9 +2852,6 @@ def stream_broke(snap, state):
         return False
     loaded = state.get("stream")
     loaded = loaded if isinstance(loaded, dict) and loaded.get("url") == snap.get("path") else {}
-
-    def number(value):
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
 
     watch = snap.get("user-data/legato")
     # The size the host gave at load, else now (after a failed reconnect mpv
@@ -2725,6 +2880,10 @@ def stream_broke(snap, state):
         # This FFmpeg failed the self-check: its silence proves nothing, so
         # the length rule judges (below).
     skip = skip_last_of(snap.get("file-local-options/end"))
+    if hls and number(snap.get("duration")) and snap["duration"] > 0:
+        # A playlist's durations are exact (no misread MP3 to allow for): a
+        # break in its last tenth isn't the end.
+        return position < snap["duration"] - skip - BROKE_SLACK
     durations = [d for d in (snap.get("duration"), loaded.get("duration"), (state.get("episode") or {}).get("duration"))
                  if number(d) and d > 0]
     if not durations:
@@ -2993,18 +3152,19 @@ def stream_stopped(state, prefs, position, stalled=False, unproven=False):
     episode = state.get("episode") or {}
     if isinstance(position, (int, float)):
         state["position"] = float(position)
-        recent = time.time() - float(state.get("lastSyncAt") or 0) < RECHECK_AFTER
+        recent = sync_age(state) < RECHECK_AFTER
         if (recent and not stalled and episode.get("uuid") and not state.get("unconfirmed") and not state.get("checkServer")
                 and not below_start(state, position)):
             try:
                 push_position(episode, position)
-                state["lastSyncAt"] = time.time()
-                state["lastSyncPos"] = float(position)
+                pushed(state, position)
                 episode["playedUpTo"] = int(position)
             except ApiError:
                 # Pocket Casts never got it: the next Play carries on from
-                # here, within the hour (resume_last).
-                state["unsentBreak"] = {"uuid": episode.get("uuid"), "position": float(position), "at": time.time()}
+                # here, within the hour (resume_last). Not a place from
+                # before a sleep this call slept through.
+                if not slept_since_start():
+                    state["unsentBreak"] = {"uuid": episode.get("uuid"), "position": float(position), "at": time.time()}
     # It stopped where this load began. Once, the link may simply have gone
     # (a second after a resume); twice in a row at the same spot, nothing
     # more of it arrives (it may be its end, misjudged): say how to mark it
@@ -3045,7 +3205,9 @@ def check_server(state, prefs, player=None, quick=False):
       "same"       carry on with this episode, seeked to Pocket Casts'
                    position if another device moved it;
       "switched"   another device moved on to a different episode, which is
-                   now loaded and playing;
+                   now loaded and playing (or this one was loaded again at
+                   Pocket Casts' place: a host without byte ranges refused
+                   the seek back);
       "finished"   another device finished this episode and Up Next is
                    empty; the player is stopped;
       "unverified" Pocket Casts could not be asked; nothing changed.
@@ -3060,7 +3222,15 @@ def check_server(state, prefs, player=None, quick=False):
         # TOKEN_TIMEOUT); a poll's check (playing on its own already) takes
         # the usual time, so a slow link still gets its answer and its pushes.
         with http_timeout(RESUME_CHECK_TIMEOUT) if quick else contextlib.nullcontext():
-            top = up_next_top()
+            if state.get("pendingFinish"):
+                # Ends Pocket Casts wasn't told of yet, first: one played and
+                # started again elsewhere since is no longer skipped below.
+                # (At once on a press of Play; a poll keeps the once-a-minute
+                # pace, having just tried.)
+                retry_pending_finish(state, force=quick)
+            # Past episodes that ended here: one whose removal is pending
+            # isn't another device moving on (followed, it played from 0).
+            top = up_next_top(skip=ended_or_pending(state) - {uuid})
             record = user_episode(uuid)
     except ApiError:
         return "unverified", state
@@ -3103,27 +3273,45 @@ def check_server(state, prefs, player=None, quick=False):
 
     if record:
         server = as_int(record.get("playedUpTo"))
-        pushed = float(state.get("lastSyncPos") or 0)
-        local = float(state.get("position") or 0)
-        # Keep a local position Pocket Casts never received (its push failed)
-        # when it is further on than what another device saved, within the
-        # hour (a phone rewound on purpose later wins), and not while the
-        # place is `unconfirmed`: what played after a resume Pocket Casts
-        # couldn't confirm, or where a stall left it (you may have rewound
-        # the phone meanwhile), is no news, and the answer wins.
-        keep_local = (moved_since_push(state) and local > server
-                      and not state.get("unconfirmed")
-                      and time.time() - float(state.get("lastSyncAt") or 0) < UNSENT_BREAK_KEPT)
-        if abs(server - pushed) > DRIFT_SLACK and not keep_local:
+        last_pushed = state.get("lastSyncPos") or 0
+        local = state.get("position") or 0
+        # Keep a local position only when it's where a push of a stretch that
+        # played here, confirmed, failed (`unsentPush`: Pocket Casts never got
+        # it), further on than what another device saved, within the hour of
+        # that push (a phone rewound on purpose later wins), and not while
+        # the place is `unconfirmed`. Nothing else that moved unpushed is
+        # news: what played during a gap (Legato off, a sleep it missed) or
+        # after a resume nobody confirmed, or where a stall left it. You
+        # may have rewound the phone meanwhile, and the answer wins.
+        unsent = unsent_push(state)
+        keep_local = (unsent is not None and abs(local - unsent["position"]) <= DRIFT_SLACK and local > server
+                      and not state.get("unconfirmed") and time.time() - unsent["at"] < UNSENT_BREAK_KEPT)
+        if abs(server - last_pushed) > DRIFT_SLACK and not keep_local:
             own = player is None
             player = player or Mpv.connect()
+            refused = False
             if player:
                 try:
                     if player.get("path") == episode.get("url"):  # not another file (sync_now)
                         player.command("seek", server, "absolute")
+                        # A host without byte ranges can't go back past what mpv
+                        # still holds (its back buffer, minutes of audio): the
+                        # seek is refused at once, and mpv plays on from where
+                        # it was, which the next push sent over the phone. (A
+                        # seek that lands reads its target straight away.)
+                        at = player.get("time-pos")
+                        refused = (player.get("seekable") is False and number(at)
+                                   and server < at - START_SLACK)
                 finally:
                     if own:
                         player.close()
+            if refused:
+                # Loaded again from Pocket Casts' place: from the top there,
+                # and nothing pushed below its place until playback gets back
+                # to it (below_start).
+                item = dict(episode, playedUpTo=server, status=STATUS_IN_PROGRESS, fromRecord=True)
+                return "switched", play_item(item, prefs, queue=False, save_previous=False,
+                                             at_top=state.get("atTop") is True)
             stream = state.get("stream")
             if isinstance(stream, dict) and stream.get("url") == episode.get("url"):
                 # Where it starts again: an end reached with nothing played
@@ -3141,7 +3329,7 @@ def check_server(state, prefs, player=None, quick=False):
             episode["playedUpTo"] = server
     state["checkServer"] = False
     state.pop("unconfirmed", None)  # Pocket Casts has answered
-    state["lastSyncAt"] = time.time()
+    synced(state)
     save_playback(state)
     return "same", state
 
@@ -3187,7 +3375,7 @@ def resume_loaded(player, state, prefs):
         # answer): play what's queued now, if anything is. Otherwise play it
         # again: from the top, or from where it was dragged back to.
         if at_end and state.get("endedAutoplay"):
-            item = next_in_up_next((state.get("episode") or {}).get("uuid", ""))
+            item = next_in_up_next(state, (state.get("episode") or {}).get("uuid", ""))
             if item:
                 play_item(item, prefs)
                 return
@@ -3203,6 +3391,8 @@ def resume_loaded(player, state, prefs):
         # nothing is pushed until a poll gets Pocket Casts' answer (rule 2).
         state["unconfirmed"] = True
         save_playback(state)
+    if slept_since_start():
+        return  # pressed as the lid closed: nothing plays on behind the lock screen; press Play again
     player.set("pause", False)
 
 
@@ -3287,18 +3477,20 @@ def poll(autoplay=True, seeked=False):
             return player_view(snap, state, prefs)
         state["stallHandled"] = stalls_ended_by(snap.get("user-data/legato"))
     was_checking = bool(state.get("checkServer"))
-    if snap.get("pause") is True and was_checking and not seeked and moved_since_push(state):
+    if snap.get("pause") is True and was_checking and not seeked and moved_unasked(state):
         # Paused again after a stretch that played without anyone asking (a
         # media key while Legato was off, or before any poll saw it): no
-        # news, and no local place to keep over Pocket Casts' answer
-        # (check_server's keep_local) until it has answered.
+        # news, and nothing to push (sync_now) until Pocket Casts has
+        # answered. (After a gap, sync_age already holds every push back.)
         state["unconfirmed"] = True
+    # A gap since the last push or answer (the shell was down, the chip off,
+    # the machine slept unguarded): another device may have moved on.
+    gap = sync_age(state) >= RECHECK_AFTER
     if snap.get("pause") is True:
         # Whoever paused it (this panel, a media key, playerctl), the next
         # resume asks Pocket Casts first.
         state["checkServer"] = True
-    elif snap.get("pause") is False and (state.get("checkServer")
-                                         or now - float(state.get("lastSyncAt") or 0) >= RECHECK_AFTER):
+    elif snap.get("pause") is False and (state.get("checkServer") or gap):
         # Playing again without a resume through this bridge (a media key,
         # playerctl), or after an interruption (the machine slept): another
         # device may have moved on meanwhile, so ask before pushing anything.
@@ -3312,7 +3504,7 @@ def poll(autoplay=True, seeked=False):
             return player_view(snap, state, prefs)
         return poll_after_change(state, prefs)
     due = False
-    if (snap.get("pause") is False and now - float(state.get("lastSyncAt") or 0) >= SYNC_INTERVAL
+    if (snap.get("pause") is False and sync_age(state) >= SYNC_INTERVAL
             and snap.get("paused-for-cache") is not True and moved_since_push(state)
             and not state.get("unconfirmed")):
         # Only a position playing here produces (rule 1). A stalled stream
@@ -3322,16 +3514,15 @@ def poll(autoplay=True, seeked=False):
         # the gap grows, and once it plays again Pocket Casts is asked.
         due = True
     elif (snap.get("pause") is True and moved_since_push(state) and not state.get("unconfirmed")
-          and now - float(state.get("lastSyncAt") or 0) < RECHECK_AFTER
-          and not ended_here(state) and (not was_checking or seeked)):
-        # Paused somewhere new (a seek from a media widget): send it. A paused
-        # position left unsent from before an interruption (the machine slept
-        # before the push went out) isn't pushed blind: another device may
-        # have moved on since, and the next resume asks Pocket Casts first.
-        # Not an episode that ended here (dragged back while paused: it's
-        # played until Play reopens it), nor, after a pause, a stretch that
-        # played without anyone asking (a media key's resume no poll saw);
-        # a seek since (`seeked`) is this machine's.
+          and not gap and not ended_here(state)):
+        # Paused somewhere new (a seek from a media widget), or where a pause's
+        # own push just failed: send it. A paused position left unsent from
+        # before an interruption (the machine slept before the push went out)
+        # isn't pushed blind: another device may have moved on since, and the
+        # next resume asks Pocket Casts first. Not an episode that ended here
+        # (dragged back while paused: it's played until Play reopens it), nor
+        # a stretch that played without anyone asking (a media key's resume
+        # no poll saw: marked `unconfirmed` above).
         due = True
     if video_shown(snap):
         remember_video_geometry(prefs)  # so a window closed with its own X reopens where it was
@@ -3347,12 +3538,12 @@ def poll(autoplay=True, seeked=False):
     if due and isinstance(position, (int, float)):
         try:
             push_position(episode, position)
-            state["lastSyncAt"] = now
-            state["lastSyncPos"] = float(position)
+            pushed(state, position)
             episode["playedUpTo"] = int(position)
             state.pop("pushFailures", None)
         except ApiError:
-            state["lastSyncAt"] = now  # try again next interval, not every poll
+            synced(state, now)  # try again next interval, not every poll
+            push_failed(state, position)
             state["pushFailures"] = int(state.get("pushFailures") or 0) + 1
             failures_said = state["pushFailures"] == PUSH_FAILURES_SAID
     view = player_view(snap, state, prefs)
@@ -3419,7 +3610,7 @@ def sync_now(player, state, force=False, was_playing=False):
         # where a host without ranges couldn't start (below_start).
         save_playback(state)
         return
-    recent = time.time() - float(state.get("lastSyncAt") or 0) < RECHECK_AFTER
+    recent = sync_age(state) < RECHECK_AFTER  # (no suspend since, either)
     if not force and not was_playing and player.get("pause") is not False:
         # Paused: only if it moved since its last push, and that was recent.
         if not (moved_since_push(state) and recent):
@@ -3435,10 +3626,9 @@ def sync_now(player, state, force=False, was_playing=False):
         return
     try:
         push_position(episode, position)
-        state["lastSyncAt"] = time.time()
-        state["lastSyncPos"] = float(position)
+        pushed(state, position)
     except ApiError:
-        pass
+        push_failed(state, position)
     save_playback(state)
 
 
@@ -3976,14 +4166,14 @@ def resume_last(prefs):
             item = None
         if item and state.get("atTop") is True:
             try:
-                top = up_next_top()
+                top = up_next_top(skip=ended_or_pending(state) - {item["uuid"]})
             except ApiError:
                 top = None
             if top and top["uuid"] != item["uuid"]:
                 item = None
     unsent = state.get("unsentBreak")
     if (item and isinstance(unsent, dict) and unsent.get("uuid") == item.get("uuid")
-            and time.time() - float(unsent.get("at") or 0) < UNSENT_BREAK_KEPT
+            and time.time() - (unsent.get("at") or 0) < UNSENT_BREAK_KEPT
             and isinstance(unsent.get("position"), (int, float))
             and unsent["position"] > as_int(item.get("playedUpTo"))):
         # The stream broke while Pocket Casts couldn't be told where it got to
@@ -3993,9 +4183,7 @@ def resume_last(prefs):
     if not item:
         # Not an episode that ended here (its removal from Up Next may still
         # be pending): playing it from its sync data pushed it in progress.
-        ended = {state.get("handledEnd")} | {p.get("uuid") for p in state.get("pendingFinish") or []
-                                            if isinstance(p, dict)}
-        item = next_in_up_next(ended)
+        item = next_in_up_next(state)
     if not item:
         raise ApiError("nothing_queued", "Up Next is empty — pick an episode to play")
     # The outgoing player is gone: nothing of it is pushed here (play_item
@@ -4367,7 +4555,7 @@ def cmd_next(args):
                 up_next_remove([episode["uuid"]])
             except ApiError:
                 pass
-        item = next_in_up_next(episode.get("uuid", ""))
+        item = next_in_up_next(state, episode.get("uuid", ""))
         if not item:
             raise ApiError("nothing_queued", "Up Next is empty")
         play_item(item, prefs, queue=False)

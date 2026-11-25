@@ -14,15 +14,14 @@ Cody's work setup.
 
 Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
-(docs/PLAN.md phases H and SR: rounds 1-12 fixed; round 13 reviewed,
-its findings recorded in PLAN and not yet fixed. Round 13 is the first in
-which neither reviewer found anything critical or high; the safety
-reviewer's three mediums can still rewind a phone, so they're fixed next,
-then round 14). Cody, 2026-11-24: SR86 (settings in Legato's own file)
+(docs/PLAN.md phases H and SR: rounds 1-13 fixed; round 13 was the first
+in which neither reviewer found anything critical or high, and its three
+safety mediums, which could still rewind a phone, are fixed; round 14
+next). Cody, 2026-11-24: SR86 (settings in Legato's own file)
 and SR63 (one live service on a replacement bar) were folded into 1.1.0
 before round 10, and the review loop runs for as long as rounds keep
 finding critical or high issues (stop: a round with none, and every
-planted mutation killed; round 12's full run: 350 of 352). Then push,
+planted mutation killed). Then push,
 release, the stats screenshot re-shot, and the marketplace verification
 request last of all, each on Cody's go. Committed and installed on Cody's
 laptop at each round's end (`./install.sh`), not pushed. Listed on the Omarchy plugin marketplace on 2026-11-23
@@ -32,8 +31,7 @@ accepted the `package-manager` and `installer` capabilities as printed advice
 and an optional helper). A newer commit shows as "Update unverified" in the
 marketplace until it's verified: ship updates through their "Plugin
 verification" issue form (the go-public skill's omarchy.md, section 5).
-Cody's laptop runs it from GitHub with local network feeds on (his episodes
-come from a home server).
+Cody's laptop runs it from GitHub.
 
 Next (docs/PLAN.md): strict review until a round finds no critical or
 high issue and every planted mutation is killed, then ship 1.1.0 (H6).
@@ -105,9 +103,14 @@ what the API lists, or touch the user's Hyprland config.
     0700)
   - cache `$XDG_CACHE_HOME/omarchy-legato/art/`
   - runtime `$XDG_RUNTIME_DIR/omarchy-legato/mpv.sock`
-  - IPC targets `legato` (playPause, next, skipBack, skipForward, stop,
-    volumeUp, volumeDown, cycleSpeed, cycleTrim, toggleBoost, toggleVideo,
-    refresh, status) and the plugin id (`toggle`, `about`, `stats`)
+  - IPC targets (Omarchy's `ShellIpc`, so `omarchy-shell` answers them over
+    the shell's socket) `legato`, the service's (playPause, next, skipBack,
+    skipForward, stop, volumeUp, volumeDown, cycleSpeed, cycleTrim,
+    toggleBoost, toggleVideo, refresh, status), and the plugin id, the
+    chip's (open, close, show, hide, toggle, isOpen, about, stats, refresh,
+    playPause, next, skipBack, skipForward; the first chip loaded answers).
+    The panel's keybind goes through Omarchy's own route (`{ panel = id }`,
+    `omarchy-shell shell toggle <id>`: the focused screen's chip)
   - mpv window title `Legato`, Wayland app id (Hyprland class)
     `legato-video`, audio client name `legato`; mpv script-messages
     `legato-video-pin` and `legato-video-transparency <n>` (video window
@@ -161,7 +164,12 @@ docs/PLAN.md         what's left to build
    `force`) needs the same: a stretch Pocket Casts confirmed (no
    `checkServer` from an earlier pause or media-key resume; the pause sets
    it for the next resume only after its push) and played here since its
-   last push under `RECHECK_AFTER` ago (not after an unguarded sleep). After
+   last push under `RECHECK_AFTER` ago (not after an unguarded sleep). "Ago"
+   is `sync_age`: any suspend since the last push or answer, or during the
+   call that recorded it (`lastSyncSleep`, the call's own suspend clock at
+   its start), counts as a gap of `RECHECK_AFTER` however short the sleep;
+   a play whose call slept loads paused (`load_into_mpv`), and Play's
+   resume doesn't unpause after one. After
    a long stall the position is `unconfirmed` until Pocket Casts answers.
    An episode that ended here is never pushed as in progress (only
    `play_again` reopens it; a drag back while paused, and the poll it
@@ -179,11 +187,17 @@ docs/PLAN.md         what's left to build
 2. **Every resume asks Pocket Casts first** (`check_server`): the top of Up
    Next and this episode's record. Its answer wins: seek to where another
    device left off, follow it to a different episode, or stop if it finished
-   everything. A local place further on is kept only if it played here
-   confirmed and its push failed, never what played after a resume Pocket
-   Casts couldn't confirm, nor a stretch that played and paused again with
-   nobody asking (a media key while Legato was off: the first poll marks
-   it `unconfirmed`); that stretch is no news. Another episode's record
+   everything. A local place further on is kept only where a push of a
+   confirmed stretch failed (`unsentPush`, recorded by the failure itself,
+   within the hour of it, the place still where it was: `keep_local`):
+   never what played during a gap (Legato off, a sleep it missed), after a
+   resume Pocket Casts couldn't confirm, nor a stretch that played and
+   paused again with nobody asking (a media key while Legato was off: the
+   first poll marks it `unconfirmed`, `moved_unasked`); that stretch is no
+   news. An end reached during a gap or unconfirmed is no news either
+   (`finish_current`): the record is read first, as a retry does, nothing
+   is marked played if another device moved it (the player closes; the
+   next Play follows Pocket Casts), and nothing autoplays. Another episode's record
    (`user_episode` checks the uuid) is no answer. This covers resumes the bridge didn't cause: a poll that sees
    a pause sets `checkServer`, and a gap of `RECHECK_AFTER` (90 s) since the
    last push while playing (sleep, shell down) counts as a resume. Nothing
@@ -310,10 +324,16 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   the end handled, so a call cut off while telling Pocket Casts leaves it
   to retry; whatever fails is retried by a later poll, once a minute at
   most, for six hours, or at once by Play with nothing loaded, reading the
-  record first: one moved from where this machine left it, `left`, means
-  another device carried on, and the entry is dropped), then autoplays.
-  Play with nothing loaded never picks an episode that ended here (its
-  removal from Up Next may be pending). Play on an
+  record first: one moved from where this machine left it, `left`, or
+  marked played and started again since, means another device carried on,
+  and the entry is dropped), then autoplays. Nothing that picks "what's
+  next" (Next, autoplay, Play at an end, Play with nothing loaded:
+  `next_in_up_next`; the resume check's "another device moved on":
+  `up_next_top(skip=)`) ever picks an episode that ended here or whose
+  finish is pending (`ended_or_pending`): its removal from Up Next may be
+  pending, and played from there it started at 0, pushed in progress
+  (round 13). Only a play you chose from a list replays one, and that
+  drops its pending entry. Play on an
   ended episode starts what was queued since (if autoplay was on) or plays
   it again (`play_again`, which pushes it as in progress itself, since
   Pocket Casts would say "played" and stop it). Play at a real end no poll
@@ -425,7 +445,11 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   break's push), so the others aren't rewound, until playback passes it.
   A seek of yours lifts it only if the start was honoured (mpv was there
   before the seek, `cmd_seek`): on such a host a seek may not land. The
-  panel says so once (`startedFromTop`).
+  panel says so once (`startedFromTop`). A seek back past what mpv still
+  holds is refused at once there (mpv's `time-pos` doesn't move; a seek
+  that lands reads its target straight away): the resume check then loads
+  the episode again at Pocket Casts' place (from the top, under that
+  floor) rather than play on and push its old place over the phone.
 - **The resume check on a press of Play** (`check_server(quick=True)`, from
   `resume_loaded`) waits `RESUME_CHECK_TIMEOUT` (5 s, longer if the name
   lookup is slow or an answer trickles in) per request, not
@@ -599,6 +623,20 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
 - **A Process that fails to start sends no `exited`** (Quickshell): each
   bridge call has a start watchdog (`startWatchdogMs`, 10 s) that answers
   it as failed, or the poll it was (`playerLoading`) stayed stuck for good.
+- **A Process's exit keeps its `running:` binding** (Quickshell writes
+  `running` from C++; checked by the round 13 fit reviewer with a throwaway
+  instance): the binding starts it again only when it re-evaluates. The
+  sleep guard's restart rests on that (`sleepGuardRestart`, started first
+  in `onExited`, or the failure count's change would start a guard at
+  once). The test stand-in models it (`alive`; `finish()` never writes
+  `running`).
+- **Omarchy's `ShellIpc`** (`qs.Commons`) is an IpcHandler the shell also
+  answers over its own socket (`IpcRegistry`): `omarchy-shell <target>
+  <fn>` and an `{ ipc = ... }` binding start no `qs ipc` client (about 5 ms
+  against 45). Of two for one target the first registered answers.
+  `{ panel = <plugin id> }` and `omarchy-shell shell toggle <id>` reach a
+  bar widget's open/close through the bar (`Bar.findPanelWidget`: the
+  focused screen's, or the one open).
 - **Qt 6.12** adds a QtQuick `Color` type: a bare `Color.x` in plugin QML no
   longer reaches `qs.Commons`' Color and renders black. The original has 7
   such references (PLAN A2).
@@ -730,7 +768,7 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   407 Basic challenge with the user and password in the proxy URL; every
   redirect hop comes back through the proxy. The property set at run time
   applies to the next loadfile. Tested 2026-11-22 on NPR's and Podtrac's
-  redirect chains and on a Tailscale home server.
+  redirect chains and on a server on the local network.
 - **Qt 6.12's editable TextInput** connects to the clipboard's dataChanged
   and fetches offered text itself, unbounded (the marketplace reviewer
   blocks plugins on it): Legato has none.
@@ -770,9 +808,8 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
 ## Working on it
 
 - **Tests:** `tests/run` (Python with a real, muted mpv against a fake
-  Pocket Casts server, then node, then a QML syntax check with qmllint;
-  QML is otherwise only checked when the shell loads it, and a panel's
-  only when it opens), plus `tests/qml/pages.qml`: the Settings and Stats
+  Pocket Casts server, then node, then a QML syntax check with qmllint),
+  plus the QML run offscreen on stand-ins: `tests/qml/pages.qml`: the Settings and Stats
   pages laid out offscreen with stand-ins for Omarchy's Commons and Ui (they
   read about 20 px short of the real pages), and `tests/qml/panel.qml`: the
   real Panel.qml and Service.qml with stand-ins for Quickshell's processes,
@@ -784,7 +821,10 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   `tests/qml/chip.qml`: the real BarWidget (clicks, wheel, title) and the
   service's own rules. The stand-ins in `tests/qml/imports` read real files
   (FileView) and can fail to start a process (`Processes.failStarts`); a
-  script error in Legato's QML fails the run. About 15 minutes; nothing
+  script error in Legato's QML fails the run. Real pointer events reach
+  the offscreen window through QtTest's `TestCase` helpers
+  (`events.mouseWheel` in panel.qml; force the Columns' layout first, a
+  stale one hides an item from the hit test). About 17 minutes; nothing
   appears on screen, and the test players load no mpv-mpris (they'd be
   media players on the desktop). `tests/mutations.md` lists the planted
   regressions the suite must catch.

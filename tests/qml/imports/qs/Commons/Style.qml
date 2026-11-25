@@ -2,6 +2,10 @@ pragma Singleton
 // Stand-in for Omarchy's Style with its default tokens (tests/qml only).
 import QtQuick
 QtObject {
+  // As Omarchy's: off with Hyprland's animations; every transition runs for
+  // duration(ms), then 0.
+  property bool reduceMotion: false
+  function duration(ms) { return reduceMotion ? 0 : ms }
   function space(px) { return Math.max(1, Math.round(px)) }
   function spaceReal(px) { return px }
   property QtObject bar: QtObject {

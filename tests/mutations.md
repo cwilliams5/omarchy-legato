@@ -12,13 +12,13 @@ python3 -B tests/mutate.py .       # all of them, about 2 hours
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (352 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (403 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
 it. A mutation whose pattern no longer matches the code is reported STALE
 and fails the run (fix its pattern), as does one whose tests fail
 unmutated (SKIP).
 
-## The set (352; strict review rounds 1 to 12, 2026-11-24)
+## The set (403; strict review rounds 1 to 13, 2026-11-24)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
@@ -63,6 +63,22 @@ caught each mutant. By area:
   4's: Delete and the keys behind a page (now signed in, with a control),
   a stale poll's messages, late switch and Clear answers, the switch's
   default, message lengths, the off-and-empty text.
+- **Round 13**: the one local place kept being a failed push's (any
+  unpushed place, what played since it, its record, its age, recorded
+  from a call that slept, kept after a push went through, taken for
+  unasked-for motion); a suspend as a gap (ignored; a call's own sleep
+  recorded as now); a play across a suspend (starting, a sleep during the
+  load, Play and Play again unpausing); an end nobody watched (told at
+  once; overtaken elsewhere yet kept ended); the retry's record (a
+  restart elsewhere, a lost reply's mark, an empty lookup); a replay
+  keeping its pending finish; "what's next" skipping ended episodes (the
+  rule and each caller, the resume check's top); a followed show read as
+  unfollowed; an unsafe verdict file; the HLS margin; a refused seek back;
+  a malformed playback.json; hyprctl's timeout and the rule before a
+  load; and the QML ones (the guard's restart, mpv's events, the IPC
+  status, re-sign-in, the idle unload, ticks while buffering, Esc, Tab,
+  closing's password and show page, the chip's click and IPC, ShellIpc,
+  the sliders' wheel, rows through the fade, animations off).
 
 ## Results
 
@@ -167,9 +183,27 @@ caught each mutant. By area:
   copy's reportError guard proved redundant (a notification is a call,
   and a dormant copy's calls never start): removed; Play's full snapshot
   needed a cut past nine tenths, where length alone says "the end".
-- Round 12's full run: 350 of 352. Survivors, not yet looked at: "poll: a
-  stretch nobody asked about pushed" and "service: a dormant copy keeps
-  mpv's socket" (PLAN round 13).
+- Round 12's full run: 350 of 352. "Service: a dormant copy keeps mpv's
+  socket" survived because the test's player had stopped before the copy
+  went dormant (the test now holds a live socket there); "poll: a stretch
+  nobody asked about pushed" was a guard the first poll's marking made
+  redundant except for retrying a failed pause push: the guard was
+  removed and the retry is tested. Round 13 (the reviewers' own): 5 of 17
+  safety and 16 of 21 fit survived; all planted now, with tests.
+- Round 13's set, its 65 new or changed: 62 killed at first. Two survived
+  (a suspend before the push stopped it being tried at all, so "not
+  recorded from a call that slept" was never reached: a test with the
+  sleep during the push; the event socket's reconnection brought a poll
+  that hid whether a pause event brings one: steps split) and one test's
+  premise was off (Play pressed before mpv had paused itself at the end).
+  All three killed after.
+- Equivalent and left out (round 13): the resume check's and
+  reopen_ended's drops of an unsent push (a place the answer replaced, or
+  an episode played again, is never within the 3 s the keep needs; the
+  next push drops it), and the slider overlay's sideways check (a zero
+  vertical delta adds no step), all three removed from the code;
+  resume_last skipping ended episodes at the top (it retries them first,
+  and the next pick skips them anyway).
 - Equivalent and left out: "a stall's place confirmed meanwhile" (the
   poll's paused push needs no "ask first" after a pause since round 11,
   and `sync_now` checks the stall itself); the dormancy timer ignoring
@@ -182,10 +216,10 @@ caught each mutant. By area:
 
 - The QML runs with stand-ins for Omarchy's Commons and Ui and for
   Quickshell's processes (`tests/qml/imports`): sizes read about 20 px
-  short of the real shell's, clicks and wheel turns are signals emitted by
-  the test, and the bridge never runs (the test answers its calls). The
-  progress bar's sideways-swipe guard is checked as text (the stand-in
-  slider has no wheel); a disabled IpcHandler's registration can't show.
+  short of the real shell's, clicks are signals emitted by the test (wheel
+  turns over the panel's sliders are real events, QtTest's), and the
+  bridge never runs (the test answers its calls). ShellIpc's registry
+  can't show (its stand-in is a plain handler).
 - The resume check's seek is skipped for a file other than the recorded
   one (round 10); only `sync_now`'s check of the same is planted.
 - Autoplay that can't find out what's next (a lookup error after an end)

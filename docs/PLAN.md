@@ -290,9 +290,9 @@ history on other submissions). Fixed, each with a failing-first test:
 - [x] G13 Feed URLs could point mpv at the local network (#13789: the
   reviewer cleared that podcast plugin only with checks at connect time).
   Now mpv fetches through `bridge proxy`: public addresses only, the local
-  network with the new `localFeeds` setting (off by default; on for Cody's
-  Tailscale server), never this computer. Tested on public redirect chains
-  (https) and Cody's home server (refused off, plays on).
+  network with the new `localFeeds` setting (off by default), never this
+  computer. Tested on public redirect chains (https) and a server on the
+  local network (refused off, plays on).
 - [x] G14 Episode and podcast UUIDs in bridge command lines are visible to
   other local accounts in /proc. **Won't fix** (Cody, 2026-11-23): only
   another account on the same computer could see them, for the tenth of a
@@ -369,8 +369,8 @@ history on other submissions). Fixed, each with a failing-first test:
   real end without a file size and a long duration could replay forever
   (only mpv's duration; a second stop at the same spot is the end); a
   failed poll lost the seek flag; the Stats page waited on the state lock.
-  Cody's home server sends Content-Range with the full size and serves MP4;
-  one of his episodes, checked live, ended with all but 178 bytes read (its
+  A media server on the local network, checked live, sends Content-Range
+  with the full size and serves MP4; one of its episodes ended with all but 178 bytes read (its
   index at the front). Since round 3 an index at the back is fine too. The prediction's Low on
   G14 (UUIDs in argv) is left as decided.
 - [x] H8 Media for 1.1.0 (Cody: no re-shoot, edit the button in). The
@@ -395,7 +395,7 @@ history on other submissions). Fixed, each with a failing-first test:
 ### SR. Strict review round 1 (2026-11-24, the strict-review skill)
 
 Two fresh reviewers against the 2026-11-21 audit and the skill's checklist:
-reports kept outside the repo. Verdict:
+Round 1's reports (kept outside the repo). Verdict:
 the sync rules and idle cost hold; a new path can mark an unfinished
 episode played; the new Settings rows don't fit; the tests are weak where
 it's new (mutants killed: 8 of 20 and 24 of 44).
@@ -472,7 +472,7 @@ it's new (mutants killed: 8 of 20 and 24 of 44).
 
 ### SR, round 2 (2026-11-24)
 
-Fresh reviewers again: reports kept outside the repo.
+Fresh reviewers again (round 2's reports are kept outside the repo).
 The push rules, lock order, idle cost and security hold. The break-vs-end
 judgment still lands on "played" off the one host shape the tests used,
 and the QML wiring's tests are patterns (reviewers' mutants: 6 of 12
@@ -533,7 +533,7 @@ safety, 2 of 21 fit).
 
 ### SR, round 3 (2026-11-24)
 
-reports kept outside the repo. Breaks no
+Round 3's reports (kept outside the repo). Breaks no
 longer mark episodes played on any host shape tried, and the sync rules,
 locks, cost and security hold. But the judgment now errs the other way on
 real files, and an old no-ranges path rewinds other devices.
@@ -595,7 +595,7 @@ real files, and an old no-ranges path rewinds other devices.
 
 ### SR, round 4 (2026-11-24)
 
-reports kept outside the repo. Rules 2
+Round 4's reports (kept outside the repo). Rules 2
 and 3, the push guards, the sign-in race, lock order, stats isolation and
 security hold. The break-vs-end judgment fails again, on new shapes, and
 four rounds have each found critical or high ones there: inferring "the
@@ -683,7 +683,7 @@ a seek lifts the floor only if the start was honoured (SR35).
 
 ### SR, round 5 (2026-11-24)
 
-reports kept outside the repo. Both
+Round 5's reports (kept outside the repo). Both
 reviewers found the same critical, which round 4's probe missed because it
 only ever used the suite's plain-http fake.
 
@@ -735,7 +735,7 @@ only ever used the suite's plain-http fake.
 
 ### SR, round 6 (2026-11-24)
 
-reports kept outside the repo. Both found
+Round 6's reports (kept outside the repo). Both found
 the same critical on a host class round 5's TLS host never was: one that
 sends a size but no byte ranges.
 
@@ -788,7 +788,7 @@ sends a size but no byte ranges.
 
 ### SR, round 7 (2026-11-24)
 
-reports kept outside the repo. The fit
+Round 7's reports (kept outside the repo). The fit
 reviewer found nothing critical or high; the safety reviewer three highs.
 
 - [x] SR58 (high, since 1.0) A forced push (a pause or skip while playing,
@@ -839,7 +839,7 @@ reviewer found nothing critical or high; the safety reviewer three highs.
 
 ### SR, round 8 (2026-11-24)
 
-reports kept outside the repo. Fit found
+Round 8's reports (kept outside the repo). Fit found
 nothing critical or high again; safety a critical and a high. Plus Cody's
 ask (a side note): the watcher keys on FFmpeg's wording, and an update
 could silently undo the fix.
@@ -889,7 +889,7 @@ could silently undo the fix.
 
 ### SR, round 9 (2026-11-24)
 
-reports kept outside the repo. Safety:
+Round 9's reports (kept outside the repo). Safety:
 about 15 host shapes built against real mpv and FFmpeg, none taken for the
 end; the break judgment holds. A high in empty lookups (SR72 was partial)
 and a high in the self-check's player.
@@ -969,7 +969,7 @@ verification request is the very last step.
 
 ### SR, round 10 (2026-11-24)
 
-reports kept outside the repo (the fit
+Round 10's reports (kept outside the repo) (the fit
 report saved by the coordinating session: its reviewer couldn't write
 files). Safety: one high and five mediums, each verified by running; fit:
 nothing critical or high, one medium that hits every updating user. Each
@@ -1062,7 +1062,7 @@ confirmed against the code before fixing.
 
 ### SR, round 11 (2026-11-24)
 
-reports kept outside the repo. Safety:
+Round 11's reports (kept outside the repo). Safety:
 one high, three mediums, each verified against the fake server.
 
 - [x] SR104 (high) Play at the end of a file playback.json doesn't name
@@ -1139,7 +1139,7 @@ Fit (nothing critical or high):
 
 ### SR, round 12 (2026-11-24)
 
-reports kept outside the repo.
+Round 12's reports (kept outside the repo).
 
 Safety: one high and four mediums, each a second door into a failure an
 earlier round closed at its first.
@@ -1208,67 +1208,96 @@ Fit (nothing critical or high):
   were redundant: removed, with their mutants; "an idle copy of the
   service" is equivalent since round 11's latch.
 
-### SR, round 13 (2026-11-24): reviewed, not yet fixed
+### SR, round 13 (2026-11-24)
 
-reports kept outside the repo (each
-finding there with its scenario, `file:line`, verification and a test).
-The first round in which neither reviewer found anything critical or
-high. Next: verify each, fix with tests, then round 14.
+Round 13's reports (kept outside the repo; each finding with its scenario,
+`file:line`, verification and a test). The first round in which neither
+reviewer found anything critical or high. Each finding checked against
+the code first: the safety reviewer's probes moved the phone 2 s from the
+last push, inside the 3 s drift slack, so they partly measured the slack;
+with places well outside it the findings held, and the tests use those.
 
-Safety (three mediums, reproduced against the fake server):
+Safety (three mediums, each a way to rewind a phone):
 
-- [ ] SR135 (medium) What played during a gap (a media key with Legato off
-  after a watched resume, a sleep the guard missed, an end reached while
-  Legato was off, a guard that paused behind a slow poll then a long
-  sleep) is kept over a phone that went back: `keep_local` keeps any
-  unpushed place further on; a gap never sets `unconfirmed`, and the
-  first poll's marking (SR132) needs `checkServer` already set.
-- [ ] SR136 (medium) A Play that spans a suspend loads after the wake with
-  `pause=no`, and `recorded()` refreshes `lastSyncAt`, so the gap check
-  never fires: it plays behind the lock screen and the first poll pushes
-  over the phone (Play, Next, autoplay, resume_last, the check's switch).
-- [ ] SR137 (medium) A finished episode whose Up Next removal is pending is
-  replayed from 0 by Next, autoplay, resume_loaded and the resume check's
-  switch (they skip only the current episode; SR131 covered resume_last),
-  and `play_item` drops its pending entry.
-- [ ] SR138 (lows) A host without ranges: a rewind beyond mpv's back buffer
-  pushed over; an HLS break in the last tenth marked played; after a
-  sleep under a minute the guard's unpushed pause pushed blind; a
-  malformed playback.json jams Stop and Play; a removal-only retry
-  doesn't re-read the record. The reviewer's surviving mutants: R1, R3,
-  R16, R32, R33 (in the report).
+- [x] SR135 (medium) What played during a gap (Legato off, a sleep it
+  missed, a guard that paused behind a slow poll) was kept over a phone
+  that went back, then pushed. Fixed by evidence rather than position: the
+  one local place kept over Pocket Casts' answer is where a push of a
+  confirmed stretch failed (`unsentPush`, recorded by the failure, within
+  the hour, the place unmoved since: `keep_local`). The first poll's
+  marking (SR132) now compares with that failed push too (`moved_unasked`),
+  so a pause whose push failed is still kept (it wasn't, in the real flow:
+  the poll its pause brings marked it), and retried by that poll (the
+  paused push's own `was_checking` guard, redundant with the marking but
+  for that retry, removed). An end reached during a gap or unconfirmed
+  reads the record first, as a retry does: another device's place stands
+  (not marked played, the player closes, the next Play follows Pocket
+  Casts), and nothing autoplays (`finish_current`). Tests: a stretch
+  through a gap (Play; Stop), still playing after a gap, a failed push
+  then a gap, a failed pause push kept and retried, an unconfirmed resume
+  after one, the guard behind a lock then a long sleep, an end through a
+  gap (the phone went back; nobody else).
+- [x] SR136 (medium) A Play across a suspend loaded after the wake with
+  `pause=no` and recorded a fresh sync. Fixed: a call that slept loads
+  paused (and a sleep during the load pauses once loaded); Play's resume,
+  and Play again, don't unpause after one; and every sync records the
+  call's own suspend clock at its start (`synced`, `lastSyncSleep`), so a
+  later call sees any suspend since as a gap (`sync_age`: also L3 below,
+  and every "recent" check: the poll, sync_now, a break's push). Tests.
+- [x] SR137 (medium) A finished episode whose removal was pending was
+  replayed from 0 by Next, autoplay, Play at an end and the resume check's
+  switch. Fixed: one rule (`ended_or_pending`) in `next_in_up_next` and
+  the resume check's top (`up_next_top(skip=)`), which retries pending
+  finishes first (one restarted elsewhere is followed again). The fake's
+  Up Next can carry playingStatus (`syncStatus`). Tests (the switch,
+  Next, autoplay and Play at an end, a replay from a list).
+- [x] SR138 (lows) A host without ranges refusing the seek back: loaded
+  again at Pocket Casts' place (mpv's `time-pos` doesn't move on a
+  refused seek; probed). An HLS break in its last tenth: the playlist's
+  own length, within BROKE_SLACK. The guard's unpushed pause after a
+  short sleep: `sync_age`. A malformed playback.json: fields of the wrong
+  shape dropped as it's read (`clean_playback`). A removal-only retry
+  reads the record first (played, then restarted elsewhere: left alone).
+  An unsent break or push isn't recorded from a call that slept. The
+  reviewer's survivors R1, R3, R16, R32, R33: tests (the fake can lose a
+  reply after applying a write, `lostReply`).
 
 Fit (three mediums, nothing critical or high):
 
-- [ ] SR139 (medium, tests) The stand-in Process's `finish()` drops the
-  `running:` binding real Quickshell keeps, so the sleep guard's restart
-  after a sleep is untested (the second lid-close would pause nothing if
-  `sleepGuardRestart.restart()` went); no QML test sends mpv's
-  `property-change` events (the event-driven core).
-- [ ] SR140 (low-medium) A touchpad wheel over the panel's progress bar
-  seeks 10 s per event through Omarchy's PanelSlider (a swipe: about 80 s,
-  pushed at once); SR124 fixed the chip only.
-- [ ] SR141 (design) Four hand-kept counters (claims, open panels, Stats
-  pages, pages) keep needing drift fixes; compiling the bridge is 42% of
-  each call's CPU (a small launcher importing it as a module); CLAUDE.md
-  is long.
-- [ ] SR142 (lows) The panel keybind example opens on whichever screen
-  registered first (Omarchy's `{ panel = id }` opens on the focused one);
-  plain IpcHandler, not ShellIpc; every row builds an unused header; the
-  list empties and the card snaps shorter during the close fade;
-  `hyprctl` replies ignored; a bare animation duration ignores Omarchy's
-  animations-off; docs/PLAN.md cites a private path and CLAUDE.md
-  mentions a home server (a public repo: fix before the push);
-  TempHome keeps HYPRLAND_INSTANCE_SIGNATURE and the bus address; claims
-  ("every 30 s" is 32 s plus hyprctl with video; the plugin-id IPC list;
-  "IPC lives on BarWidget.qml"; the suite's duration; "any number of
-  screens" for plugin-id keybinds). The reviewer's 16 surviving mutants
-  (S1-S3, S5-S7, S9, P2-P5, C1-C3, B1, B3; P3: a typed password left in
-  the panel after it closes) are in the report.
-- [ ] Round 12's full mutation run: 350 of 352; survivors "poll: a stretch
-  nobody asked about pushed" and "service: a dormant copy keeps mpv's
-  socket" (likely masked by round 12's own changes: check each, then a
-  test or "equivalent" in tests/mutations.md).
+- [x] SR139 (medium, tests) The stand-in Process keeps `running`'s binding
+  through an exit, as Quickshell does (`alive`); the guard's restart after
+  a sleep is tested, and the restart timer now starts first in `onExited`
+  (a failure count change re-evaluated the binding and started a guard at
+  once). mpv's events tested: the five observed properties, a pause
+  change and a seek each bringing a poll, the IPC status while paused.
+- [x] SR140 (low-medium) Both panel sliders add a touchpad's deltas up to
+  notches (`WheelNotches`, Model.wheelSteps) and the slider underneath
+  sees none. Tested with real wheel events offscreen (QtTest's
+  `mouseWheel`; the stand-in slider steps per event as Omarchy's does).
+- [ ] SR141 (design, deferred past 1.1.0) Four hand-kept counters (claims,
+  open panels, Stats pages, pages): each has tests now; deriving them
+  from a list of registered panels is the cleaner design. A launcher with
+  cached bytecode would save about 40% of each call's CPU. CLAUDE.md is
+  long (a reorganisation with the next feature work).
+- [x] SR142 (lows) The panel keybind goes through Omarchy's `panel` route
+  (the focused screen's chip; README, node check); both IPC targets are
+  `ShellIpc` (no qs ipc client per key); the dead header rows removed;
+  rows kept through the close's fade; the cover's fade and the marquee
+  follow Omarchy's animations switch (`Style.duration`, `reduceMotion`);
+  private paths and details of the maintainer's setup out of the docs; TempHome drops the
+  compositor and bus variables; claims corrected (32 s polls and hyprctl
+  with video, the plugin-id IPC list, two stale comments, the suite's
+  length). Left: `hyprctl`'s replies aren't read (a refused rule shows as
+  an unplaced window; nothing that syncs). The reviewer's 16 surviving
+  mutants: tests for each (chip clicks and IPC toggle/isOpen, Esc, a
+  typed password and a show page closed with the panel, Tab to the next
+  panel, re-sign-in, the idle unload's `--if-paused`, ticks while
+  buffering, the hyprctl timeout, the rule before the next load).
+- [x] Round 12's full run, 350 of 352: "a dormant copy keeps mpv's
+  socket" survived because the test's player had stopped before the
+  copy went dormant (test fixed: it holds a live socket then); "a stretch
+  nobody asked about pushed" was the paused push's guard, now removed
+  (above).
 
 - [ ] SR46 (see round 5) Re-shoot media/stats.png with representative
   numbers, on an empty workspace, after the code is final.
@@ -1282,7 +1311,7 @@ Fit (three mediums, nothing critical or high):
 
 ## Testing
 
-- `tests/run` before every commit: all suites, about 13 minutes, nothing on
+- `tests/run` before every commit: all suites, about 17 minutes, nothing on
   screen. Each new behavior gets an end-to-end test against the fake server
   (`tests/test_bridge.py`, `PlayerTestCase`; set `AUDIO_SECONDS` for longer
   audio, and the fake serves byte ranges).
@@ -1383,6 +1412,17 @@ Fit (three mediums, nothing critical or high):
   a Play across a suspend, a pending-removal episode replayed from 0) and
   three fit mediums. Round 12's full run: 350 of 352. Next: fix round 13,
   then round 14.
+- 2026-11-24 (night, after the handoff): round 13 fixed (SR135-SR142): the
+  one local place kept over Pocket Casts' answer is a failed push's; any
+  suspend is a gap, and a Play across one loads paused; nothing that picks
+  "what's next" replays an episode that ended here; an end nobody watched
+  asks first and starts nothing; hosts without ranges reload on a refused
+  seek back; the panel's sliders add touchpad deltas up (tested with real
+  wheel events); ShellIpc and Omarchy's panel route; the Process stand-in
+  keeps `running`'s binding as Quickshell does. 340 Python + 45 node
+  tests; 403 mutations, the 65 new or changed all killed (three only
+  after their tests were fixed: two that never reached the rule, one
+  whose premise was off). Round 14 next.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus
