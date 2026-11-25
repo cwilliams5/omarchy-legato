@@ -1392,6 +1392,105 @@ Fit (nothing critical or high):
   last of all the marketplace verification request (Cody approves the
   filing).
 
+### SR, round 15 (2026-11-25)
+
+Two reviewers again (safety; fit), the safety one writing its own report
+this time. Fit found nothing critical or high; safety found two highs, both
+second doors into outcomes earlier rounds closed at one door.
+
+- [x] SR154 (high, H1) A place this machine played and couldn't send was
+  lost the moment Legato moved to another episode (Next, which also took
+  it off Up Next; Play from a list after the idle unload; the resume check
+  following the phone to another episode): `unsentPush` lived in the one
+  episode record each switch rebuilds. Now the outgoing episode's unsent
+  place goes along (`stash_unsent` into `unsentPlaces`, with `left`, where
+  Pocket Casts had it from here): `retry_unsent` sends it on the switch, a
+  later poll or Play with nothing loaded, only while Pocket Casts still has
+  it at `left`, and a reload of it starts there meanwhile (`kept_elsewhere`).
+  Within the hour, as on a reload. Tests: Next, Next with pushes still
+  failing then a poll, Play another then this one from a list, following
+  the phone, a phone that moved or finished it since, the hour.
+- [x] SR155 (high; a rewind to 0, H2) An end reached unwatched whose record
+  read failed (the outage that left it unwatched, often) stayed "ended
+  here": Play played it again from 0 and pushed 0 over the phone. Now
+  `finish_current` treats no answer like "carried on": not ended here, the
+  player closes, the pending entry waits (`unanswered_end`; entries say
+  `confirmed`); Play with nothing loaded fails "try again" until Pocket
+  Casts answers, then follows the phone or marks it played and moves on.
+  Play at an end whose finish is pending asks first (a call cut off while
+  asking left it ended here with the player loaded); the poll and a drag
+  back push nothing while it's unanswered. Found while fixing: an end with
+  no record anywhere (a show you don't follow, every push failed) could
+  never be confirmed, and Play would say "try again" for six hours: an
+  empty lookup now answers by check_server's rule (`empty_lookup_answers`).
+- [x] SR156 (medium, M1) Next, autoplay and the resume check's switch
+  replayed an episode Pocket Casts says is played from 0 and pushed it in
+  progress: Mark played whose Up Next removal failed (swallowed), or one
+  finished on another device whose removal wasn't in yet. Now every
+  next-picker skips played episodes (sync data's status or the record's),
+  and a failed removal after Mark played is a pending finish.
+- [x] SR157 (medium, security, M2) The feed proxy reached this computer
+  through its own Wi-Fi, docker and tailnet addresses (verified; local
+  feeds on), and by reading through a global one with the setting off:
+  "never this computer" was false. Now a connection whose two ends show
+  one address is refused (`same_address`); tested against every
+  non-loopback IPv4 address of the machine running the suite.
+- [x] SR158 (low-medium, L1) A later retry that found the phone carried on
+  dropped the entry but left `handledEnd`: Play skipped the phone's
+  episode. Now it clears `handledEnd`, and the poll closes a player left
+  at that end.
+- [x] SR159 (low, L2) The progress bar's wheel sent an absolute place from
+  the last poll's position (after a resume check moved it, pushed behind
+  it): now relative, as the skip buttons.
+- [x] SR160 (low, L3) A poll that failed (busy) after a media key's pause
+  was never retried, so the pause went unread: the service now retries a
+  failed poll while an mpv event is unread (three times, 2/4/8 s).
+- [-] SR161 (low, L4, declined) "Every load pushes where it starts": that
+  push marks the episode in progress at once, as the apps do; the source
+  this round found wrong (a played episode on Up Next, SR156) is filtered
+  where it's picked.
+- [x] SR162 (nits) An empty HOME fell back to the account's (now refused,
+  like any unusable one); NaN, infinite and negative positions passed as
+  numbers and read as "at 0" (now no answer: `a_place`); queueing again or
+  Mark as unplayed after an end here kept its retry, which took it off Up
+  Next again (`forget_pending`).
+- [x] SR163 (tests) The reviewer's two surviving mutants (a kept reload's
+  `unsentPush` and `lastSyncPos`) now killed by a reload whose push fails
+  too; tests for every path above.
+- [x] SR164 (medium, fit F1) After an update, until a restart, the panel
+  showed the restart note over every error ("Stream ends here: mark it
+  played" never seen); the test had pinned it through a stale error. Now
+  errors first, then the note.
+- [ ] SR165 (medium, release, F2) media/pages.png still shows 1.0's
+  Settings page ("Saved to ~/.config/omarchy/shell.json") and Cody's own
+  subscriptions and episode titles: re-shoot with stats.png (Cody's call
+  on the content).
+- [x] SR166 (low, F3) A cancelled paste flashed "returned nothing":
+  Quickshell sends `exited` for a stopped Process (probed). The paste
+  drops its callback first; the Process stand-in now sends `exited` on a
+  stop, as Quickshell does.
+- [x] SR167 (low, F4) That same `exited` delayed the next episode's sleep
+  guard by the retry wait: `onExited` restarts nothing when no guard is
+  wanted.
+- [x] SR168 (low, F5) The self-check's folder moved from /tmp into Legato's
+  private runtime folder.
+- [x] SR169 (low, F6) Every plugin reload (any plugin) fetched Up Next for a
+  panel nobody opened: now only status and the player; README's "no process
+  starts" said of timers now, with the reload named.
+- [x] SR170 (low, F7) With no screen at all (lid shut, monitor off) every bar
+  went and the service went dormant: no syncing, no pause before sleep. It
+  stays awake while `Quickshell.screens` is empty.
+- [x] SR171 (nits) Dead `shell` property; unused glyphs; the chip's stale
+  header comment; Alt/Ctrl/Super + a letter acted as the panel's key (Alt+N
+  was Next); CLAUDE.md rule 6 now names About's browser link.
+- [x] SR172 (tests) The menu's Played/Unplayed marks, Esc and Enter with the
+  menu open, `4`, ← on a show's page, the password cleared after sign-in,
+  modifiers. Left untested (low value or layered): the cover fade with
+  animations off, the chip's IPC on two screens, the hero click, volume-icon
+  mute, the signed-out colour, cursor scrolling into view.
+- [ ] SR173 (left) Stand-ins: no first-wins IpcHandler, per-screen test bars
+  where Omarchy shares one; the panel built on every screen.
+
 ## Testing
 
 - `tests/run` before every commit: all suites, about 17 minutes, nothing on
@@ -1518,6 +1617,21 @@ Fit (nothing critical or high):
   restart (measured): docs corrected, and from 1.1 on the panel says so.
   Real keys through Omarchy's own key catcher in the QML tests. 357
   Python + 47 node tests; 434 mutations. Round 15 next.
+- 2026-11-25 (overnight): round 15 (SR154-SR173): two highs, both second
+  doors: a place this machine couldn't send was lost on a switch to
+  another episode (now carried along, sent once Pocket Casts can be told,
+  and a reload of it starts there), and an unwatched end whose record read
+  failed was played again from 0 over the phone (now not "ended here":
+  the player closes, Play asks). Next/autoplay/the switch skip episodes
+  Pocket Casts says are played; the feed proxy refuses this computer's own
+  other addresses; errors show over the restart note; a failed poll after
+  an mpv event is retried; the wheel seeks relative; Alt+letter isn't a
+  panel key. The Process stand-in sends `exited` on a stop, as Quickshell
+  does (probed by the fit reviewer). Round 14's full mutation run: 432 of
+  434 (2 skipped: renamed tests, re-pointed). 382 Python + 47 node tests;
+  480 mutations, round 15's 63 new or changed all killed (one after its
+  test was tightened, one after a redundant guard was removed). Round 16
+  next (round 15 had highs).
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

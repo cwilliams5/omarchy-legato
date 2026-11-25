@@ -10,13 +10,14 @@ If a `handoff.md` sits in the repo root, read it first: a local-only note
 This file becomes public with the repo: no personal details, nothing about
 Cody's work setup.
 
-## Status (2026-11-24)
+## Status (2026-11-25)
 
 Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
-(docs/PLAN.md phases H and SR: rounds 1-14 fixed; round 14's one high, a
-place this machine couldn't send lost once the player closed, is fixed;
-round 15 next). Cody, 2026-11-24: SR86 (settings in Legato's own file)
+(docs/PLAN.md phases H and SR: rounds 1-15 fixed; round 15's two highs, an
+unsent place lost on a switch to another episode and an unwatched end
+Pocket Casts couldn't confirm played again from 0, are fixed; round 16
+next). Cody, 2026-11-24: SR86 (settings in Legato's own file)
 and SR63 (one live service on a replacement bar) were folded into 1.1.0
 before round 10, and the review loop runs for as long as rounds keep
 finding critical or high issues (stop: a round with none, and every
@@ -187,19 +188,35 @@ docs/PLAN.md         what's left to build
    another device wrote, and that wins over anything that moved here
    unpushed (a gap's stretch, an unconfirmed resume's, a stall's, a place
    whose push failed). The one local place kept is where a push failed
-   (`unsentPush`, recorded by the failure itself), and only by a reload of
-   the same episode (Play after the player closed, a break's reload, Play
-   from a list: `play_item`'s `kept_place`): within the hour of the
+   (`unsentPush`, recorded by the failure itself): within the hour of the
    failure, and only while Pocket Casts still holds this machine's last
-   push (nobody else has written since). A loaded player needs no keep: it
-   seeks only on another device's write. A stretch that played and paused
+   push (nobody else has written since). A reload of the same episode
+   starts there (Play after the player closed, a break's reload, Play from
+   a list: `play_item`'s `kept_place`). Leaving the episode for another
+   (Next, Play from a list, the resume check following the phone to
+   another episode) takes it along (`stash_unsent` into `unsentPlaces`,
+   with where Pocket Casts had it, `left`): `retry_unsent` sends it on the
+   switch, a later poll or a Play with nothing loaded, each time only if
+   Pocket Casts still has that episode at `left` (round 15, H1: Next lost
+   it), and a reload of it starts there meanwhile (`kept_elsewhere`). A
+   loaded player needs no keep: it seeks only on another device's write. A stretch that played and paused
    again with nobody asking (a media key while Legato was off) is marked
    `unconfirmed` by the first poll (`moved_unasked`), so nothing pushes it.
    An end reached during a gap, unconfirmed, or on a resume nobody checked
    yet (`checkServer`) is no news either (`finish_current`): the record is
    read first, as a retry does, nothing is marked played if another device
    moved it (the player closes; the next Play follows Pocket Casts), and
-   nothing autoplays. Another episode's record
+   nothing autoplays. If the record can't be read (the outage that left it
+   unwatched, often), it isn't "ended here" either (`unanswered_end`): the
+   player closes and Play asks again (round 15, H2: Play played it again
+   from 0 over the phone); Play with nothing loaded fails "try again"
+   until Pocket Casts answers; a late answer that nobody carried on marks
+   it played, and Play moves on (its finish pending, or its record saying
+   played). An empty lookup is an
+   answer only as check_server has it (`empty_lookup_answers`: no record
+   ever seen, a show you don't follow, no place listed elsewhere). A retry that later finds another device
+   carried on clears `handledEnd` and closes a player left at the end
+   (L1), and Play at an end whose finish is pending asks first. Another episode's record
    (`user_episode` checks the uuid) is no answer. This covers resumes the bridge didn't cause: a poll that sees
    a pause sets `checkServer`, and a gap of `RECHECK_AFTER` (90 s) since the
    last push while playing (sleep, shell down) counts as a resume. Nothing
@@ -224,7 +241,9 @@ docs/PLAN.md         what's left to build
 5. **Don't observe mpv's `time-pos` from QML.** It changes many times a
    second and would wake the shell process each time; read it on demand.
 6. **Keep the original's security posture.** QML starts programs only
-   through closed-environment `Process` objects (tests enforce it); the
+   through closed-environment `Process` objects (tests enforce it; the one
+   exception, About's Report button, hands a fixed GitHub URL to the
+   desktop's browser with `Qt.openUrlExternally`); the
    password travels only on stdin; tokens are 0600; only
    `api.pocketcasts.com` gets the token; mpv runs with `--no-config
    --ytdl=no --tls-verify=yes` (mpv's default is no verification), loads
@@ -234,8 +253,10 @@ docs/PLAN.md         what's left to build
    capped cache files (`file://`, never a web URL); every bridge call has an
    overall deadline (`BRIDGE_DEADLINE`, an exception no handler swallows);
    mpv fetches only through the feed proxy (`bridge proxy`, below), which
-   never connects to this computer and to the local network only with
-   `localFeeds`; sign-in, sign-out and every token write hold the auth lock
+   never connects to this computer (loopback refused by class; its other
+   addresses, Wi-Fi, docker, a tailnet's or a global one, by the
+   connection showing one address at both ends: `same_address`, round 15)
+   and to the local network only with `localFeeds`; sign-in, sign-out and every token write hold the auth lock
    (`auth_lock`, innermost of the three locks) and re-read auth.json before
    writing to a session, so nothing writes back a signed-out session; no QML
    file has a native text input (`TextField`,
@@ -267,9 +288,13 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   Without a chip, the shell's service is never claimed and stays dormant;
   a panel that goes lets go of it (`claim`/`release`), and the last one
   gone leaves it dormant a moment later (`dormantAfterMs`, 3 s: a bar
-  rebuilding its widgets claims it again first). An episode playing then
-  plays on, unsynced, until it's stopped or the chip is back (whose first
-  poll asks Pocket Casts first: the 90 s gap); README Known limits.
+  rebuilding its widgets claims it again first), but not while the shell
+  has no screen at all (a docked laptop, lid shut, the monitor off: every
+  bar went with the screens, so no other bar is showing either). An
+  episode playing then plays on, unsynced, until it's stopped or the chip
+  is back (whose first poll asks Pocket Casts first: the 90 s gap); README
+  Known limits. A new service reads `status` and the player, not Up Next
+  (that loads when a panel opens): any plugin's reload re-creates it.
 - **Where do settings live?** In Legato's own file, `settings.json` in the
   state folder, written only by the bridge (`cmd_settings`: checked against
   the schema, re-read under `settings.lock` before each save, keys it
@@ -336,10 +361,13 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   next" (Next, autoplay, Play at an end, Play with nothing loaded:
   `next_in_up_next`; the resume check's "another device moved on":
   `up_next_top(skip=)`) ever picks an episode that ended here or whose
-  finish is pending (`ended_or_pending`): its removal from Up Next may be
-  pending, and played from there it started at 0, pushed in progress
-  (round 13). Only a play you chose from a list replays one, and that
-  drops its pending entry. Play on an
+  finish is pending (`ended_or_pending`), or one Pocket Casts says is
+  played (finished on another device, or marked played here, its removal
+  not in yet: a Mark played whose removal fails is a pending finish, round
+  15, M1): played from there, it started at 0, pushed in progress (round
+  13). Only a play you chose from a list replays one, and that drops its
+  pending entry; queueing it again or Mark as unplayed drops it too
+  (`forget_pending`). Play on an
   ended episode starts what was queued since (if autoplay was on) or plays
   it again (`play_again`, which pushes it as in progress itself, since
   Pocket Casts would say "played" and stop it). Play at a real end no poll
@@ -439,8 +467,9 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   after ten minutes; a failure is tried again a day later. Its player gets
   the main one's hardening (`--no-config --ytdl=no
   --clipboard-backends-clr`, no `WAYLAND_DISPLAY`) and dies with the check
-  (`setpriv --pdeathsig KILL`); a SIGTERM still removes its
-  `/tmp/legato-check-*` folder. Nothing leaves this computer.
+  (`setpriv --pdeathsig KILL`); a SIGTERM still removes its folder
+  (`legato-check-*` in Legato's private runtime folder, not /tmp). Nothing
+  leaves this computer.
 - **An end that proves nothing** (`end_unproven`): mpv at its end with
   nothing played since the load or the resume check's seek (`begun`; Pocket Casts' position past this copy of
   the file: ad-stitched copies differ per request; also an end before
@@ -658,8 +687,11 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   instance): the binding starts it again only when it re-evaluates. The
   sleep guard's restart rests on that (`sleepGuardRestart`, started first
   in `onExited`, or the failure count's change would start a guard at
-  once). The test stand-in models it (`alive`; `finish()` never writes
-  `running`).
+  once). A stopped Process (`running = false`) still sends `exited`
+  (signal 15, nothing on stdout; probed in round 15): a paste cancelled
+  drops its callback first, and the guard's `onExited` restarts nothing
+  when it's no longer wanted. The test stand-in models both (`alive`;
+  `finish()` never writes `running`; a stop sends `exited`).
 - **Omarchy's `ShellIpc`** (`qs.Commons`) is an IpcHandler the shell also
   answers over its own socket (`IpcRegistry`): `omarchy-shell <target>
   <fn>` and an `{ ipc = ... }` binding start no `qs ipc` client (about 5 ms

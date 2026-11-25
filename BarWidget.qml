@@ -7,10 +7,10 @@ import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
-// The bar chip: just the podcast glyph until an episode is loaded. While one
-// is playing or paused it grows into the show's rounded cover plus a
-// scrolling "Episode · Show" label; stopping shrinks it back to the glyph
-// until something else is played. Hosts
+// The bar chip: Legato's mark until an episode is loaded. While one is
+// playing or paused it grows into the show's rounded cover plus its
+// "Episode · Show" title (scrolling, if that's set); stopping shrinks it back
+// to the mark until something else is played. Hosts
 // the full panel on click using the same Loader + hostWidget handoff
 // omarchy.clock and ninepointlabs.spotify use, so this widget stands in for
 // the panel as the bar's popout identity.

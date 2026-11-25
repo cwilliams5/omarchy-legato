@@ -128,8 +128,8 @@ development: Node.js and, optionally, `qmllint` (Qt 6) for the tests.
 - its own entry in `~/.config/omarchy/shell.json` (where the chip sits;
   Omarchy writes it)
 - while it runs: mpv's socket in `$XDG_RUNTIME_DIR/omarchy-legato/`, and
-  once per mpv or FFmpeg update a few seconds' test folder,
-  `/tmp/legato-check-*`, removed when the check ends
+  once per mpv or FFmpeg update a few seconds' test folder beside it,
+  `legato-check-*`, removed when the check ends
 
 While the video window is shown, Legato adds its window rules to the
 running Hyprland through `hyprctl` (where the window goes, no title bar, its
@@ -151,10 +151,11 @@ Hyprland stay until it reloads its config: `hyprctl reload`, or log out.
 
 ## Resources
 
-- **Paused or idle, no process starts.** Pause, resume, seeks and the end
-  of an episode all arrive as events from mpv. Paused, one timer waits for
-  the idle unload (15 minutes by default) and starts one process when it
-  fires.
+- **Paused or idle, nothing runs on a timer.** Pause, resume, seeks and
+  the end of an episode all arrive as events from mpv. Paused, one timer
+  waits for the idle unload (15 minutes by default) and starts one process
+  when it fires. (Omarchy restarting its plugins, after any plugin's update
+  or install, makes Legato read its sign-in and the player once.)
 - **While playing,** one short Python process every 32 seconds sends your
   position to Pocket Casts (about 0.1 to 0.2 s of CPU each, depending on
   the machine), and with the video window showing, asks Hyprland where the
@@ -442,9 +443,10 @@ which stay off; a key that isn't a setting is kept and named.
   moved since the last send under 90 seconds ago. Anything older waits for
   the next resume to ask, so a pause, stop or skip here doesn't rewind your
   phone. A place this computer couldn't send (the network was down) is
-  where the episode starts again, even after the player closed, as long as
-  nobody else has moved it since (within the hour); anything your phone
-  sent since wins. An episode that ends on a resume nobody checked yet (a
+  sent once Pocket Casts can be reached, and is where the episode starts
+  again meanwhile, even after the player closed or you moved on to another
+  episode, as long as nobody else has moved it since (within the hour);
+  anything your phone sent since wins. An episode that ends on a resume nobody checked yet (a
   media key) asks Pocket Casts before it's marked played.
 - **Before sleep,** a small guard holds a logind sleep delay while an
   episode is loaded. When the computer is about to sleep it pauses the

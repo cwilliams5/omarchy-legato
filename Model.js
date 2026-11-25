@@ -31,13 +31,11 @@ var glyph = {
   refresh: "󰑐",
   refreshing: "󰑓",
   queue: "󰐕",
-  queued: "󰄬",
   played: "󰄲",
   unplayed: "󰄱",
   stop: "󰓛",
   close: "󰅖",
   signOut: "󰍃",
-  speed: "󰾆",
   stats: "󰄨"
 }
 

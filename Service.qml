@@ -13,7 +13,6 @@ import "Model.js" as Model
 Item {
   id: root
 
-  property var shell: null
   // Whether this instance does anything (bridge calls, the mpv connection,
   // timers, the sleep guard, the `legato` IPC target). The shell's own copy
   // starts dormant and wakes when a panel finds it and claims it
@@ -48,7 +47,11 @@ Item {
     id: dormantTimer
     interval: root.dormantAfterMs
     repeat: false
-    onTriggered: if (root.claims === 0) root.active = false
+    // Not with no screen at all (a docked laptop with its lid shut and the
+    // monitor off): every bar went with the screens, and no other bar is
+    // showing either; asleep, an episode playing would go unsynced and not
+    // pause before sleep.
+    onTriggered: if (root.claims === 0 && Quickshell.screens.length > 0) root.active = false
   }
 
   // ---- Settings (the Settings page), from settings.json in the state folder
@@ -441,8 +444,9 @@ Item {
       root.pythonVersion = /^[0-9]{1,3}(\.[0-9]{1,3}){1,2}$/.test(String(d.python || "")) ? d.python : ""
       root.filesVersion = typeof d.version === "string" ? d.version : ""
       if (d.settings && settingsChange === root._settingsChanges) root.applySettings(d.settings)
+      // (Up Next loads when a panel opens: refreshIfStale. A reload of any
+      // plugin re-creates this service, panel or not.)
       if (root.authenticated || d.running === true) root.refreshPlayer()
-      if (root.authenticated) root.loadUpNextIfStale()
     })
   }
 
@@ -537,6 +541,19 @@ Item {
   // then doesn't read how far the episode moved as time saved (listening
   // stats). Set by the event, so whichever poll comes next carries it.
   property bool _seekedSincePoll: false
+  // mpv events (a pause, a seek) no poll has read yet: a poll that fails
+  // (busy behind a slow push, a start failure) is tried again, a few times,
+  // rather than leave a media key's pause unread (the bridge asks Pocket
+  // Casts before the resume after one it saw).
+  property int _eventSerial: 0
+  property int _eventsRead: 0
+  property int _eventRetries: 0
+  property int eventRetryBaseMs: 2000  // (tests shorten it)
+  Timer {
+    id: unreadEventRetry
+    repeat: false
+    onTriggered: root.refreshPlayer()
+  }
 
   // The listening stats page's numbers (the bridge's `stats`): read when the
   // page opens and after each poll while one is open (statsPagesOpen,
@@ -568,8 +585,17 @@ Item {
     if (!autoplay) args.push("--no-autoplay")
     var seeked = _seekedSincePoll
     if (_seekedSincePoll) { args.push("--seeked"); _seekedSincePoll = false }
+    var events = _eventSerial
     call(args, function(result) {
       root.playerLoading = false
+      if (result.ok) {
+        root._eventsRead = Math.max(root._eventsRead, events)
+        root._eventRetries = 0
+      } else if (root._eventsRead < root._eventSerial && root._eventRetries < 3 && result.code !== "signed_out"
+                 && result.code !== "reauth" && result.code !== "dormant") {
+        unreadEventRetry.interval = root.eventRetryBaseMs * Math.pow(2, root._eventRetries++)
+        unreadEventRetry.restart()
+      }
       if (!result.ok && seeked) root._seekedSincePoll = true  // the next poll still knows
       var stale = serial !== root._changeSerial
       if (root._pollAgain || (stale && result.ok)) { root._pollAgain = false; root.settle() }
@@ -713,7 +739,7 @@ Item {
       return
     }
     if (message.event === "playback-restart") _seekedSincePoll = true
-    if (message.event === "property-change" || message.event === "playback-restart") settle()
+    if (message.event === "property-change" || message.event === "playback-restart") { _eventSerial++; settle() }
   }
 
   Socket {
@@ -784,11 +810,15 @@ Item {
     running: root.wantSleepGuard && !sleepGuardRestart.running && root._guardFailures < root.guardMaxFailures
     stdout: StdioCollector { id: sleepGuardOut; waitForEnd: true }
     onExited: {
+      // Stopped (no episode loaded, pause before sleep off): Quickshell still
+      // sends `exited`; nothing to restart, and the next episode's guard
+      // starts at once, not after the retry wait.
+      if (!root.wantSleepGuard) return
       // It exits once it has handled a sleep: read the player again, and
-      // start a fresh guard a moment later if still wanted. The restart
-      // timer first: Quickshell keeps `running`'s binding through an exit,
-      // and a change to the count below re-evaluates it, which would start
-      // a guard at once (and stop it again a moment later).
+      // start a fresh guard a moment later. The restart timer first:
+      // Quickshell keeps `running`'s binding through an exit, and a change
+      // to the count below re-evaluates it, which would start a guard at
+      // once (and stop it again a moment later).
       sleepGuardRestart.restart()
       var result = null
       try { result = JSON.parse(String(sleepGuardOut.text || "")) } catch (e) { result = null }

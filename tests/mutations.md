@@ -12,13 +12,13 @@ python3 -B tests/mutate.py .       # all of them, about 2 hours
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (434 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (480 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
 it. A mutation whose pattern no longer matches the code is reported STALE
 and fails the run (fix its pattern), as does one whose tests fail
 unmutated (SKIP).
 
-## The set (434; strict review rounds 1 to 14, 2026-11-25)
+## The set (480; strict review rounds 1 to 15, 2026-11-25)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
@@ -79,6 +79,23 @@ caught each mutant. By area:
   status, re-sign-in, the idle unload, ticks while buffering, Esc, Tab,
   closing's password and show page, the chip's click and IPC, ShellIpc,
   the sliders' wheel, rows through the fade, animations off).
+- **Round 15**: places left unsent by a switch (dropped, ignored by a
+  reload, sent over another device's move or a played episode, kept past
+  the hour, never sent by the switch or a poll) and a kept reload's own
+  record (its unsent place, its comparison with Pocket Casts' place); an
+  end Pocket Casts couldn't confirm (kept "ended here", skipped or
+  replayed by Play, confirmed never said, a watched end unconfirmed, a
+  carried retry leaving it ended or the player at its end, Play at a
+  pending end unasked, the poll or a seek reopening it, an empty lookup
+  never settling one with no record, or settling one with a record); played episodes picked by Next (sync
+  data, record) and the switch; Mark played's failed removal forgotten;
+  queueing again or Mark unplayed keeping a retry; the proxy reaching this
+  computer by another address; NaN and negative positions; an empty HOME;
+  and the QML ones (errors under the restart note, a cancelled paste
+  reported, a stopped guard waiting, dormant with no screen, Up Next
+  fetched for no panel, Alt+letter, the menu's marks, Enter and Esc with
+  the menu open, `4`, ←, the password kept, the wheel's absolute seek, a
+  failed poll after an mpv event never retried, the self-check in /tmp).
 
 ## Results
 
@@ -207,6 +224,18 @@ caught each mutant. By area:
   Play now skipping the last episode itself (its test list now includes
   the failed-lookup test), and "keys fire while typing" needed a key the
   field leaves alone (an arrow: printable keys never reach the catcher).
+- Round 14's full run: 432 of 434, the other two skipped (their tests had
+  been renamed in round 14; pointed at the current ones in round 15).
+  Round 15 (the reviewers' own): safety 2 of 6 survived (a kept reload's
+  unsent place and its comparison, now killed), fit 35 of 75 QML/JS (7
+  equivalent; the real ones planted with tests: the menu's marks, keys
+  with the menu open, `4`, ←, the password, modifiers). Round 15's set,
+  its 64 new or changed: 61 killed at first; "the reload's unsent place
+  not carried" was hidden by later failed pushes recording it again (the
+  test now checks right after the reload); a late confirmation's "ended
+  here" was a third guard over the pending entry and the record's played
+  status (removed from the code, which made "Play with nothing loaded
+  replays an end still pending" killable).
 - Equivalent and left out (round 14): `keep_local` and its rules (the
   loaded player's keep is gone: its check seeks only on another device's
   write); the Stats/About keys while typing (the field takes printable

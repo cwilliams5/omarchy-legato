@@ -45,7 +45,12 @@ FocusScope {
 
   function cancelPaste() {
     _pasteSerial++
-    if (_paste && _paste.running) _paste.running = false  // the bridge kills wl-paste's group on SIGTERM
+    if (_paste) {
+      // Stopped on purpose: Quickshell still sends `exited`, with nothing on
+      // stdout, which the service would report as "returned nothing".
+      _paste.callback = null
+      if (_paste.running) _paste.running = false  // the bridge kills wl-paste's group on SIGTERM
+    }
     _paste = null
   }
 

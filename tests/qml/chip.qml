@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell
 import Quickshell.Io
 import qs.Commons
 import "../.." as Legato
@@ -102,9 +103,11 @@ Item {
                    top.sleepGuardSwitch, top.guardBackOff, top.socketRetries, top.staleStatus,
                    top.noticesOnce, top.quietReloads, top.chipShapes, top.idleWheel, top.idleWheelCheck, top.marquee,
                    top.touchpad, top.touchpadCheck, top.liveStatus, top.liveStatusCheck, top.guardBack,
-                   top.guardRestart, top.guardRestartCheck, top.mpvEvents, top.pauseEvent, top.pauseEventPoll, top.seekEventPoll,
+                   top.guardRestart, top.guardRestartCheck, top.mpvEvents, top.pauseEvent, top.pauseEventPoll, top.pauseEventRetry,
+                   top.pauseEventRead, top.seekEventPoll,
                    top.toggles, top.idleUnload, top.volumeDebounce, top.volumeDebounceCheck, top.importFromBar,
-                   top.ipcStopAndSpeed, top.ipcStopAndSpeedCheck, top.signOutLists]
+                   top.ipcStopAndSpeed, top.ipcStopAndSpeedCheck, top.signOutLists,
+                   top.guardStopped, top.noScreens, top.noScreensCheck]
       if (top.step >= steps.length) { stop(); Qt.exit(top.failures); return }
       if (top.waits === 0) top.stepStarted = Date.now()
       // A step returns false to wait for a debounced call (up to 2 s).
@@ -128,6 +131,9 @@ Item {
     check("the hand-over wakes the shell's copy (the panel claims it)", shared.active === true, shared.active)
     check("the chip and its panel use the shell's copy", chip.service === shared, chip.service)
     answerAll(top.answers)
+    // Signed in, with no panel opened: no Up Next fetch (every plugin reload
+    // re-creates the service; the panel loads it when it opens).
+    check("no list is fetched for a panel nobody opened", calls("up-next").length === 0, calls("up-next").length)
     answerAll(top.answers)
     check("signed in, with the saved settings", shared.authenticated && shared.skipForwardSeconds === 45, shared.skipForwardSeconds)
     shared.applyPlayer(top.playing)
@@ -383,7 +389,20 @@ Item {
     if (Date.now() - top.stepStarted < 800) return false  // the settle delay (600 ms)
     check("a pause change from mpv brings a poll", calls("player").length === 1,
           running().map(function(p) { return (argsOf(p) || []).join(" ") }).join("; "))
+    // It fails (busy behind a slow push): tried again, the pause still unread.
+    shared.eventRetryBaseMs = 300
+    calls("player")[0].finish(0, JSON.stringify({ ok: false, code: "busy", error: "Legato is busy" }), "")
+  }
+  function pauseEventRetry() {
+    if (Date.now() - top.stepStarted < 450) return false  // the first retry's wait
+    check("a poll that failed with an mpv event unread is tried again", calls("player").length === 1,
+          running().map(function(p) { return (argsOf(p) || []).join(" ") }).join("; "))
     answerAll(top.answers)
+  }
+  function pauseEventRead() {
+    if (Date.now() - top.stepStarted < 900) return false
+    check("and not again once one read it", calls("player").length === 0, calls("player").length)
+    shared.eventRetryBaseMs = 2000
     eventSocket.parser.read(JSON.stringify({ event: "playback-restart" }))
   }
   // A click on the chip opens the panel and closes it again; so does the
@@ -475,6 +494,35 @@ Item {
     check("signing out forgets the account's lists", shared.upNext.length === 0 && shared.authenticated === false,
           shared.upNext.length + " " + shared.authenticated)
     answerAll(top.answers)
+  }
+
+  // A guard stopped on purpose (the episode unloaded) sends `exited` too:
+  // the next episode's guard starts at once, not after the retry wait.
+  function guardStopped() {
+    answerAll(top.answers)
+    shared.guardRetryBaseMs = 3000
+    shared.applyPlayer(top.playing)
+    if (guards().length === 0) return false
+    shared.applyPlayer({ active: false, playing: false, item: null })
+    shared.applyPlayer(top.playing)
+    check("after a stop, the next episode's guard starts at once", guards().length === 1, guards().length)
+  }
+  // With no screen at all, the service stays awake (it would otherwise go
+  // dormant with every bar gone: no syncing, no pause before sleep).
+  property int heldClaims: 0
+  function noScreens() {
+    answerAll(top.answers)
+    Quickshell.screens = []
+    shared.dormantAfterMs = 100
+    top.heldClaims = shared.claims
+    for (var i = 0; i < top.heldClaims; i++) shared.release()
+  }
+  function noScreensCheck() {
+    if (Date.now() - top.stepStarted < 400) return false
+    check("with no screen at all the service stays awake", shared.active === true, shared.active)
+    Quickshell.screens = [{ name: "test" }]
+    for (var i = 0; i < top.heldClaims; i++) shared.claim()
+    shared.dormantAfterMs = 3000
   }
 
   function seekEventPoll() {

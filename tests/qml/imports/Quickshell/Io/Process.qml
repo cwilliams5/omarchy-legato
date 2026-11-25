@@ -20,11 +20,16 @@ QtObject {
   function write(text) { written += text }
   // A user of Process that declares its own `started` property hides the
   // signal from this file (Service's interpreter probe does): skip it then.
+  // As Quickshell's (probed): a process stopped (`running = false`) still
+  // sends `exited` (signal 15); one that never started sends nothing.
   onRunningChanged: {
-    alive = running
-    if (!running) return
+    if (!running) {
+      if (alive) { alive = false; exited(15, 1) }
+      return
+    }
     Processes.add(p)
     if (Processes.failStarts) { running = false; return }
+    alive = true
     if (typeof started === "function") started()
   }
   function finish(code, out, err) {

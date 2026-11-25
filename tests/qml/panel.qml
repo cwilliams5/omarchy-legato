@@ -148,8 +148,6 @@ Item {
     var service = panel.service
     service.python = "/usr/bin/python3"  // no interpreter probe
     service.authenticated = true
-    // Omarchy's shell refuses a third-party plugin's OSD summon: none here.
-    service.shell = {}
     var keys = find(panel, function(i) { return typeof i.textKey === "function" && "blocked" in i })
     var card = find(panel, function(i) { return typeof i.fittedContentHeight === "function" })
     var statsView = named("statsView")
@@ -401,10 +399,18 @@ Item {
     for (var lay = progress; lay; lay = lay.parent) if (typeof lay.forceLayout === "function") lay.forceLayout()
     for (lay = volume; lay; lay = lay.parent) if (typeof lay.forceLayout === "function") lay.forceLayout()
     for (var w = 0; w < 4; w++) events.mouseWheel(progress, 20, 5, 0, 30)
-    check("four small deltas over the progress bar: one 10 s step", service._seekTarget === 21 && service.localPosition === 21,
-          service._seekTarget + " " + service.localPosition)
+    // Relative, as the skip buttons (strict review 15, L2: an absolute place
+    // from the last poll could land behind where a resume check moved it).
+    check("four small deltas over the progress bar: one 10 s step, relative",
+          service._seekDelta === 10 && service._seekTarget === -1 && Math.round(service.localPosition) === 21,
+          service._seekDelta + " " + service._seekTarget + " " + service.localPosition)
     events.mouseWheel(progress, 20, 5, 120, 0)
-    check("a sideways swipe over it: nothing", service._seekTarget === 21, service._seekTarget)
+    check("a sideways swipe over it: nothing", service._seekDelta === 10, service._seekDelta)
+    service.sendSeek()
+    check("sent as a relative seek", calls("seek").some(function(p) { return p.command.indexOf("--relative") >= 0
+                                                                     && p.command[p.command.length - 1] === "10" }),
+          calls("seek").map(function(p) { return p.command.slice(-4).join(" ") }).join("; "))
+    calls("seek").forEach(function(p) { p.finish(0, JSON.stringify({ ok: true, data: {} }), "") })
     service.cancelSeek()
     var loudness = service.volume
     for (w = 0; w < 4; w++) events.mouseWheel(volume, 20, 5, 0, -30)
@@ -503,20 +509,78 @@ Item {
     email.text = "me"
     events.keyClick(Qt.Key_V, Qt.ControlModifier)
     check("(Ctrl+V asks for the clipboard)", exactly("paste").length === 1, exactly("paste").length)
+    service.actionError = ""
     keys.forceActiveFocus()
     answerExactly("paste", { text: "@example.com" })
     check("a paste under way when focus moves is dropped", email.text === "me", email.text)
+    check("quietly (Quickshell sends exited for a stopped paste, with nothing on stdout)", service.actionError === "",
+          service.actionError)
+    // A sign-in: the password doesn't stay in the panel after it's sent.
+    named("passwordField").text = "hunter2"
+    panel.signIn()
+    check("(sign-in sent)", exactly("login").length === 1, exactly("login").length)
+    check("the password is cleared once it's sent", named("passwordField").text === "", named("passwordField").text)
+    answerExactly("login", { authenticated: true, email: "me@example.com" })
     service.authenticated = true
+    settle()
+    panel.close()
+
+    // The right-click menu marks what it says; with it open, Esc closes it
+    // (not the panel), and Enter and Space don't act on the row behind it.
+    panel.open()
+    settle()
+    var unplayed = { type: "episode", uuid: "aaaaaaaa-0000-0000-0000-00000000000c", podcast: "bbbbbbbb-0000-0000-0000-000000000001",
+                     name: "Another", show: "A show", duration: 100, playedUpTo: 0, status: 1 }
+    var entries = panel.menuEntries(unplayed)
+    var mark = entries.filter(function(e) { return e.label === "Mark as played" })
+    check("an unplayed episode's menu offers Mark as played", mark.length === 1 && mark[0].id === "played", JSON.stringify(entries))
+    panel.openMenu(unplayed, 0, 0)
+    panel.menuAction("played")
+    check("and it marks it played", calls("mark played " + unplayed.uuid).length === 1,
+          Processes.started.filter(function(p) { try { return p.alive } catch (e) { return false } })
+            .map(function(p) { return p.command.slice(-5).join(" ") }).join("; "))
+    settle()
+    var played = JSON.parse(JSON.stringify(unplayed))
+    played.status = 3
+    mark = panel.menuEntries(played).filter(function(e) { return e.label === "Mark as unplayed" })
+    check("a played one's offers Mark as unplayed", mark.length === 1 && mark[0].id === "unplayed", JSON.stringify(mark))
+    panel.openMenu(unplayed, 0, 0)
+    keys.forceActiveFocus()
+    events.keyClick(Qt.Key_Return)
+    events.keyClick(Qt.Key_Space)
+    check("Enter and Space don't act behind an open menu", calls("play").length === 0 && exactly("toggle").length === 0
+          && calls("pause").length === 0, calls("play").length + " " + exactly("toggle").length)
+    keys.closeRequested()
+    check("Esc closes the menu, not the panel", panel.menuItem === null && panel.opened === true,
+          panel.menuItem + " " + panel.opened)
+    // Keys: 4 is the shows tab; Alt+n isn't Next; ← leaves a show's page.
+    keys.textKey("4", 0)
+    check("4 opens your shows", panel.currentTab === "podcasts", panel.currentTab)
+    settle()
+    keys.textKey("n", Qt.AltModifier)
+    check("Alt+n is not the panel's n", calls("next").length === 0, calls("next").length)
+    service.openDetail({ type: "podcast", uuid: "bbbbbbbb-0000-0000-0000-00000000000d", name: "Show D" })
+    keys.moveRequested(-1, 0)
+    check("left goes back from a show's page", service.detail === null, JSON.stringify(service.detail))
+    keys.textKey("1", 0)
     settle()
     panel.close()
 
     // Updated on disk, not yet restarted: the files say a newer version than
     // this code (Quickshell keeps the QML it compiled): the panel asks for a
     // restart; the same version says nothing.
+    service.actionError = ""  // (an earlier check's error and flash, whose clearing timers never ran)
+    service.actionStatus = ""
     service.refresh()
     answerExactly("status", { authenticated: true, mpv: "/usr/bin/mpv", socket: "", python: "3.14", version: "9.9.9",
                               settings: top.savedSettings })
     check("files newer than the running code: restart the shell", panel.statusText === panel.restartNote, panel.statusText)
+    // But an error still shows first (strict review 15: the note hid "Stream
+    // ends here: mark it played" and every other error until a restart).
+    service.reportError("Stream ends here: mark it played.")
+    check("an error shows over the restart note", panel.statusText === "Stream ends here: mark it played.", panel.statusText)
+    service.actionError = ""
+    check("and the note comes back after it", panel.statusText === panel.restartNote, panel.statusText)
     settle()
     service.refresh()
     answerExactly("status", { authenticated: true, mpv: "/usr/bin/mpv", socket: "", python: "3.14", version: Model.qmlVersion,

@@ -233,11 +233,14 @@ Panel {
 
   readonly property string statusText: {
     if (!service) return ""
-    if (!serviceCurrent || service.updatedOnDisk) return restartNote
+    if (!serviceCurrent) return restartNote
     if (service.actionError !== "") return service.actionError
     if (service.actionStatus !== "") return service.actionStatus
     if (service.playerError !== "") return service.playerError
     if (service.lastError !== "") return service.lastError
+    // Updated on disk: said whenever no error is (an error still shows,
+    // "Stream ends here" above all).
+    if (service.updatedOnDisk) return restartNote
     if (!authenticated) return ""
     if (!service.mpvInstalled) return "mpv is not installed — run: omarchy pkg add mpv"
     if (service.buffering) return "Buffering…"
@@ -576,7 +579,10 @@ Panel {
       }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onDeleteRequested: { if (root.pageOpen || root.menuItem) return; root.removeCursor() }
-      onTextKey: function(t) {
+      onTextKey: function(t, modifiers) {
+        // Alt+, Ctrl+ or Super+ a letter is a shortcut for something else
+        // (the catcher passes the modifiers): not one of the panel's keys.
+        if (modifiers & (Qt.AltModifier | Qt.ControlModifier | Qt.MetaModifier)) return
         if (t === "i") { root.setAbout(!root.showAbout); return }
         if (t === "g") { root.setSettings(!root.showSettings); return }
         if (t === "a") { root.setStats(!root.showStats); return }
@@ -1034,9 +1040,12 @@ Panel {
                   trackHeight: Style.space(4)
                   onReleased: function(v) { if (root.service) root.service.seek(v) }
 
+                  // Relative, as the skip buttons: an absolute place worked out
+                  // from the last poll's position could land behind where a
+                  // resume check just moved it, and be pushed (strict review 15).
                   WheelNotches {
                     onNotch: function(steps) {
-                      if (root.service) root.service.seek(Math.max(0, Math.min(progressSlider.maximum, root.position + steps * progressSlider.step)))
+                      if (root.service) root.service.skip(steps * progressSlider.step)
                     }
                   }
                 }
