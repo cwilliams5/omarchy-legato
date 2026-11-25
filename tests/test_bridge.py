@@ -3531,6 +3531,12 @@ class QmlPages(unittest.TestCase):
         # keys, the Stats page's reads and errors, the seek flag.
         self.run_qml("panel.qml")
 
+    def test_one_live_service_and_settings_that_outlive_the_bar_entry(self):
+        # SR63 and SR86 (tests/qml/service.qml): the shell's copy dormant
+        # until a panel claims it, a replacement bar's panel running its own;
+        # settings from settings.json, the bar entry copied in once.
+        self.run_qml("service.qml")
+
 
 class PrefsLock(TempHome):
     """prefs.json is changed from several processes at once (a click, the
@@ -3556,6 +3562,119 @@ class PrefsLock(TempHome):
         worker.join(5)
         self.assertEqual(done[0]["data"]["trim"], "mild")
         self.assertEqual(bridge.load_prefs()["trim"], "mild")
+
+
+class SettingsFile(TempHome):
+    """The Settings page's settings live in settings.json in the state folder
+    (SR86): Omarchy deletes the widget's bar entry, where they used to be,
+    whenever the plugin is turned off. The entry is copied in once; a file
+    that can't be read is never saved over."""
+
+    def path(self):
+        return os.path.join(self.home, ".local/state/omarchy-legato/settings.json")
+
+    def write(self, text, mode=0o600):
+        os.makedirs(os.path.dirname(self.path()), mode=0o700, exist_ok=True)
+        with open(self.path(), "w") as f:
+            f.write(text)
+        os.chmod(self.path(), mode)
+
+    def saved(self):
+        with open(self.path()) as f:
+            return json.load(f)
+
+    def test_the_schema_is_the_manifests_and_its_defaults_are_valid(self):
+        schema = bridge.settings_schema()
+        manifest = json.loads((ROOT / "manifest.json").read_text())["barWidget"]
+        self.assertEqual([e["key"] for e in schema], [e["key"] for e in manifest["schema"]])
+        for entry in schema:
+            self.assertEqual(bridge.setting_value(entry, entry["defaultValue"]), entry["defaultValue"], entry["key"])
+            self.assertEqual(manifest["defaults"][entry["key"]], entry["defaultValue"], entry["key"])
+        self.assertEqual(set(bridge.SETTINGS_SAFE) - {e["key"] for e in schema}, set())
+
+    def test_no_file_reads_the_defaults(self):
+        view = run_bridge("settings")["data"]
+        self.assertEqual(view["values"]["autoplay"], True)
+        self.assertEqual(view["values"]["unloadAfterMinutes"], 15)
+        self.assertEqual((view["stored"], view["writable"], view["problem"]), (False, True, ""))
+        self.assertEqual(view["path"], "~/.local/state/omarchy-legato/settings.json")
+        self.assertFalse(os.path.exists(self.path()))  # reading writes nothing
+        self.assertEqual(run_bridge("status")["data"]["settings"], view)
+
+    def test_the_bar_entry_is_copied_once(self):
+        entry = {"id": "io.github.cwilliams5.legato", "autoplay": False, "skipBack": 20, "maxLabelWidth": 5000,
+                 "defaultTab": "nowhere", "junk": 1}
+        view = run_bridge("settings", "import", "--", json.dumps(entry))["data"]
+        self.assertEqual(self.saved(), {"autoplay": False, "skipBack": 20})  # only valid settings
+        self.assertEqual((view["values"]["autoplay"], view["values"]["skipBack"], view["stored"]), (False, 20, True))
+        self.assertEqual(oct(os.stat(self.path()).st_mode & 0o777), "0o600")
+        run_bridge("settings", "import", "--", json.dumps({"autoplay": True, "skipBack": 30}))
+        self.assertEqual(self.saved(), {"autoplay": False, "skipBack": 20})  # a second start changes nothing
+        os.remove(self.path())  # a fresh entry, `{ id }`, still creates the file
+        run_bridge("settings", "import", "--", json.dumps({"id": "io.github.cwilliams5.legato"}))
+        self.assertEqual(self.saved(), {})
+        self.assertIs(run_bridge("settings")["data"]["stored"], True)
+
+    def test_a_change_is_checked_and_keeps_the_rest(self):
+        self.write(json.dumps({"skipBack": 20, "note": "mine", "autoplay": "yes"}), 0o644)  # an editor's 0644 is fine
+        view = run_bridge("settings")["data"]
+        self.assertTrue(view["writable"])
+        self.assertEqual(view["values"]["autoplay"], True)  # not valid: the default...
+        self.assertIn("autoplay", view["problem"])            # ...and said
+        view = run_bridge("settings", "set", "--", "skipForward", "45")["data"]
+        self.assertEqual(self.saved(), {"skipBack": 20, "note": "mine", "autoplay": "yes", "skipForward": 45})
+        self.assertEqual(view["values"]["skipForward"], 45)
+        for key, value in (("skipForward", "4"), ("skipForward", "301"), ("skipForward", "true"), ("unloadAfterMinutes", "true"), ("skipForward", "\"30\""),
+                           ("autoplay", "1"), ("defaultTab", "\"nowhere\""), ("nope", "1"), ("skipBack", "{")):
+            result = run_bridge("settings", "set", "--", key, value)
+            self.assertFalse(result["ok"], (key, value))
+        self.assertEqual(self.saved()["skipForward"], 45)
+        self.assertFalse(run_bridge("settings", "set", "--", "skipBack")["ok"])
+        with self.assertRaises(SystemExit), mock.patch("sys.stderr", io.StringIO()):
+            run_bridge("settings", "nonsense")  # argparse refuses it, as any unknown subcommand word
+        run_bridge("settings", "set", "--", "maxLabelWidth", "240.0")  # a whole number written as a float
+        self.assertEqual(self.saved()["maxLabelWidth"], 240)
+
+    def test_a_file_that_cant_be_read_is_never_saved_over(self):
+        for text in ("{bad", "[1, 2]", "\xff"):
+            with self.subTest(text=text):
+                self.write(text)
+                view = run_bridge("settings")["data"]
+                self.assertFalse(view["writable"])
+                self.assertTrue(view["stored"])
+                self.assertIn("settings.json", view["problem"])
+                self.assertEqual((view["values"]["autoplay"], view["values"]["unloadAfterMinutes"]), (False, 0))
+                self.assertEqual(view["values"]["pauseOnSleep"], True)
+                result = run_bridge("settings", "set", "--", "skipBack", "20")
+                self.assertEqual(result["code"], "settings_unreadable")
+                run_bridge("settings", "import", "--", json.dumps({"skipBack": 20}))
+                with open(self.path(), encoding="utf-8", errors="replace") as f:
+                    self.assertEqual(f.read(), text.encode("utf-8").decode("utf-8", "replace"))
+        self.write("{}", 0o666)  # others can write it: not trusted
+        self.assertFalse(run_bridge("settings")["data"]["writable"])
+        os.remove(self.path())
+        os.symlink("/etc/hostname", self.path())
+        view = run_bridge("settings")["data"]
+        self.assertFalse(view["writable"])
+        self.assertIn("symbolic link", view["problem"])
+
+    def test_status_answers_even_without_the_schema(self):
+        with mock.patch.object(bridge, "settings_schema", side_effect=OSError("gone")):
+            view = run_bridge("status")["data"]["settings"]
+        self.assertFalse(view["writable"])
+        self.assertEqual(view["values"], bridge.SETTINGS_SAFE)
+
+    def test_changes_wait_for_each_other(self):
+        done = []
+        with bridge.StateLock(name="settings.lock"):
+            worker = threading.Thread(target=lambda: done.append(run_bridge("settings", "set", "--", "skipBack", "20")))
+            worker.start()
+            time.sleep(0.3)
+            self.assertTrue(worker.is_alive())
+            self.write(json.dumps({"skipForward": 45}))  # another change, saved meanwhile
+        worker.join(5)
+        self.assertTrue(done[0]["ok"])
+        self.assertEqual(self.saved(), {"skipForward": 45, "skipBack": 20})  # read again under the lock
 
 
 REAL_FEED_ADDRESS_ALLOWED = bridge.feed_address_allowed
@@ -3770,7 +3889,8 @@ class AboutTests(TempHome):
         self.assertIn("~/.local/state/omarchy-legato/auth.json", privacy)
         self.assertIn("0600", privacy)
         self.assertIn("~/.cache/omarchy-legato/art", privacy)
-        self.assertIn("~/.config/omarchy/shell.json", privacy)
+        self.assertIn("your settings", privacy)  # settings.json, beside auth.json
+        self.assertNotIn("shell.json", privacy)  # no longer kept in the bar entry (SR86)
         self.assertIn("password is never stored", privacy)
         self.assertIn("every %d seconds" % bridge.SYNC_INTERVAL, privacy)
         self.assertIn("%d-minute" % (bridge.PODCASTS_CACHE_SECONDS // 60), privacy)

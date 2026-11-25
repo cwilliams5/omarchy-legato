@@ -27,16 +27,25 @@ Panel {
   readonly property var barIdentity: hostWidget || root
 
   // One service per shell — every bar widget and every open panel reads the
-  // same instance. A shell without service support gets a local one.
+  // same instance. A shell without service support, or a bar that replaces
+  // Omarchy's (it hides the shell's service from its widgets), gets a local
+  // one; the shell's then stays dormant, since no panel claims it.
   readonly property var sharedService: bar && bar.shell && typeof bar.shell.serviceFor === "function"
     ? bar.shell.serviceFor(moduleName) : null
   readonly property var service: sharedService || (localService.item || null)
 
-  function pushSettings() { if (service) service.settings = settings }
+  function claimService() { if (sharedService && sharedService.active !== true) sharedService.active = true }
+  onSharedServiceChanged: claimService()
+  // The widget's bar entry (`settings`, injected by BarWidget) goes to the
+  // service only for the one-time copy of Legato 1.0's settings into
+  // settings.json; the settings in use are the service's (from that file).
+  // Not before the bar has injected it (settled).
+  function pushSettings() { if (service && settled) service.entrySettings = settings || ({}) }
   onSettingsChanged: pushSettings()
   onServiceChanged: pushSettings()
+  onSettledChanged: pushSettings()
   Component.onCompleted: {
-    pushSettings()
+    claimService()
     Qt.callLater(function() { root.settled = true })  // see localService
   }
 
@@ -49,7 +58,7 @@ Panel {
 
   // ---------------------------------------------------------------- state --
 
-  property string currentTab: setting("defaultTab", "upnext")
+  property string currentTab: service ? service.setting("defaultTab", "upnext") : "upnext"
   property int cursorIndex: -1
   property bool countedOpen: false
   property bool _returnFired: false
@@ -97,7 +106,11 @@ Panel {
 
   function setSettings(on) {
     showSettings = !!on
-    if (showSettings) { showAbout = false; showStats = false; closeMenu() }
+    if (showSettings) {
+      showAbout = false; showStats = false; closeMenu()
+      // Read again on opening: a change made outside the page shows here.
+      if (service) { service.settingsError = ""; service.readSettings() }
+    }
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
@@ -204,14 +217,11 @@ Panel {
 
   // ------------------------------------------------------------ actions --
 
+  // Saved by the service to settings.json (never to the bar entry, which
+  // Omarchy deletes when the plugin is turned off).
   function persistSettings(values) {
-    var entry = { id: root.moduleName }
-    for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]
-    for (var key in values) entry[key] = values[key]
-    root.settings = entry
-    if (root.hostWidget && "settings" in root.hostWidget) root.hostWidget.settings = entry
-    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
-      root.bar.shell.updateEntryInline(root.moduleName, entry)
+    if (!service) return
+    for (var key in values) service.changeSetting(key, values[key])
   }
 
   function setTab(name) {
@@ -366,17 +376,17 @@ Panel {
     })
   }
 
-  // Made only when the shell has no service to share: an idle copy would
-  // still register the `legato` IPC target, and whichever registers first
-  // takes it (the shell log warned of the second at every start). Not
-  // before the bar has handed itself over (BarWidget injects it just after
-  // loading this panel): until then there's no telling.
+  // Made only when the shell has no service to share (none at all, or one
+  // a replacement bar hides): awake from the start, while the shell's copy,
+  // never claimed, stays dormant. Not before the bar has handed itself over
+  // (BarWidget injects it just after loading this panel): until then
+  // there's no telling.
   property bool settled: false
   Loader {
     id: localService
     objectName: "localService"
     active: root.settled && root.sharedService === null
-    sourceComponent: Service {}
+    sourceComponent: Service { active: true }
   }
 
   // ------------------------------------------------------------- pieces --
@@ -619,7 +629,9 @@ Panel {
         fontFamily: root.fontFamily
         schema: root.manifestData && root.manifestData.barWidget ? (root.manifestData.barWidget.schema || []) : []
         defaults: root.manifestData && root.manifestData.barWidget ? (root.manifestData.barWidget.defaults || {}) : ({})
-        values: root.settings || ({})
+        values: root.service ? root.service.settings : ({})
+        problem: root.service ? (root.service.settingsError || root.service.settingsProblem) : ""
+        savedIn: root.service ? root.service.settingsPath : ""
         videoTransparency: root.service ? root.service.videoTransparency : 0
         videoPinned: !root.service || root.service.videoPinned
         onVideoTransparencyRequested: function(level) { if (root.service) root.service.setVideoTransparency(level) }

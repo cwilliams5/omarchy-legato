@@ -3344,7 +3344,18 @@ def cmd_status(args):
         "socket": player_socket(),
         "last": chip_item(episode),
         "python": "%d.%d.%d" % sys.version_info[:3],  # for the About page
+        "settings": status_settings(),
     })
+
+
+def status_settings():
+    """settings_view for `status`, which must answer even when the settings
+    can't be worked out (then: the safe defaults, nothing saved)."""
+    try:
+        return settings_view()
+    except (ApiError, OSError) as err:
+        return {"values": dict(SETTINGS_SAFE), "stored": True, "writable": False,
+                "problem": "Settings unavailable: %s" % (getattr(err, "message", None) or err), "path": settings_path()}
 
 
 def read_credentials():
@@ -4253,6 +4264,166 @@ def cmd_stats(args):
     out(view)
 
 
+# ---- Settings (the Settings page: skip lengths, autoplay, the idle unload,
+#      pause before sleep, the chip's title, the first tab). They live in
+#      settings.json in the state folder, not in the widget's entry in
+#      Omarchy's shell.json: Omarchy deletes that entry whenever the plugin is
+#      disabled or its chip dragged off the bar, and the settings went with
+#      it. Written only here, only on a change from the page (`settings set`)
+#      or the one-time copy of a 1.0 entry (`settings import`).
+
+SETTINGS_FILE = "settings.json"
+# What a settings.json that can't be read leaves on: the defaults, except the
+# two that act by themselves (start the next episode, close the player), so a
+# broken file never undoes a choice that kept Legato from acting.
+SETTINGS_SAFE = {"autoplay": False, "unloadAfterMinutes": 0}
+
+
+def settings_schema():
+    """The settings, as manifest.json's barWidget.schema lists them (the
+    Settings page is drawn from the same list), from the plugin folder this
+    bridge runs from: the bridge's own code is there, so it's as trusted as
+    the bridge."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "manifest.json")
+    with open(path, "rb") as f:
+        blob = f.read(STATE_MAX_BYTES + 1)
+    if len(blob) > STATE_MAX_BYTES:
+        raise ApiError("bad_manifest", "manifest.json is too large")
+    try:
+        schema = json.loads(blob.decode("utf-8"))["barWidget"]["schema"]
+    except (UnicodeDecodeError, ValueError, KeyError, TypeError):
+        raise ApiError("bad_manifest", "manifest.json lists no settings")
+    return [entry for entry in schema if isinstance(entry, dict) and isinstance(entry.get("key"), str)]
+
+
+def setting_value(entry, value):
+    """`value` if schema `entry` allows it, else None."""
+    kind = entry.get("type")
+    if kind == "boolean":
+        return value if isinstance(value, bool) else None
+    if kind == "integer":
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        low, high = entry.get("min"), entry.get("max")
+        if (isinstance(low, (int, float)) and value < low) or (isinstance(high, (int, float)) and value > high):
+            return None
+        return value
+    if kind == "enum":
+        return value if isinstance(value, str) and value in (entry.get("options") or []) else None
+    return None
+
+
+def read_settings():
+    """settings.json as (data, problem). data is None when there's no file;
+    problem says why a file that's there can't be read whole (not JSON, not
+    an object, unsafe), and then nothing may be saved over it. Others may
+    read it (an editor's new file is 0644), not write it."""
+    try:
+        with state_dir() as held:
+            blob = read_file_at(held, SETTINGS_FILE, STATE_MAX_BYTES, private=False)
+    except FileNotFoundError:
+        return None, ""
+    except UnsafePath as err:
+        return None, "%s: %s" % (SETTINGS_FILE, err.message)
+    if blob is None:
+        return None, ""
+    try:
+        data = json.loads(blob.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None, "%s isn't valid JSON" % SETTINGS_FILE
+    if not isinstance(data, dict):
+        return None, "%s isn't a JSON object" % SETTINGS_FILE
+    return data, ""
+
+
+def settings_path():
+    """Where settings.json is, for the page: with ~ for the home folder."""
+    path = os.path.join(xdg_home("XDG_STATE_HOME", ".local", "state"), "omarchy-legato", SETTINGS_FILE)
+    base = home().rstrip("/")
+    return "~" + path[len(base):] if base and path.startswith(base + "/") else path
+
+
+def settings_view(schema=None):
+    """Every setting's value in use: the file's where it's valid, else the
+    default (a broken file: SETTINGS_SAFE over the defaults). `stored`: a
+    file is there (so no import); `writable`: a change may be saved;
+    `problem`: what's wrong, for the page."""
+    schema = settings_schema() if schema is None else schema
+    data, problem = read_settings()
+    values, invalid = {}, []
+    for entry in schema:
+        key = entry["key"]
+        value = entry.get("defaultValue")
+        if problem:
+            value = SETTINGS_SAFE.get(key, value)
+        elif data and key in data:
+            valid = setting_value(entry, data[key])
+            if valid is None:
+                invalid.append(key)
+            else:
+                value = valid
+        values[key] = value
+    writable = not problem
+    if problem:
+        problem += ": not saved until it's fixed or deleted. Autoplay and the idle unload are off meanwhile."
+    elif invalid:
+        problem = "%s: %s not valid, so the default is used" % (SETTINGS_FILE, ", ".join(invalid))
+    return {"values": values, "stored": data is not None or not writable, "writable": writable,
+            "problem": problem, "path": settings_path()}
+
+
+def cmd_settings(args):
+    """The settings in use (settings_view), after an optional change:
+    `set [--] <key> <json value>` saves one setting, checked against the schema,
+    re-reading the file first under its own lock so nothing else in it is
+    lost (keys it doesn't know included); `import <json object>` copies the
+    widget's old bar entry into a settings.json that doesn't exist yet (each
+    setting the schema allows; nothing else), once: with a file there it
+    changes nothing. Neither writes over a file that can't be read."""
+    schema = settings_schema()
+    words = list(args.words or [])
+    if args.action is None and words:
+        raise ApiError("bad_args", "settings: set or import?")
+    if args.action in ("set", "import"):
+        if len(words) != (2 if args.action == "set" else 1):
+            raise ApiError("bad_args", "settings %s: wrong number of arguments" % args.action)
+        with StateLock(timeout=5.0, name="settings.lock"):
+            data, problem = read_settings()
+            if args.action == "set":
+                key, raw = words
+                entry = next((e for e in schema if e["key"] == key), None)
+                if entry is None:
+                    raise ApiError("bad_args", "No such setting: %s" % key)
+                try:
+                    value = setting_value(entry, json.loads(raw))
+                except ValueError:
+                    value = None
+                if value is None:
+                    raise ApiError("bad_args", "Not a valid value for %s" % key)
+                if problem:
+                    raise ApiError("settings_unreadable", problem + ": not saved")
+                data = dict(data or {})
+                data[key] = value
+                save_state(SETTINGS_FILE, data)
+            elif data is None and not problem:
+                try:
+                    entry_values = json.loads(words[0])
+                except ValueError:
+                    entry_values = None
+                if not isinstance(entry_values, dict):
+                    raise ApiError("bad_args", "settings import: not a JSON object")
+                copied = {}
+                for entry in schema:
+                    if entry["key"] in entry_values:
+                        valid = setting_value(entry, entry_values[entry["key"]])
+                        if valid is not None:
+                            copied[entry["key"]] = valid
+                save_state(SETTINGS_FILE, copied)
+    out(settings_view(schema))
+
+
 def cmd_mark(args):
     uuid = safe_uuid(args.uuid)
     podcast = safe_uuid(args.podcast)
@@ -4375,6 +4546,8 @@ def build_parser():
     sub.add_parser("sleepguard").set_defaults(fn=cmd_sleepguard)
     sub.add_parser("next").set_defaults(fn=cmd_next)
     p = sub.add_parser("stop"); p.add_argument("--if-paused", action="store_true"); p.set_defaults(fn=cmd_stop)
+    p = sub.add_parser("settings"); p.add_argument("action", nargs="?", choices=("set", "import"))
+    p.add_argument("words", nargs="*"); p.set_defaults(fn=cmd_settings)
     p = sub.add_parser("stats"); p.add_argument("value", nargs="?", choices=("on", "off", "clear"))
     p.set_defaults(fn=cmd_stats)
 

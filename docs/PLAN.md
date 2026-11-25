@@ -716,9 +716,10 @@ only ever used the suite's plain-http fake.
   (Play follows the phone).
 - [x] SR45 (low) Skip-outro off when Pocket Casts lists no duration:
   documented (README) and tested.
-- [ ] SR46 (low) media/stats.png predates the Stats page's On/Off and Clear:
-  re-shoot on an empty workspace, with Cody's OK (Bitwarden on workspace 1
-  blacks out captures).
+- [x] SR46 (low; moved: open under "Before round 10") media/stats.png predates the Stats page's On/Off and Clear:
+  re-shoot on an empty workspace (Cody approved 2026-11-24, with
+  representative numbers staged; Bitwarden on workspace 1 blacks out
+  captures). Tracked again under "Before round 10".
 - [x] SR47 (nits) "Stream ends here. Mark it played?"; the suite's time;
   the README's what's-new list; history out of stream_broke's docstring.
   Left as they are: video_rule_lua's long docstring (it records live-tested
@@ -812,7 +813,7 @@ reviewer found nothing critical or high; the safety reviewer three highs.
 - [x] SR62 (medium) Pushes failing mid-episode (Pocket Casts down, the
   session expired) were never said. Fixed: two in a row are said once
   ("Pocket Casts not reached: not synced"). Test.
-- [ ] SR63 (medium, since 1.0; fit) On a bar that replaces Omarchy's, the
+- [x] SR63 (medium, since 1.0; fit; done before round 10) On a bar that replaces Omarchy's, the
   facade has no service lookup: the panel's fallback and the shell's own
   service both run (polls twice, two sleep guards, two IPC handlers,
   errors notified twice). Documented in README Known limits. Plan: the
@@ -930,13 +931,49 @@ and a high in the self-check's player.
   phone rewound past mpv's buffer (README); on two screens the plugin-id
   IPC handler registers per bar (first wins, works); a replacement bar
   runs a copy per panel (README).
-- [ ] SR86 (medium, since 1.0; after 1.1.0) Widget settings live only in the
-  bar entry, which Omarchy deletes when the plugin is disabled or its chip
-  dragged off: move them to the plugin's own file (the omarchy-plugin
-  skill's pattern). README says so meanwhile.
+- [x] SR86 (medium, since 1.0) Widget settings live only in the bar entry,
+  which Omarchy deletes when the plugin is disabled or its chip dragged
+  off. Folded into 1.1.0 (below).
 
-- [ ] H6 Ship 1.1.0 (a minor version: the stats are a feature) with the `ship-update` skill (marketplace verification
-  request, Cody approves the filing).
+### Before round 10 (2026-11-24, Cody's calls)
+
+Cody: front-load every code change, then re-review; the loop runs past
+round 10 while rounds keep finding critical or high issues. Decided:
+errors as desktop notifications stay (no `omarchy-osd`); Nine Point Labs'
+PRs #7-9 stay offered, nothing more is ported back; the stats screenshot
+is re-shot with representative numbers (SR46); the marketplace
+verification request is the very last step.
+
+- [x] SR86 Settings in Legato's own file: `settings.json` in the state
+  folder, written only by the bridge (`settings set`, checked against
+  manifest.json's schema, re-read under `settings.lock`, unknown keys kept;
+  `settings import` copies a 1.0 bar entry once, when there's no file yet,
+  only after the bar has handed the panel its entry). A file that can't be
+  read whole is never saved over: the Settings page says so (one
+  notification with the panel closed), and autoplay and the idle unload
+  stay off until it's fixed or deleted (also until the settings are first
+  read). The chip, the panel and the service read the service's copy;
+  nothing writes shell.json. Only the settings half of the omarchy-plugin
+  skill applies (the widget is the product, Cody). Tests: SettingsFile
+  (bridge), tests/qml/service.qml (import once, after the hand-over;
+  changes, a stale read, a failed save rolled back; a broken file said
+  once), node (no bare `setting(` reads of the bar entry).
+- [x] SR63 One live service on any bar: the shell's copy starts dormant
+  and wakes when a panel claims it; a replacement bar's panel (which can't
+  see it) runs its own, and the shell's stays dormant. The `legato` IPC
+  handler sits in a Loader, made only by the live copy (a disabled
+  handler still registers). Left, in README Known limits: a replacement
+  bar with the chip on two screens runs a copy per screen. Tests:
+  tests/qml/service.qml (dormant, claimed, the replacement bar's own copy,
+  IPC only on the live one).
+
+- [ ] SR46 (see round 5) Re-shoot media/stats.png with representative
+  numbers, on an empty workspace, after the code is final.
+- [ ] H6 Ship 1.1.0 (a minor version: the stats are a feature) with the
+  `ship-update` skill: push (Cody), plugin update and install test,
+  marketplace scan, release notes and `gh release` (each on his go), and
+  last of all the marketplace verification request (Cody approves the
+  filing).
 
 ## Testing
 
@@ -999,7 +1036,15 @@ and a high in the self-check's player.
 - 2026-11-24 (late): round 9 (SR79-SR86): empty lookups for followed
   shows are no answer on every path; the self-check hardened and checking
   "caught at all"; recovered drops clear `failed`. The break judgment held
-  against every shape the safety reviewer built. Round 10 next.
+  against every shape the safety reviewer built. 258 Python + 37 node
+  tests.
+- 2026-11-24 (evening): Cody's calls before round 10 (no round cap; front-
+  load the code): SR86 settings in settings.json (bridge-written, the bar
+  entry copied in once, a broken file never saved over) and SR63 the
+  shell's service dormant until a panel claims it (a replacement bar's
+  panel runs its own; the IPC target only on the live copy). 266 Python +
+  38 node tests and the new offscreen tests/qml/service.qml; 249 mutations
+  listed. Round 10 next.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

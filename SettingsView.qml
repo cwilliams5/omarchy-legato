@@ -5,9 +5,10 @@ import qs.Ui
 
 // The panel's Settings page (the header's gear, or `g`): every setting in
 // manifest.json's barWidget.schema, with a control for its type, so a new
-// setting shows up here by being added to the schema. Changes are saved to
-// this widget's entry in ~/.config/omarchy/shell.json, as `omarchy bar set`
-// would, and take effect at once. Below them, the video window's own
+// setting shows up here by being added to the schema. Changes are saved by
+// the bridge to settings.json in Legato's state folder (not the widget's bar
+// entry, which Omarchy deletes when the plugin is turned off) and take
+// effect at once. Below them, the video window's own
 // choices, which the player keeps (as it keeps speed, Trim and Boost) and
 // its right-click menu also changes.
 Column {
@@ -18,7 +19,9 @@ Column {
   property string fontFamily: Style.font.family
   property var schema: []      // barWidget.schema
   property var defaults: ({})  // barWidget.defaults
-  property var values: ({})    // the widget's settings entry
+  property var values: ({})    // the settings in use (Service.settings)
+  property string problem: ""  // settings.json unreadable, a value not valid, or a change not saved
+  property string savedIn: ""  // settings.json's path, with ~
   property int videoTransparency: 0  // percent, 0 to 80 in tens
   property bool videoPinned: true
   property bool localFeeds: false
@@ -177,8 +180,20 @@ Column {
     width: parent.width
     wrapMode: Text.WordWrap
     textFormat: Text.PlainText
-    text: "Saved to ~/.config/omarchy/shell.json, as `omarchy bar set io.github.cwilliams5.legato <key> <value>` would. Speed, Trim Silence and Volume Boost are on the player itself."
+    text: "Saved in " + (root.savedIn || "Legato's state folder") + ", kept when Legato is turned off. Speed, Trim Silence and Volume Boost are on the player itself."
     color: root.dim
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+  }
+
+  Text {
+    objectName: "settingsProblem"
+    visible: root.problem !== ""
+    width: parent.width
+    wrapMode: Text.WordWrap
+    textFormat: Text.PlainText
+    text: root.problem
+    color: Commons.Color.urgent
     font.family: root.fontFamily
     font.pixelSize: Style.font.caption
   }

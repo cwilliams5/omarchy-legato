@@ -97,7 +97,7 @@ test("the stats page opens from the header, `a` and closes like the others; it r
   assert.match(service, /if \(statsPagesOpen > 0\) loadStats\(\)/)
   // One page at a time.
   assert.match(panel, /if \(showAbout\) \{ showSettings = false; showStats = false; closeMenu\(\) \}/)
-  assert.match(panel, /if \(showSettings\) \{ showAbout = false; showStats = false; closeMenu\(\) \}/)
+  assert.match(panel, /if \(showSettings\) \{\s*showAbout = false; showStats = false; closeMenu\(\)/)
   assert.match(panel, /if \(showStats\) \{\s*showAbout = false\s*showSettings = false/)
   // A failed poll gives the seek flag back.
   assert.match(service, /if \(!result\.ok && seeked\) root\._seekedSincePoll = true/)
@@ -508,4 +508,16 @@ test("the chip's title sits still unless scrollTitle is on", () => {
   assert.ok(manifest.barWidget.schema.some((s) => s.key === "scrollTitle"))
   assert.match(widget, /needsScroll: root\.scrollTitle && /)
   assert.match(widget, /elide: root\.scrollTitle \? Text\.ElideNone : Text\.ElideRight/)
+})
+
+test("settings come from the service (settings.json), never the widget's bar entry (SR86)", () => {
+  // Omarchy deletes the bar entry when the plugin is turned off; a bare
+  // setting() reads it (the Panel and BarWidget base types' lookup).
+  for (const name of ["BarWidget.qml", "Panel.qml", "SettingsView.qml", "StatsView.qml"]) {
+    const qml = fs.readFileSync(path.join(ROOT, name), "utf8")
+    assert.ok(!/(^|[^.\w])setting\(/m.test(qml), name + " reads a setting from the bar entry")
+    assert.ok(!/updateEntryInline|updateSettings\(/.test(qml), name + " writes the bar entry")
+  }
+  const widget = fs.readFileSync(path.join(ROOT, "BarWidget.qml"), "utf8")
+  for (const key of ["showTitle", "scrollTitle", "maxLabelWidth"]) assert.match(widget, new RegExp("service\\.setting\\(\"" + key + "\""))
 })

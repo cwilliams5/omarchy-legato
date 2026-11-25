@@ -98,12 +98,18 @@ Item {
         var at = -1
         for (var i = 0; i < p.command.length; i++) if (String(p.command[i]).indexOf("legato-bridge") >= 0) at = i
         var words = p.command.slice(at + 1).join(" ")
-        var data = words === "status" ? { authenticated: true, mpv: "/usr/bin/mpv", socket: "", python: "3.14" }
+        var data = words === "status" ? { authenticated: true, mpv: "/usr/bin/mpv", socket: "", python: "3.14", settings: top.savedSettings }
                  : words === "up-next" ? { items: [top.episode] } : {}
         p.finish(0, JSON.stringify({ ok: true, data: data }), "")
       })
     }
   }
+
+  // settings.json as the bridge reports it (`status`, `settings`).
+  readonly property var savedSettings: ({ values: { showTitle: true, scrollTitle: false, maxLabelWidth: 180, defaultTab: "upnext",
+                                                    skipBack: 10, skipForward: 30, autoplay: true, unloadAfterMinutes: 15,
+                                                    pauseOnSleep: true },
+                                          stored: true, writable: true, problem: "", path: "~/.local/state/omarchy-legato/settings.json" })
 
   Legato.Panel { id: panel; settings: ({}) }
 

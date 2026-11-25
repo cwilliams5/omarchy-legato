@@ -36,11 +36,11 @@ BarWidget {
   readonly property string show: nowItem && nowItem.show ? nowItem.show : ""
   readonly property string labelText: title !== "" ? (show !== "" ? title + "  ·  " + show : title) : ""
 
-  readonly property bool showTitle: setting("showTitle", true) === true
+  readonly property bool showTitle: service ? service.setting("showTitle", true) === true : true
   // Scroll a title that doesn't fit (a marquee, redrawn every frame while
   // playing), or sit still and cut it off with "…" (the default).
-  readonly property bool scrollTitle: setting("scrollTitle", false) === true
-  readonly property real maxLabelWidth: Style.space(Number(setting("maxLabelWidth", 180)) || 180)
+  readonly property bool scrollTitle: service ? service.setting("scrollTitle", false) === true : false
+  readonly property real maxLabelWidth: Style.space(Number(service ? service.setting("maxLabelWidth", 180) : 180) || 180)
   readonly property bool labelShown: showTitle && !vertical && playerActive && labelText !== ""
   readonly property bool artShown: chipArt !== "" && artImage.status !== Image.Error
 

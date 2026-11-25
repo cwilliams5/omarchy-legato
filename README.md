@@ -31,8 +31,9 @@ by Nine Point Labs (MIT). What's new compared to the original:
   the episode played wherever the audio stopped.
 - **New:** Trim Silence, Volume Boost, a picture-in-picture video window,
   each show's skip intro and outro, pausing before the computer sleeps,
-  listening stats (on this computer only), a Settings page, right-click
-  menus, and its own icon in the bar.
+  listening stats (on this computer only), a Settings page whose choices
+  stay when the plugin is turned off, right-click menus, and its own icon
+  in the bar.
 
 > **Unofficial.** Pocket Casts has no public API for your account. Legato
 > uses the same endpoints as the Pocket Casts web player, so a change on
@@ -119,11 +120,10 @@ development: Node.js and, optionally, `qmllint` (Qt 6) for the tests.
 **What it changes:** only its own files:
 
 - `~/.local/state/omarchy-legato/`: your sign-in tokens, the episode loaded,
-  the player's settings and your listening stats (each file readable only
-  by you)
+  your settings and your listening stats (each file readable only by you)
 - `~/.cache/omarchy-legato/`: cover art
-- its own entry in `~/.config/omarchy/shell.json` (where the chip sits, and
-  its settings)
+- its own entry in `~/.config/omarchy/shell.json` (where the chip sits;
+  Omarchy writes it)
 
 While the video window is shown, Legato adds its window rules to the
 running Hyprland through `hyprctl` (where the window goes, no title bar, its
@@ -226,9 +226,10 @@ devices.
   as desktop notifications: Omarchy's on-screen display takes none from a
   plugin like Legato.
 - **On a bar that replaces Omarchy's,** the panel can't reach the shell's
-  copy of Legato's service, so each panel makes its own and the copies all
-  run (polls and notifications repeat). Omarchy's own bar, which hands it
-  over, is fine.
+  copy of Legato's service, so it runs its own and the shell's stays
+  asleep. If that bar shows Legato's chip on two screens, each screen's
+  panel runs one (polls and notifications repeat). Omarchy's own bar is
+  fine on any number of screens.
 - **On a host without byte ranges,** when Pocket Casts has you earlier
   than this machine (you went back on the phone) and the episode is bigger
   than mpv's buffer, Legato can't seek back there; it plays on from where
@@ -342,8 +343,14 @@ o.bind("SUPER + ALT + L", "Legato panel", "omarchy-shell io.github.cwilliams5.le
 ## Settings
 
 The gear in the panel's header (or `g`) lists them all and saves changes as
-you make them. They live in the bar's entry in `~/.config/omarchy/shell.json`,
-so `omarchy bar set io.github.cwilliams5.legato <key> <value>` works too.
+you make them, to `~/.local/state/omarchy-legato/settings.json`. From a
+script: `~/.config/omarchy/plugins/io.github.cwilliams5.legato/bin/legato-bridge
+settings set -- <key> <value>` (the value as JSON: `false`, `30`,
+`"podcasts"`); Legato picks it up when the Settings page next opens or the
+shell restarts.
+Up to 1.0 they lived in the chip's entry in `~/.config/omarchy/shell.json`;
+1.1 copies them from there once, then no longer reads it, so `omarchy bar
+set` doesn't change them any more.
 
 | Key | Default | What |
 | --- | --- | --- |
@@ -365,8 +372,11 @@ counted) in
 video window's menu, the Settings page or (the stats) the Stats page.
 
 Disabling the plugin (or dragging its chip off the bar, which disables it)
-removes its entry from the bar, and the settings in the table above go with
-it. The player's own choices, your sign-in and your listening stats stay.
+removes its entry from the bar; your settings, the player's own choices,
+your sign-in and your listening stats all stay, and are there when you turn
+it back on. A `settings.json` that can't be read (a hand edit gone wrong) is
+never saved over: the Settings page says so, and autoplay and the idle
+unload stay off until it's fixed or deleted.
 
 ## How it works
 

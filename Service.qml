@@ -12,11 +12,32 @@ Item {
   id: root
 
   property var shell: null
+  // Whether this instance does anything (bridge calls, the mpv connection,
+  // timers, the sleep guard, the `legato` IPC target). The shell's own copy
+  // starts dormant and wakes when a panel finds it and claims it
+  // (Panel.qml claimService); a panel that can't see it makes its own,
+  // already awake (Panel.qml localService). So a bar that replaces
+  // Omarchy's, which hides the shell's service from its widgets, still runs
+  // one Legato, not two.
+  property bool active: false
+
+  // ---- Settings (the Settings page), from settings.json in the state folder
+  //      through the bridge: read with `status`, again when the Settings page
+  //      opens, and answered by each change. Omarchy deletes the widget's
+  //      bar entry when the plugin is turned off, so they don't live there.
+  //      Until they're read, the two that act by themselves (autoplay, the
+  //      idle unload) stay off.
   property var settings: ({})
-  // Whether this instance does anything (bridge calls, timers, the sleep
-  // guard). Every instance is the one in use: the shell's own, or a panel's
-  // fallback made only when the shell shares none (Panel.qml localService).
-  property bool active: true
+  property bool settingsKnown: false
+  property bool settingsStored: true
+  property bool settingsWritable: true
+  property string settingsProblem: ""
+  property string settingsPath: ""
+  property string settingsError: ""   // the last change's failure, for the Settings page
+  // The widget's bar entry, handed over by a panel: copied into a
+  // settings.json that doesn't exist yet (`settings import`, Legato 1.0's
+  // settings), never read otherwise.
+  property var entrySettings: null
 
   readonly property string pluginDir: decodeURIComponent(Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "")).replace(/\/$/, "")
   readonly property string bridge: pluginDir + "/bin/legato-bridge"
@@ -50,7 +71,7 @@ Item {
 
   readonly property int skipBackSeconds: Math.max(1, Number(setting("skipBack", 10)) || 10)
   readonly property int skipForwardSeconds: Math.max(1, Number(setting("skipForward", 30)) || 30)
-  readonly property bool autoplay: setting("autoplay", true) !== false
+  readonly property bool autoplay: settingsKnown && setting("autoplay", true) !== false
   readonly property bool pauseOnSleep: setting("pauseOnSleep", true) !== false
 
   // ---- Connection state (from `legato-bridge status`)
@@ -341,6 +362,7 @@ Item {
   function refresh() {
     if (!active || probing) return
     probing = true
+    var settingsChange = _settingsChanges  // a change made meanwhile wins over this read
     call(["status"], function(result) {
       root.probing = false
       root.probed = true
@@ -359,6 +381,7 @@ Item {
       root.probedAt = Date.now()
       root.lastItem = d.last || {}
       root.pythonVersion = /^[0-9]{1,3}(\.[0-9]{1,3}){1,2}$/.test(String(d.python || "")) ? d.python : ""
+      if (d.settings && settingsChange === root._settingsChanges) root.applySettings(d.settings)
       if (root.authenticated || d.running === true) root.refreshPlayer()
       if (root.authenticated) root.loadUpNextIfStale()
     })
@@ -660,6 +683,7 @@ Item {
   //      pick up, whichever device you listened on meanwhile. 0 keeps the
   //      player loaded until you stop it.
   readonly property int unloadAfterMinutes: {
+    if (!settingsKnown) return 0
     var minutes = Number(setting("unloadAfterMinutes", 15))
     return isNaN(minutes) ? 15 : Math.max(0, Math.round(minutes))
   }
@@ -940,6 +964,66 @@ Item {
     call(["stats", "clear"], function(result) { if (change === root._statsChanges) root.applyStats(result) })
   }
 
+  property int _settingsChanges: 0
+  property bool _settingsImporting: false
+  property string _settingsProblemSaid: ""
+  function applySettings(view) {
+    if (!view || typeof view !== "object" || !view.values || typeof view.values !== "object") return
+    settings = view.values
+    settingsStored = view.stored === true
+    settingsWritable = view.writable !== false
+    settingsProblem = String(view.problem || "")
+    settingsPath = String(view.path || "")
+    settingsKnown = true
+    // A file that can't be read is said once (with the panel closed, as a
+    // notification): until it's fixed, nothing is saved and autoplay and
+    // the idle unload are off.
+    if (!settingsWritable && settingsProblem !== "" && settingsProblem !== _settingsProblemSaid) {
+      _settingsProblemSaid = settingsProblem
+      reportError(settingsProblem)
+    }
+    importEntrySettings()
+  }
+  onEntrySettingsChanged: importEntrySettings()
+  function importEntrySettings() {
+    if (!settingsKnown || settingsStored || !settingsWritable || entrySettings === null || _settingsImporting) return
+    var entry = {}
+    for (var key in entrySettings) if (key !== "id") entry[key] = entrySettings[key]
+    _settingsImporting = true
+    var change = ++_settingsChanges
+    call(["settings", "import", "--", JSON.stringify(entry)], function(result) {
+      root._settingsImporting = false
+      if (result.ok && change === root._settingsChanges) root.applySettings(result.data)
+    })
+  }
+  // A read asked before a change answers into nothing (it may have read the
+  // file before the change was written), as the stats' reads do.
+  function readSettings() {
+    var change = _settingsChanges
+    call(["settings"], function(result) {
+      if (result.ok && change === root._settingsChanges) root.applySettings(result.data)
+    })
+  }
+  // Shown at once; the bridge's answer confirms it. A change that fails
+  // reads the file again, so the page shows what's really saved.
+  function changeSetting(key, value) {
+    var next = {}
+    for (var name in settings) next[name] = settings[name]
+    next[key] = value
+    settings = next
+    settingsError = ""
+    var change = ++_settingsChanges
+    call(["settings", "set", "--", String(key), JSON.stringify(value)], function(result) {
+      if (change !== root._settingsChanges) return  // a later change answers
+      if (!result.ok) {
+        root.settingsError = result.error || "Not saved"
+        root.readSettings()
+        return
+      }
+      root.applySettings(result.data)
+    })
+  }
+
   function setLocalFeeds(on) {
     call(["localfeeds", on ? "on" : "off"], function(result) {
       if (!result.ok) { root.reportError(result.error); return }
@@ -1129,34 +1213,43 @@ Item {
 
   // ----------------------------------------------------------------- IPC --
 
-  IpcHandler {
-    // One per shell: the panel's fallback exists only without a shared one.
-    enabled: root.active
-    target: "legato"
+  // Only the copy in use registers the target: Quickshell keeps even a
+  // disabled IpcHandler registered, and the first of a target wins.
+  Loader {
+    id: ipcLoader
+    objectName: "ipcLoader"
+    active: root.active
+    sourceComponent: legatoIpc
+  }
+  Component {
+    id: legatoIpc
+    IpcHandler {
+      target: "legato"
 
-    function playPause(): string { return root.playPause() ? "ok" : "unhandled" }
-    function next(): string { return root.next() ? "ok" : "unhandled" }
-    function skipBack(): string { return root.skipBack() ? "ok" : "unhandled" }
-    function skipForward(): string { return root.skipForward() ? "ok" : "unhandled" }
-    function stop(): string { root.stop(); return "ok" }
-    function volumeUp(): string { root.nudgeVolume(5); return "ok" }
-    function volumeDown(): string { root.nudgeVolume(-5); return "ok" }
-    function cycleSpeed(): string { root.cycleSpeed(); return "ok" }
-    function cycleTrim(): string { root.cycleTrim(); return "ok" }
-    function toggleVideo(): string { return root.toggleVideo() ? "ok" : "unhandled" }
-    function toggleBoost(): string { root.toggleBoost(); return "ok" }
-    function refresh(): string { root.refresh(); return "ok" }
-    function status(): string {
-      return JSON.stringify({
-        authenticated: root.authenticated,
-        active: root.playerActive,
-        playing: root.isPlaying,
-        title: root.nowItem ? root.nowItem.name : "",
-        show: root.nowItem ? root.nowItem.show : "",
-        position: Math.round(root.livePosition()),
-        duration: Math.round(root.duration),
-        speed: root.speed
-      })
+      function playPause(): string { return root.playPause() ? "ok" : "unhandled" }
+      function next(): string { return root.next() ? "ok" : "unhandled" }
+      function skipBack(): string { return root.skipBack() ? "ok" : "unhandled" }
+      function skipForward(): string { return root.skipForward() ? "ok" : "unhandled" }
+      function stop(): string { root.stop(); return "ok" }
+      function volumeUp(): string { root.nudgeVolume(5); return "ok" }
+      function volumeDown(): string { root.nudgeVolume(-5); return "ok" }
+      function cycleSpeed(): string { root.cycleSpeed(); return "ok" }
+      function cycleTrim(): string { root.cycleTrim(); return "ok" }
+      function toggleVideo(): string { return root.toggleVideo() ? "ok" : "unhandled" }
+      function toggleBoost(): string { root.toggleBoost(); return "ok" }
+      function refresh(): string { root.refresh(); return "ok" }
+      function status(): string {
+        return JSON.stringify({
+          authenticated: root.authenticated,
+          active: root.playerActive,
+          playing: root.isPlaying,
+          title: root.nowItem ? root.nowItem.name : "",
+          show: root.nowItem ? root.nowItem.show : "",
+          position: Math.round(root.livePosition()),
+          duration: Math.round(root.duration),
+          speed: root.speed
+        })
+      }
     }
   }
 

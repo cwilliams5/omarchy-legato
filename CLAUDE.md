@@ -16,10 +16,13 @@ Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
 (docs/PLAN.md phases H and SR: rounds 1-9 so far; the fit reviewer has
 found nothing critical or high since round 7, the safety reviewer still
-found highs in round 9, fixed; round 10 next, then push, release and the
-marketplace verification request, each on Cody's go). Committed and
-installed on Cody's laptop at each round's end (`./install.sh`), not
-pushed. Listed on the Omarchy plugin marketplace on 2026-11-23
+found highs in round 9, fixed). Cody, 2026-11-24: SR86 (settings in
+Legato's own file) and SR63 (one live service on a replacement bar) are
+folded into 1.1.0 before round 10, and the review loop runs past round 10
+for as long as rounds keep finding critical or high issues. Then push,
+release, the stats screenshot re-shot, and the marketplace verification
+request last of all, each on Cody's go. Committed and installed on Cody's
+laptop at each round's end (`./install.sh`), not pushed. Listed on the Omarchy plugin marketplace on 2026-11-23
 (omarchyplugins.com, id io.github.cwilliams5.legato; issue #15655,
 approved-and-verified at ce22e65, "maintainer-reviewed"; the reviewer
 accepted the `package-manager` and `installer` capabilities as printed advice
@@ -31,15 +34,12 @@ come from a home server).
 
 Next (docs/PLAN.md): strict review until a round finds no critical or
 high issue and every planted mutation is killed, then ship 1.1.0 (H6).
-After 1.1.0: SR86 (widget settings kept in the plugin's own file, the
-omarchy-plugin skill's pattern) and SR63 (a replacement bar's extra
-service copies). Upstream, Nine Point Labs' PRs #7-9 (the old fork
-`cwilliams5/omarchy-pocketcasts` carries them): their review of
-2026-11-23 is answered (#8's default changed); after they merge, two
-follow-ups were offered: the shorter resume-check timeout and the
-broken-stream fix (now much bigger than offered: the watcher script, the
-self-check, stalls; think again before porting). Cody approves every
-post.
+Upstream, Nine Point Labs' PRs #7-9 (the old fork
+`cwilliams5/omarchy-pocketcasts` carries them) stay offered as they are:
+their review of 2026-11-23 is answered (#8's default changed). Nothing
+more is ported back (Cody, 2026-11-24: Legato has drifted too far; the
+follow-ups once offered, the shorter resume check and the broken-stream
+fix, are dropped). Cody approves every post.
 
 ## What Legato is
 
@@ -87,16 +87,19 @@ what the API lists, or touch the user's Hyprland config.
 - Name: Legato. Repo: `cwilliams5/omarchy-legato`.
 - Ids:
   - plugin id `io.github.cwilliams5.legato`
-  - settings: the widget's entry in `~/.config/omarchy/shell.json`
+  - settings: the Settings page's in the bridge's `settings.json`
     (`showTitle`, `scrollTitle`, `maxLabelWidth`, `defaultTab`, `skipBack`,
     `skipForward`, `autoplay`, `unloadAfterMinutes`, `pauseOnSleep`; the
-    schema in manifest.json drives the Settings page); the player's own
-    choices in the bridge's `prefs.json` (`volume`, `speed`, `trim`,
-    `boost`, `videoGeometry`, `videoPinned`, `videoTransparency`,
-    `localFeeds`, `stats`)
+    schema in manifest.json's `barWidget.schema` drives the page and the
+    bridge's checks; until 1.0 they were the widget's entry in
+    `~/.config/omarchy/shell.json`, copied in once by `settings import`);
+    the player's own choices in the bridge's `prefs.json` (`volume`,
+    `speed`, `trim`, `boost`, `videoGeometry`, `videoPinned`,
+    `videoTransparency`, `localFeeds`, `stats`)
   - state `$XDG_STATE_HOME/omarchy-legato/` (auth.json, playback.json,
-    prefs.json, podcasts-cache.json, stats.json, lock, prefs.lock,
-    auth.lock, watchcheck.json; all 0600, folder 0700)
+    prefs.json, settings.json, podcasts-cache.json, stats.json, lock,
+    prefs.lock, settings.lock, auth.lock, watchcheck.json; all 0600, folder
+    0700)
   - cache `$XDG_CACHE_HOME/omarchy-legato/art/`
   - runtime `$XDG_RUNTIME_DIR/omarchy-legato/mpv.sock`
   - IPC targets `legato` (playPause, next, skipBack, skipForward, stop,
@@ -111,7 +114,7 @@ what the API lists, or touch the user's Hyprland config.
     globals in Hyprland `legato_video_alpha`, `legato_video_apply`,
     `legato_video_hook` (the opacity hook)
   - User-Agent `legato/1.0 (+https://github.com/cwilliams5/omarchy-legato)`
-- Version: 1.1.0 (listening stats, the broken-stream fix with its mpv watcher and FFmpeg self-check, stalls as interruptions, the shorter resume check, errors as desktop notifications, the video window's skip-taskbar tag; PLAN H1-H5 and SR); 1.0.2 was the version first listed on the marketplace, 1.0.0 the first public release (2026-11-22).
+- Version: 1.1.0 (listening stats, the broken-stream fix with its mpv watcher and FFmpeg self-check, stalls as interruptions, the shorter resume check, errors as desktop notifications, the video window's skip-taskbar tag, settings in their own file, one live service on any bar; PLAN H1-H5 and SR); 1.0.2 was the version first listed on the marketplace, 1.0.0 the first public release (2026-11-22).
 - Branding: `branding/` (`python3 branding/build.py` regenerates it). See
   BRANDING.md for words to avoid in later renames.
 
@@ -122,7 +125,7 @@ manifest.json        plugin manifest: service + bar-widget, settings schema
 Service.qml          the data layer, one per shell: bridge calls, mpv events, timers, IPC
 BarWidget.qml        the bar chip (cover, scrolling title), clicks and scroll
 Panel.qml            the panel: player, effects row, tabs, show pages, right-click menu, sign-in
-SettingsView.qml     the panel's Settings page (gear), built from manifest.json's schema
+SettingsView.qml     the panel's Settings page (gear), built from manifest.json's schema; saved by the bridge to settings.json
 StatsView.qml        the panel's listening stats page (chart button, `a`), with counting On/Off and Clear
 SignInField.qml      the sign-in fields: not native text inputs; pastes go through `bridge paste`
 AboutView.qml        the panel's About page
@@ -217,6 +220,27 @@ docs/PLAN.md         what's left to build
    plugin whose kinds lack `bar` unless it clones omarchy.audio, media or
    monitor (`pluginCloneMaySummon`, `barPluginMayControl` in shell.qml), and
    says nothing; 1.0's OSD messages never showed.
+
+## Omarchy plugin design
+
+The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
+
+- **A top-bar widget?** Yes, and it's the product: the widget is the
+  plugin. Taking the chip off the bar turns Legato off; there's no "works
+  without its widget" mode, no hide-the-icon switch, no way back to build.
+  Without a chip, the shell's service is never claimed and stays dormant.
+- **Where do settings live?** In Legato's own file, `settings.json` in the
+  state folder, written only by the bridge (`cmd_settings`: checked against
+  the schema, re-read under `settings.lock` before each save, keys it
+  doesn't know kept, never saved over a file it can't read whole; a
+  broken one leaves autoplay and the idle unload off, `SETTINGS_SAFE`). The
+  service reads it with `status`, again when the Settings page opens, and
+  from each change's answer; the chip and the panel read the service's
+  copy. A 1.0 user's bar entry is copied in once, when there's no
+  settings.json yet (`settings import`, only after the bar has handed the
+  panel its entry: `settled`), and never read again. Nothing writes
+  shell.json. Stats (stats.json) and the player's choices (prefs.json)
+  were already in the state folder.
 
 ## How it works, in one screen
 
@@ -473,13 +497,25 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
 - **Quickshell's `Socket`** (path, connected, write, flush, SplitParser)
   carries the mpv events. Omarchy's OSD (`shell.summon("omarchy.osd", ..)`)
   answers false to a plugin like Legato (rule 8), with no log line.
-- **A fallback Service still registers its IPC target.** Quickshell keeps
+- **A disabled IpcHandler still registers its target.** Quickshell keeps
   an `IpcHandler` with `enabled: false` registered, and the first handler
   of a target wins (the shell logs "another handler is registered" for the
-  second). Each panel made an idle Service for shells without service
-  support; it's a Loader now, active only then, and only from the turn
-  after loading (BarWidget hands the panel its bar just after loading it,
-  so until then a shared service can't be seen).
+  second). So the service's `legato` handler sits in a Loader, made only
+  while the service is `active`. Each panel makes a Service of its own only
+  when it can't see the shell's (a Loader, active only then, and only
+  from the turn after loading: BarWidget hands the panel its bar just
+  after loading it, so until then a shared service can't be seen).
+- **A bar that replaces Omarchy's hides plugin services from its widgets**
+  (`plugins/bar/Bar.qml` `pluginBarApiFor`: replacement bars get
+  `pluginShellForBarEntry`'s facade, with no `_serviceLookup`, so an
+  untrusted bar can't fetch another plugin's live service), while the
+  shell still creates Legato's service (`_syncServices`). So the shell's
+  copy starts dormant (`active: false`: no bridge call, mpv connection,
+  timer, sleep guard or IPC target) and wakes when a panel finds it and
+  claims it (`Panel.qml` `claimService`); on a replacement bar no panel
+  can, the panel's own copy runs, and the shell's stays dormant. One copy
+  per screen remains if a replacement bar shows the chip on two screens
+  (README Known limits).
 - **Qt 6.12** adds a QtQuick `Color` type: a bare `Color.x` in plugin QML no
   longer reaches `qs.Commons`' Color and renders black. The original has 7
   such references (PLAN A2).
@@ -526,9 +562,9 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   video stream in a picture codec (a PNG in an MP4, `albumart` and `image`
   both false): `has_video` skips picture codecs (`STILL_IMAGE_CODECS`).
 - **Disabling a plugin deletes its bar entry** (Omarchy 4.5,
-  `PluginRegistry.setEnabled`), and the widget's settings with it; enabling
-  adds a fresh `{ id }`. Legato's state folder (prefs, sign-in, stats) is
-  untouched, even by `omarchy plugin remove`.
+  `PluginRegistry.setEnabled`), and any widget settings in it; enabling
+  adds a fresh `{ id }`. Legato's state folder (settings, prefs, sign-in,
+  stats) is untouched, even by `omarchy plugin remove`.
 - **mpv when a stream breaks** (tested 2026-11-23/24, mpv 0.41, FFmpeg
   9.0): it stalls (`paused-for-cache`), retries for a few seconds, then
   sets `eof-reached` at the break, as at an end. What its numbers say
@@ -634,11 +670,11 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
 - **The Android app doesn't upload playback effects** (tested 2026-11-21,
   PLAN B4); a show's skip intro and outro (`autoStartFrom`,
   `autoSkipLast`) do reach the server.
-- **Widget settings** are changed with `omarchy bar set
-  io.github.cwilliams5.legato <key> <value>`; Legato's Settings page
-  writes the same entry; Omarchy 4.5 itself has no settings form for
-  plugin widgets. They reach the service through the panel
-  (`Panel.qml` `pushSettings`).
+- **Widget settings in the bar entry** (`omarchy bar set`, the
+  `barWidget.schema`) are deleted with the entry, and Omarchy 4.5 shows no
+  form for them. Legato's live in settings.json since 1.1; `omarchy bar
+  set` no longer changes them (the README says so), and the panel hands
+  the entry to the service only for the one-time import (`pushSettings`).
 
 ## Working on it
 
@@ -649,7 +685,9 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   pages laid out offscreen with stand-ins for Omarchy's Commons and Ui (they
   read about 20 px short of the real pages), and `tests/qml/panel.qml`: the
   real Panel.qml and Service.qml with stand-ins for Quickshell's processes,
-  answering the bridge calls the service starts. About 13 minutes; nothing
+  answering the bridge calls the service starts; `tests/qml/service.qml`:
+  the shell's service dormant until claimed, a replacement bar's panel
+  running its own, and settings from settings.json (the entry copied once). About 13 minutes; nothing
   appears on screen, and the test players load no mpv-mpris (they'd be
   media players on the desktop). `tests/mutations.md` lists the planted
   regressions the suite must catch.

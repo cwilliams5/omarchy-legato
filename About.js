@@ -18,7 +18,7 @@ var SUPPORT_URL = "https://github.com/cwilliams5/omarchy-legato/issues"
 // Must stay true to what the plugin does. Network: only bin/legato-bridge
 // (API, SHOW_HOSTS, ART_HOST_RE) and mpv streaming the episode's own audio
 // URL; the panel shows covers only from the bridge's cache. Files: auth.json, playback.json, prefs.json,
-// podcasts-cache.json, stats.json (all 0600), the art cache, shell.json.
+// podcasts-cache.json, stats.json, settings.json (all 0600), the art cache.
 var PRIVACY = "No telemetry and no servers of Legato's own: it talks only to Pocket Casts and "
   + "to the podcasts you play. Your email and password go to api.pocketcasts.com once, at sign-in; the "
   + "password is never stored. With your login token, api.pocketcasts.com then serves your Up Next, "
@@ -31,10 +31,10 @@ var PRIVACY = "No telemetry and no servers of Legato's own: it talks only to Poc
   + "app; a local check lets mpv reach only public addresses (your local network too, if you allow "
   + "it in Settings) and never this computer (but for its own test stream on 127.0.0.1, once per "
   + "mpv or FFmpeg update). Your login tokens, email and account ID are kept in ~/.local/state/omarchy-legato/auth.json, "
-  + "readable only by you (0600), next to the episode loaded, the player's settings, your listening "
+  + "readable only by you (0600), next to the episode loaded, your settings, your listening "
   + "stats (counted here, never sent; the Stats page turns them off and clears them) and a 10-minute list of "
   + "your shows; signing out deletes the tokens. Cover art is cached in "
-  + "~/.cache/omarchy-legato/art, and the panel's settings in ~/.config/omarchy/shell.json."
+  + "~/.cache/omarchy-legato/art."
 
 // "0.1.0" from manifest.json's text, or "" when it can't be read.
 function manifestVersion(text) {
