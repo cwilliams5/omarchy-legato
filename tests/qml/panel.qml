@@ -114,7 +114,7 @@ Item {
   Legato.Panel { id: panel; settings: ({}) }
 
   // A second panel sharing the first one's service (as a second screen's).
-  QtObject { id: sharingBar; property var shell: ({ serviceFor: function(id) { return panel.service } }) }
+  QtObject { id: sharingBar; property color foreground: "#ffffff"; property color urgent: "#ff0000"; property color barForeground: "#ffffff"; property string fontFamily: "monospace"; property bool vertical: false; property var shell: ({ serviceFor: function(id) { return panel.service } }) }
   Component { id: panelMaker; Legato.Panel { bar: sharingBar; settings: ({}) } }
   // As BarWidget does it: the panel loads first, the bar is handed over just after.
   Component { id: barlessMaker; Legato.Panel { settings: ({}) } }

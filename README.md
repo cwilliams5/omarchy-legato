@@ -149,16 +149,16 @@ Hyprland stay until it reloads its config: `hyprctl reload`, or log out.
 
 ## Resources
 
-- **Paused or idle, nothing repeats.** Pause, resume, seeks and the end of
-  an episode all arrive as events from mpv. Paused, one timer waits for
+- **Paused or idle, no process starts.** Pause, resume, seeks and the end
+  of an episode all arrive as events from mpv. Paused, one timer waits for
   the idle unload (15 minutes by default) and starts one process when it
   fires.
 - **While playing,** one short Python process every 30 seconds sends your
   position to Pocket Casts (about 0.1 to 0.2 s of CPU each, depending on
   the machine); with the Stats page open, one more after each, to keep its
   numbers current.
-- **While an episode is loaded,** helpers wait with no timer (about 40 MB
-  between them): the sleep guard (for the pause before sleep, with
+- **While an episode is loaded,** helpers wait with no timer (about 75 MB
+  of memory between them, two of them Python): the sleep guard (for the pause before sleep, with
   `dbus-monitor` and `systemd-inhibit`) and the feed proxy mpv fetches
   through. They end with the player. The proxy's connection to the show's
   server is checked by the kernel every 20 seconds while idle (TCP
@@ -249,6 +249,10 @@ devices.
   restart shell`, or log out and in). Omarchy keeps 1.0's background part
   running through the update, so the panel says so and Settings and Stats
   wait until then.
+- **Omarchy reloads every plugin when any plugin's files change** (an
+  update, an install), and that ends whatever Legato was doing at that
+  moment; a play cut short starts over at the next Play. Rarely, a sign-in
+  renewal cut in its last instant means signing in again.
 - **On a host without byte ranges,** when Pocket Casts has you earlier
   than this machine (you went back on the phone) and the episode is bigger
   than mpv's buffer, Legato can't seek back there; it plays on from where
@@ -337,7 +341,8 @@ In the video window: Space, `f` `b` and ← → (skip), `n`, `s`, `p`, `t`,
 ### Your own keybindings
 
 The service answers `omarchy-shell` under the `legato` target, and the panel
-under the plugin's id:
+under the plugin's id, while Legato's chip is on a bar (without it, Legato
+is off):
 
 ```bash
 omarchy-shell legato playPause
@@ -375,7 +380,7 @@ set` doesn't change them any more.
 | `showTitle` | `true` | Show the episode title next to the cover |
 | `scrollTitle` | `false` | Scroll a title that doesn't fit; otherwise it's cut off with "…" (scrolling redraws the bar while playing) |
 | `maxLabelWidth` | `180` | Maximum title width in px (60 to 600) |
-| `defaultTab` | `upnext` | The tab the panel opens on: `upnext`, `progress`, `new` or `podcasts` |
+| `defaultTab` | `upnext` | The tab the panel opens on, each time: `upnext`, `progress`, `new` or `podcasts` |
 | `skipBack` | `10` | Seconds to skip back |
 | `skipForward` | `30` | Seconds to skip forward |
 | `autoplay` | `true` | Play the next Up Next episode when one finishes |

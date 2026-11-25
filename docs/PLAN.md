@@ -1060,6 +1060,82 @@ confirmed against the code before fixing.
   Legato's QML fails the run; mutate.py counts a stale pattern as a
   failure (twelve were).
 
+### SR, round 11 (2026-11-24)
+
+reports kept outside the repo. Safety:
+one high, three mediums, each verified against the fake server.
+
+- [x] SR104 (high) Play at the end of a file playback.json doesn't name
+  (another program's OpenUri; a play cut off by the deadline inside the
+  load) pushed the recorded episode at 0; a drag back on it reopened the
+  recorded episode at the other file's place. SR87 had covered only
+  `sync_now`. Fixed: Play on a stray file starts over through Pocket Casts
+  (`resume_last`), a drag back reopens only the recorded file, and a play
+  holds the deadline from `loadfile` until the new episode is recorded.
+  Tests (the end of another file; a drag back on one; the deadline mid-load).
+- [x] SR105 (medium) A drag back while paused after an end here was pushed
+  as in progress by the poll mpv's seek brings (the test stopped one step
+  short). Fixed: the poll's paused push skips an episode that ended here.
+  Test (with that poll).
+- [x] SR106 (medium) A "played" mark retried within six hours overrode a
+  phone that carried on meanwhile, and took it off Up Next. Fixed: the
+  retry reads the record first; moved from where this machine left it
+  (`left`), the entry is dropped; no answer, it waits. Test.
+- [x] SR107 (medium) A record without `playedUpTo` read as 0 (seek to 0, then
+  pushed). Checked live: every record has one; Up Next's sync data leaves
+  it out for episodes not started. Fixed: a record without one is no
+  answer; a sync entry without one starts from the record. The fake now
+  leaves it out as the real reply does. Tests.
+- [x] SR108 (low) The import dropped 1.0 values set with `omarchy bar set`
+  (text): "0", "15", "false" are read as 1.0 read them. Test.
+- [x] SR109 (low) Pause (and Stop) waited 10 s for the state lock behind a
+  slow poll and failed "busy" with the episode playing on. Fixed: mpv is
+  paused first (`pause_first`; `sync_now(was_playing=)` keeps the playing
+  rule, which a first try broke and a test caught). Test.
+- [x] SR110 (low) The poll's paused push sent a stretch that played without
+  anyone asking (a media key's resume no poll saw). Fixed: not after a
+  pause that set "ask first", unless a seek moved it. Test.
+- [x] SR111 (low; C1, checked) Destroying a Quickshell Process kills its
+  child (tested with a throwaway instance), so a plugin reload (any
+  plugin's change reloads them all, the fit reviewer found) ends bridge
+  calls in flight: safe by SR104's checks; a refresh cut in its last
+  moment can sign you out (README, CLAUDE.md). keepLoaded stays dropped:
+  with it, every update would leave the old service under the new panel.
+
+Fit (nothing critical or high):
+
+- [x] SR112 (medium, tests) 11 of the reviewer's 14 QML mutants survived:
+  two screens' claims (one unplugged: the other's chip still holds the
+  service), a re-claim within the delay, a dormant copy's socket, the
+  hung-player and failed-load notices, no list reload with the panel
+  closed, a vertical bar, an idle chip's wheel, a stopped chip's cover,
+  the marquee behind an open panel. Tests for each (service.qml,
+  chip.qml); the QML runner now fails a step that throws or times out,
+  and on "Unable to assign" from Legato's files (the test bars carry the
+  bar's properties).
+- [x] SR113 (low-medium) The settings list sat in `barWidget.schema`, where
+  settings apps would offer a form that writes the ignored bar entry.
+  Moved to `legatoSettings` in manifest.json. Test.
+- [x] SR114 (low) The Settings page's video switches sent Hyprland rules
+  and the window.open hook with no window: only while it shows now. Test.
+- [x] SR115 (low) "About 40 MB" was 75 MB (two Python helpers); "paused,
+  nothing repeats" ignored the kernel's keepalive: reworded.
+- [x] SR116 (low) Without the chip, the keybinds don't answer (Legato is
+  off): said in README.
+- [x] SR117 (low) Each plugin reload made a panel spin up its own service
+  for a moment: a panel that had the shell's never makes one. Test.
+- [x] SR118 (low, since 1.0) "Tab to open first" stopped applying after the
+  first tab click: each open starts there now. Test.
+- [x] SR119 (low) `hyprctl clients` on every poll would have passed the
+  suite: a test now checks polls without video ask Hyprland nothing.
+- [x] SR120 (low; safety nit) Before the 1.0 entry is copied in, autoplay and
+  the idle unload stay off (a 1.0 user's "off" may be on its way). Test.
+- [x] SR121 (mutations) A redundant flag removed (`stalledPlace`: a stall
+  always sets `unconfirmed` too, so its guard could never matter alone; its
+  mutant survived the full run); "a stall's place confirmed meanwhile" is
+  now equivalent (the poll's paused push needs no "ask first" after a
+  pause, round 11) and dropped from the set.
+
 - [ ] SR46 (see round 5) Re-shoot media/stats.png with representative
   numbers, on an empty workspace, after the code is final.
 - [ ] H6 Ship 1.1.0 (a minor version: the stats are a feature) with the
@@ -1150,6 +1226,16 @@ confirmed against the code before fixing.
   BarWidget loaded, stand-ins that read files and fail starts). 285 Python
   + 40 node tests; 294 mutations, the 59 new or changed all killed (the
   full run with round 11). Round 11 next.
+- 2026-11-24 (late night): round 11 (SR104-SR121): Play and a drag back on a
+  file Legato didn't record never act on the recorded episode (a high);
+  a drag back after an end stays played; a stale finish never overrides
+  the phone; a record without a position is no answer (live: records
+  always carry one, Up Next's sync data doesn't for episodes not
+  started); pause before the lock; the settings list out of
+  barWidget.schema; the fit reviewer's QML survivors tested. The full run
+  of round 10's set: 293 of 294 (a redundant flag, removed). 296 Python +
+  41 node tests; 322 mutations, the 39 new or changed all killed (the full
+  run with round 12). Round 12 next.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

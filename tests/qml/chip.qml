@@ -38,6 +38,7 @@ Item {
     })
     return out
   }
+  function notices() { return running().filter(function(p) { var a = argsOf(p); return a && a[0] === "notify" }) }
   function seeks() { return running().filter(function(p) { var a = argsOf(p); return a && a[0] === "seek" }) }
   function volumes() { return running().filter(function(p) { var a = argsOf(p); return a && a[0] === "volume" }) }
   function argsOf(p) {
@@ -90,16 +91,21 @@ Item {
   property var button: null
   property int step: 0
   property int waits: 0
+  property double stepStarted: 0
   Timer {
     interval: 80
     repeat: true
     running: true
     onTriggered: {
       var steps = [top.handOver, top.awake, top.label, top.clicks, top.wheel, top.afterWheel,
-                   top.sleepGuardSwitch, top.guardBackOff, top.socketRetries, top.staleStatus]
+                   top.sleepGuardSwitch, top.guardBackOff, top.socketRetries, top.staleStatus,
+                   top.noticesOnce, top.quietReloads, top.chipShapes, top.idleWheel, top.idleWheelCheck, top.marquee]
       if (top.step >= steps.length) { stop(); Qt.exit(top.failures); return }
+      if (top.waits === 0) top.stepStarted = Date.now()
       // A step returns false to wait for a debounced call (up to 2 s).
-      if (steps[top.step]() === false) {
+      var result
+      try { result = steps[top.step]() } catch (e) { top.check("step " + top.step + " ran", false, e); result = undefined }
+      if (result === false) {
         if (++top.waits < 25) return
         top.check("step " + top.step + " done in time", false, "still waiting after 25 tries")
       }
@@ -207,5 +213,70 @@ Item {
     shared.refreshIfStale()
     check("after five minutes it does", calls("status").length === 1, calls("status").length)
     answerAll(top.answers)
+  }
+
+  // Said once each, with the panel closed (a notification).
+  function noticesOnce() {
+    answerAll(top.answers)
+    var before = notices().length
+    shared.applyPlayer({ active: false, playing: false, playerHung: true, item: null })
+    check("a hung player is said (a notification)", notices().length === before + 1, notices().length - before)
+    shared.loadFailed("refused")
+    shared.loadFailed("refused")  // the end-file event and the poll both report it
+    check("a load that failed is said once", notices().length === before + 2, notices().length - before)
+  }
+
+  // An episode change with no panel open reloads no list (the panel loads
+  // them when it opens).
+  function quietReloads() {
+    answerAll(top.answers)
+    shared.openPanels = 0
+    shared.applyPlayer(top.playing)
+    var next = JSON.parse(JSON.stringify(top.playing))
+    next.item.uuid = "aaaaaaaa-0000-0000-0000-000000000002"
+    shared.applyPlayer(next)
+    check("an episode change with the panel closed loads no Up Next", calls("up-next").length === 0, calls("up-next").length)
+    shared.applyPlayer(top.playing)
+  }
+
+  function chipShapes() {
+    omarchyBar.vertical = true
+    check("a vertical bar: no title beside the cover", chip.labelShown === false, chip.labelShown)
+    omarchyBar.vertical = false
+    var covered = JSON.parse(JSON.stringify(top.episode))
+    covered.artPath = decodeURIComponent(Qt.resolvedUrl("../../icon.svg").toString().replace(/^file:\/\//, ""))  // a cover on disk
+    var playingCovered = JSON.parse(JSON.stringify(top.playing))
+    playingCovered.item = covered
+    shared.applyPlayer(playingCovered)
+    check("(playing, the chip shows the cover)", chip.chipArt !== "", chip.chipArt)
+    shared.applyPlayer({ active: false, playing: false, item: covered })
+    check("stopped: the chip goes back to the mark, no cover", chip.chipArt === "" && chip.labelShown === false,
+          chip.chipArt + " " + chip.labelShown)
+  }
+
+  function idleWheel() {
+    answerAll(top.answers)
+    button.wheelMoved(120)  // nothing loaded
+  }
+  function idleWheelCheck() {
+    if (Date.now() - top.stepStarted < 300) return false  // past the volume's 180 ms
+    check("scrolling over an idle chip changes nothing", volumes().length === 0, volumes().length)
+  }
+
+  // The scrolling title redraws every frame: only while playing with the
+  // panel closed.
+  function marquee() {
+    var on = JSON.parse(JSON.stringify(top.settingsView))
+    on.values.scrollTitle = true
+    on.values.maxLabelWidth = 60
+    shared.applySettings(on)
+    var long = JSON.parse(JSON.stringify(top.playing))
+    long.item.name = "An episode with a title much too long for the chip to show it all at once"
+    shared.applyPlayer(long)
+    var label = find(chip, function(i) { return i.needsScroll !== undefined && i.scrolling !== undefined })
+    check("a long title scrolls while playing", label && label.scrolling === true, label && label.scrolling)
+    chip.open()
+    check("but not with the panel open over it", label && label.scrolling === false, label && label.scrolling)
+    chip.close()
   }
 }

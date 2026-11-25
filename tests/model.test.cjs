@@ -160,14 +160,14 @@ test("right-click opens a menu and removes nothing; the gear's page comes from t
   assert.match(panel, /mouse\.button === Qt\.RightButton\) \{[\s\S]{0,260}root\.openMenu\(rowItem\.item/)
   assert.ok(!/RightButton[\s\S]{0,200}toggleQueued/.test(panel), "right-click never removes from Up Next")
   for (const id of ["play", "top", "bottom", "remove", "played", "unplayed"]) assert.match(panel, new RegExp('id === "' + id + '"'))
-  assert.match(panel, /schema: root\.manifestData && root\.manifestData\.barWidget/)
+  assert.match(panel, /schema: root\.manifestData && root\.manifestData\.legatoSettings/)
   assert.match(panel, /onChangeRequested: function\(key, value\)[\s\S]{0,120}root\.persistSettings\(change\)/)
   assert.match(panel, /t === "g"\) \{ root\.setSettings\(!root\.showSettings\)/)
   const view = fs.readFileSync(path.join(ROOT, "SettingsView.qml"), "utf8")
   for (const type of ["boolean", "integer", "enum"]) assert.match(view, new RegExp('entry\\.type === "' + type + '"'))
   // Every setting in the schema has a type the page can show.
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"))
-  for (const entry of manifest.barWidget.schema) assert.ok(["boolean", "integer", "enum"].includes(entry.type), entry.key)
+  for (const entry of manifest.legatoSettings.schema) assert.ok(["boolean", "integer", "enum"].includes(entry.type), entry.key)
 })
 
 test("the loaded episode can't be moved or marked; keys and tabs behave", () => {
@@ -504,8 +504,8 @@ test("no bare Color. references (Qt 6.12 shadows qs.Commons' Color with its own)
 test("the chip's title sits still unless scrollTitle is on", () => {
   const widget = fs.readFileSync(path.join(ROOT, "BarWidget.qml"), "utf8")
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"))
-  assert.equal(manifest.barWidget.defaults.scrollTitle, false)
-  assert.ok(manifest.barWidget.schema.some((s) => s.key === "scrollTitle"))
+  assert.equal(manifest.legatoSettings.defaults.scrollTitle, false)
+  assert.ok(manifest.legatoSettings.schema.some((s) => s.key === "scrollTitle"))
   assert.match(widget, /needsScroll: root\.scrollTitle && /)
   assert.match(widget, /elide: root\.scrollTitle \? Text\.ElideNone : Text\.ElideRight/)
 })
@@ -534,4 +534,11 @@ test("no keepLoaded: an update reloads the service along with the panel", () => 
   // update left the old service under the new panel (strict review 10).
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"))
   assert.notEqual(manifest.keepLoaded, true)
+})
+
+test("the settings list isn't the widget's: tools reading barWidget.schema would write the bar entry, which Legato doesn't read", () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"))
+  assert.equal(manifest.barWidget.schema, undefined)
+  assert.equal(manifest.barWidget.defaults, undefined)
+  assert.ok(manifest.legatoSettings.schema.length >= 9)
 })

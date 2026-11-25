@@ -1302,6 +1302,8 @@ def resolve_episode(uuid, podcast_uuid=""):
     for a show you don't follow — from the show's public episode list."""
     uuid = safe_uuid(uuid)
     raw = user_episode(uuid)
+    if raw and not isinstance(raw.get("playedUpTo"), (int, float)):
+        raw = {}  # a record with no position says nothing about where you are
     if not raw and (record_expected(podcast_uuid) or position_known_elsewhere(uuid)):
         # A show you follow: Pocket Casts has a record of every episode; of
         # one you don't, an episode anyone played has one (a push creates it)
@@ -2282,7 +2284,7 @@ def outro_applies(listed, duration, position, skip_last):
             and duration >= listed * (1 - NO_SIZE_MARGIN) and position + skip_last < duration)
 
 
-def load_into_mpv(item, prefs, position, skip_last=0):
+def load_into_mpv(item, prefs, position, skip_last=0, on_loaded=None):
     url = safe_media_url(item.get("url"))
     if not url:
         raise ApiError("not_found", "That episode has no playable audio link")
@@ -2297,16 +2299,24 @@ def load_into_mpv(item, prefs, position, skip_last=0):
         if item.get("show"):
             title = "%s — %s" % (title, item["show"])
         options = "start=%d,force-media-title=%s,pause=no" % (int(position), mpv_quote(title))
-        player.command("loadfile", url, "replace", -1, options)
-        player.wait_for_load()
-        size, duration = player.get("stream-end"), player.get("duration")
-        if skip_last and outro_applies(as_int(item.get("duration")), duration, position, skip_last):
-            # The show's skip-outro: mpv ends the episode that much early, and
-            # the end is handled as any other (marked played, autoplay).
-            player.set("file-local-options/end", "-%d" % skip_last)
-        return {"url": url, "size": size if isinstance(size, int) else None,
-                "duration": duration if isinstance(duration, (int, float)) else None,
-                "asked": int(position) if position > START_SLACK else None, "begun": float(position)}
+        # From loadfile until the caller has recorded the new episode
+        # (`on_loaded`), the call's deadline waits: cut off in between,
+        # mpv would play one episode while playback.json named another
+        # (wait_for_load is bounded; the rest is local).
+        with deadline_held():
+            player.command("loadfile", url, "replace", -1, options)
+            player.wait_for_load()
+            size, duration = player.get("stream-end"), player.get("duration")
+            if skip_last and outro_applies(as_int(item.get("duration")), duration, position, skip_last):
+                # The show's skip-outro: mpv ends the episode that much early, and
+                # the end is handled as any other (marked played, autoplay).
+                player.set("file-local-options/end", "-%d" % skip_last)
+            stream = {"url": url, "size": size if isinstance(size, int) else None,
+                      "duration": duration if isinstance(duration, (int, float)) else None,
+                      "asked": int(position) if position > START_SLACK else None, "begun": float(position)}
+            if on_loaded:
+                on_loaded(stream)
+        return stream
 
 
 def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_top=False):
@@ -2333,9 +2343,6 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
     if (save_previous and current.get("uuid") and current.get("uuid") != item.get("uuid")
             and previous.get("handledEnd") != current.get("uuid")):
         save_outgoing(previous)
-    stream = load_into_mpv(item, prefs, position, skip_last)
-    if intro:
-        add_stats(intro=intro)
     # atTop: whether this episode is the top of Up Next, i.e. what Pocket
     # Casts considers playing. If the top later changes, another device has
     # moved on to something else (see check_server).
@@ -2348,10 +2355,17 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
     strike = previous.get("breakStrike")
     if isinstance(strike, dict) and strike.get("uuid") == item.get("uuid"):
         state["breakStrike"] = strike  # a reload of the episode that just broke (stream_stopped)
-    # What mpv knew of the file as it loaded (stream_broke): its size goes
-    # when the stream fails, and a duration it estimated can shrink with it.
-    state["stream"] = stream
-    save_playback(state)
+
+    def recorded(stream):
+        # What mpv knew of the file as it loaded (stream_broke): its size goes
+        # when the stream fails, and a duration it estimated can shrink with it.
+        state["lastSyncAt"] = time.time()
+        state["stream"] = stream
+        save_playback(state)
+
+    load_into_mpv(item, prefs, position, skip_last, on_loaded=recorded)
+    if intro:
+        add_stats(intro=intro)
     if queue:
         try:
             state["atTop"] = up_next_put(item, "now")
@@ -2416,10 +2430,11 @@ def next_in_up_next(skip_uuid):
             if not item["show"]:
                 titles = titles if titles is not None else podcast_titles()
                 item["show"] = titles.get(item["podcast"], "")
-            if not item["url"] or uuid not in sync:
-                # Where it starts comes from its sync data: without that (a
-                # reply missing it), from its record, which refuses an empty
-                # lookup rather than start it at 0 and push that.
+            if not item["url"] or not isinstance((sync.get(uuid) or {}).get("playedUpTo"), (int, float)):
+                # Where it starts comes from its sync data's position; without
+                # one (Up Next leaves it out for episodes not started, and a
+                # reply can miss the entry), from its record, which refuses
+                # an empty lookup rather than start it at 0 and push that.
                 item = resolve_episode(uuid, item["podcast"])
             return item
     return None
@@ -2442,6 +2457,9 @@ def finish_current(state, prefs, autoplay):
     save_playback(state)
     entry = {"uuid": uuid, "podcast": episode.get("podcast", ""), "duration": episode.get("duration"),
              "position": episode.get("duration") or state.get("position") or 0,
+             # Where Pocket Casts had it from this machine: a retry that finds
+             # it moved from there knows another device carried on.
+             "left": float(state.get("lastSyncPos") or 0),
              "played": False, "removed": False, "at": time.time(), "tried": time.time()}
     tell_finished(entry)
     if entry["removed"]:
@@ -2482,8 +2500,11 @@ def tell_finished(entry):
 
 def retry_pending_finish(state):
     """Tell Pocket Casts about episodes that ended here while it couldn't be
-    reached. Given up after six hours: by then another device has had its
-    say. Runs only from a poll, never on a timer of its own."""
+    reached, unless another device has spoken since: before marking one
+    played, its record is read, and if it moved from where this machine
+    left it (you carried on with your phone), the entry is dropped; with no
+    answer, it waits. Given up after six hours. Runs only from a poll,
+    never on a timer of its own."""
     pending = state.get("pendingFinish") or []
     if not pending:
         return
@@ -2496,6 +2517,19 @@ def retry_pending_finish(state):
             # At most once a minute: with the network down, each try holds
             # the state lock while its requests time out.
             entry["tried"] = now
+            if not entry.get("played"):
+                try:
+                    record = user_episode(entry["uuid"])
+                except ApiError:
+                    keep.append(entry)
+                    continue
+                if not record or not isinstance(record.get("playedUpTo"), (int, float)):
+                    keep.append(entry)  # no answer: ask again later
+                    continue
+                if as_int(record.get("playingStatus")) == STATUS_PLAYED:
+                    entry["played"] = True
+                elif abs(float(record["playedUpTo"]) - float(entry.get("left") or 0)) > DRIFT_SLACK:
+                    continue  # another device carried on: its say stands
             tell_finished(entry)
         if entry.get("removed") and entry["uuid"] == (state.get("episode") or {}).get("uuid"):
             state["atTop"] = False  # off Up Next now: no longer what Pocket Casts thinks is playing
@@ -2979,6 +3013,10 @@ def check_server(state, prefs, player=None, quick=False):
         # API): that's no answer, and confirming our own place on it could
         # rewind the phone.
         return "unverified", state
+    if record and not isinstance(record.get("playedUpTo"), (int, float)):
+        # A record with no position (every record has one, unplayed ones at
+        # 0: checked live 2026-11-24): no answer, not "at 0".
+        return "unverified", state
     if record:
         state["recordSeen"] = True
     finished = as_int(record.get("playingStatus")) == STATUS_PLAYED
@@ -3008,11 +3046,11 @@ def check_server(state, prefs, player=None, quick=False):
         local = float(state.get("position") or 0)
         # Keep a local position Pocket Casts never received (its push failed)
         # when it is further on than what another device saved, within the
-        # hour (a phone rewound on purpose later wins), and not where a stall
-        # left it (`stalledPlace`: you may have rewound the phone meanwhile)
-        # nor what played after a resume Pocket Casts couldn't confirm
-        # (`unconfirmed`: that stretch is no news, and the answer wins).
-        keep_local = (moved_since_push(state) and local > server and not state.get("stalledPlace")
+        # hour (a phone rewound on purpose later wins), and not while the
+        # place is `unconfirmed`: what played after a resume Pocket Casts
+        # couldn't confirm, or where a stall left it (you may have rewound
+        # the phone meanwhile), is no news, and the answer wins.
+        keep_local = (moved_since_push(state) and local > server
                       and not state.get("unconfirmed")
                       and time.time() - float(state.get("lastSyncAt") or 0) < UNSENT_BREAK_KEPT)
         if abs(server - pushed) > DRIFT_SLACK and not keep_local:
@@ -3036,7 +3074,6 @@ def check_server(state, prefs, player=None, quick=False):
             episode["playedUpTo"] = server
     state["checkServer"] = False
     state.pop("unconfirmed", None)  # Pocket Casts has answered
-    state.pop("stalledPlace", None)
     state["lastSyncAt"] = time.time()
     save_playback(state)
     return "same", state
@@ -3049,6 +3086,15 @@ def resume_loaded(player, state, prefs):
     at_end = player.get("eof-reached") is True
     if player.get("pause") is False and not at_end:
         return  # already playing (a media key got there first)
+    if player.get("path") != (state.get("episode") or {}).get("url"):
+        # mpv holds a file playback.json doesn't name (a load cut off before
+        # it was recorded; another program's OpenUri through mpv-mpris).
+        # Nothing about it is this episode's: neither its end nor its place.
+        # Play starts over, as on an idle player: Pocket Casts says what
+        # plays, and from where.
+        quit_mpv(player)
+        resume_last(prefs)
+        return
     if at_end:
         snap = player.snapshot()
         broke = snap.get("path") == (state.get("episode") or {}).get("url") and stream_broke(snap, state)
@@ -3169,11 +3215,11 @@ def poll(autoplay=True, seeked=False):
         # (`unconfirmed`: a pause meanwhile pushes nothing either).
         state["checkServer"] = True
         state["unconfirmed"] = True
-        state["stalledPlace"] = True
         if stall == "now":
             save_playback(state)
             return player_view(snap, state, prefs)
         state["stallHandled"] = stalls_ended_by(snap.get("user-data/legato"))
+    was_checking = bool(state.get("checkServer"))
     if snap.get("pause") is True:
         # Whoever paused it (this panel, a media key, playerctl), the next
         # resume asks Pocket Casts first.
@@ -3203,11 +3249,16 @@ def poll(autoplay=True, seeked=False):
         # the gap grows, and once it plays again Pocket Casts is asked.
         due = True
     elif (snap.get("pause") is True and moved_since_push(state) and not state.get("unconfirmed")
-          and now - float(state.get("lastSyncAt") or 0) < RECHECK_AFTER):
+          and now - float(state.get("lastSyncAt") or 0) < RECHECK_AFTER
+          and not ended_here(state) and (not was_checking or seeked)):
         # Paused somewhere new (a seek from a media widget): send it. A paused
         # position left unsent from before an interruption (the machine slept
         # before the push went out) isn't pushed blind: another device may
         # have moved on since, and the next resume asks Pocket Casts first.
+        # Not an episode that ended here (dragged back while paused: it's
+        # played until Play reopens it), nor, after a pause, a stretch that
+        # played without anyone asking (a media key's resume no poll saw);
+        # a seek since (`seeked`) is this machine's.
         due = True
     if video_shown(snap):
         remember_video_geometry(prefs)  # so a window closed with its own X reopens where it was
@@ -3254,7 +3305,7 @@ def moved_since_push(state):
     return abs(float(state.get("position") or 0) - float(state.get("lastSyncPos") or 0)) >= 1
 
 
-def sync_now(player, state, force=False):
+def sync_now(player, state, force=False, was_playing=False):
     """Push the current position right away, if this machine produced it.
 
     `force`: it was just playing here (a pause, or a seek while playing),
@@ -3265,7 +3316,9 @@ def sync_now(player, state, force=False):
     recent (under RECHECK_AFTER, the poll's rule too). An older paused
     position is old news: another device may have carried on from it since,
     and pushing it would rewind that device; the next resume asks first.
-    An episode at its end is never pushed as in progress (it's played)."""
+    An episode at its end is never pushed as in progress (it's played).
+    `was_playing`: it played until a moment ago (pause_first paused it
+    before the lock), so the playing rule applies, not the paused one."""
     episode = state.get("episode") or {}
     position = player.get("time-pos")
     if not episode.get("uuid") or not isinstance(position, (int, float)):
@@ -3283,7 +3336,6 @@ def sync_now(player, state, force=False):
         # has been asked.
         state["checkServer"] = True
         state["unconfirmed"] = True
-        state["stalledPlace"] = True
         save_playback(state)
         return
     if (player.get("eof-reached") is True or ended_here(state) or state.get("unconfirmed")
@@ -3295,7 +3347,7 @@ def sync_now(player, state, force=False):
         save_playback(state)
         return
     recent = time.time() - float(state.get("lastSyncAt") or 0) < RECHECK_AFTER
-    if not force and player.get("pause") is not False:
+    if not force and not was_playing and player.get("pause") is not False:
         # Paused: only if it moved since its last push, and that was recent.
         if not (moved_since_push(state) and recent):
             save_playback(state)
@@ -3872,7 +3924,24 @@ def resume_last(prefs):
     play_item(item, prefs, save_previous=False)
 
 
+def pause_first(action):
+    """A pause (or the pause half of a toggle, or a stop) silences mpv before
+    the state lock is taken: a poll pushing on a slow link can hold that
+    lock for many seconds, and the click must not wait (or fail "busy")
+    while the episode plays on. The count and the push follow under the
+    lock. True if this paused a playing episode."""
+    player = Mpv.connect(timeout=1.0)
+    if not player:
+        return False
+    with player:
+        if player.get("pause") is not False or player.get("eof-reached") is True or not player.get("path"):
+            return False
+        player.set("pause", True)
+    return True
+
+
 def cmd_toggle(args):
+    paused_first = pause_first(args.action) if args.action in ("pause", "toggle") else False
     with StateLock():
         prefs = load_prefs()
         state = load_playback()
@@ -3883,7 +3952,7 @@ def cmd_toggle(args):
                 idle = player.get("idle-active") is True or not player.get("path")
                 if not idle:
                     at_end = player.get("eof-reached") is True
-                    playing = player.get("pause") is False and not at_end
+                    playing = paused_first or (player.get("pause") is False and not at_end)
                     if args.action == "pause" or (args.action == "toggle" and playing):
                         # The stretch up to now, before the pause (the poll that
                         # sees it can arrive seconds later, under a slow push).
@@ -3941,7 +4010,7 @@ def cmd_seek(args):
             state["listening"] = {}  # a new count from here: the jump itself isn't listening
             count_listening(state, listen_snap(player), prefs)
             playing = player.get("pause") is False and player.get("eof-reached") is not True
-            if playing and ended_here(state):
+            if playing and ended_here(state) and player.get("path") == (state.get("episode") or {}).get("url"):
                 # Dragged back from the end of an episode that ended here
                 # while mpv still played (it pauses itself at the end a
                 # moment later; paused, Play plays it again from here).
@@ -4148,14 +4217,17 @@ def cmd_videopin(args):
     with prefs_update() as prefs:
         pinned = not video_pinned(prefs) if args.value == "toggle" else args.value == "on"
         prefs["videoPinned"] = pinned
-        # The rules first (for windows opened later), then the pin: Hyprland
-        # re-tags the open window as its pin changes (video_rule_lua).
-        place_video_window(prefs)
-        hyprctl("dispatch", 'hl.dsp.window.pin({ action = "%s", window = "class:^%s$" })'
-                % ("on" if pinned else "off", VIDEO_APP_ID))
         player = Mpv.connect()
         if player:
             with player:
+                if video_shown(player.snapshot()):
+                    # The rules first (for windows opened later), then the pin:
+                    # Hyprland re-tags the open window as its pin changes
+                    # (video_rule_lua). With no window shown, only the choice
+                    # is kept: showing the video sends the rules (set_video).
+                    place_video_window(prefs)
+                    hyprctl("dispatch", 'hl.dsp.window.pin({ action = "%s", window = "class:^%s$" })'
+                            % ("on" if pinned else "off", VIDEO_APP_ID))
                 try:
                     player.command("set_property", "menu-data", video_menu(prefs))
                     player.command("show-text", "Always on top: %s" % ("on" if pinned else "off"), 1500)
@@ -4169,10 +4241,11 @@ def cmd_videotransparency(args):
     Settings page): the open window changes now, new ones open that way."""
     with prefs_update() as prefs:
         prefs["videoTransparency"] = args.value
-        place_video_window(prefs)  # the level, to the open window and the hook
         player = Mpv.connect()
         if player:
             with player:
+                if video_shown(player.snapshot()):
+                    place_video_window(prefs)  # the level, to the open window and the hook
                 try:
                     player.command("set_property", "menu-data", video_menu(prefs))
                     player.command("show-text", "Transparency: %s" % transparency_label(args.value).lower(), 1500)
@@ -4224,6 +4297,7 @@ def cmd_next(args):
 
 
 def cmd_stop(args):
+    paused_first = False if args.if_paused else pause_first("stop")
     with StateLock():
         state = load_playback()
         player = Mpv.connect()
@@ -4242,7 +4316,7 @@ def cmd_stop(args):
             return
         if player:
             count_listening(state, listen_snap(player), load_prefs())
-            sync_now(player, state)
+            sync_now(player, state, was_playing=paused_first)
             quit_mpv(player)
         view = player_view({}, load_playback(), load_prefs())
     out(view)
@@ -4318,8 +4392,9 @@ SETTINGS_SAFE = {"autoplay": False, "unloadAfterMinutes": 0}
 
 
 def settings_schema():
-    """The settings, as manifest.json's barWidget.schema lists them (the
-    Settings page is drawn from the same list), from the plugin folder this
+    """The settings, as manifest.json's `legatoSettings.schema` lists them
+    (the Settings page is drawn from the same list; not barWidget.schema,
+    whose readers write the widget's bar entry), from the plugin folder this
     bridge runs from: the bridge's own code is there, so it's as trusted as
     the bridge."""
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "manifest.json")
@@ -4328,7 +4403,7 @@ def settings_schema():
     if len(blob) > STATE_MAX_BYTES:
         raise ApiError("bad_manifest", "manifest.json is too large")
     try:
-        schema = json.loads(blob.decode("utf-8"))["barWidget"]["schema"]
+        schema = json.loads(blob.decode("utf-8"))["legatoSettings"]["schema"]
     except (UnicodeDecodeError, ValueError, KeyError, TypeError):
         raise ApiError("bad_manifest", "manifest.json lists no settings")
     return [entry for entry in schema if isinstance(entry, dict) and isinstance(entry.get("key"), str)]
@@ -4351,6 +4426,18 @@ def setting_value(entry, value):
     if kind == "enum":
         return value if isinstance(value, str) and value in (entry.get("options") or []) else None
     return None
+
+
+def from_bar_entry(entry, value):
+    """A 1.0 bar entry's value as 1.1 keeps it: `omarchy bar set` (without
+    --json) stored text, "0" or "false", and 1.0 read numbers from it."""
+    if isinstance(value, str):
+        text = value.strip()
+        if entry.get("type") == "integer" and re.fullmatch(r"-?\d+", text):
+            return int(text)
+        if entry.get("type") == "boolean" and text in ("true", "false"):
+            return text == "true"
+    return value
 
 
 def read_settings():
@@ -4390,11 +4477,16 @@ def settings_view(schema=None):
     `problem`: what's wrong, for the page."""
     schema = settings_schema() if schema is None else schema
     data, problem = read_settings()
+    imported = load_prefs().get("settingsImported") is True
+    # No settings.json yet and the old bar entry not copied in: a 1.0 user's
+    # "autoplay off" may be on its way (`settings import`), so the two that
+    # act stay off meanwhile, as with a file that can't be read.
+    waiting = data is None and not problem and not imported
     values, invalid = {}, []
     for entry in schema:
         key = entry["key"]
         value = entry.get("defaultValue")
-        if problem:
+        if problem or waiting:
             value = SETTINGS_SAFE.get(key, value)
         elif data and key in data:
             valid = setting_value(entry, data[key])
@@ -4418,7 +4510,7 @@ def settings_view(schema=None):
         problem = "%s: %s" % (SETTINGS_FILE, "; ".join(said))
     # `stored`: nothing to copy in (a file is there, or the old bar entry was
     # copied once already: a settings.json deleted later means the defaults).
-    stored = data is not None or not writable or load_prefs().get("settingsImported") is True
+    stored = data is not None or not writable or imported
     return {"values": values, "stored": stored, "writable": writable, "problem": problem, "path": settings_path()}
 
 
@@ -4476,7 +4568,7 @@ def cmd_settings(args):
                 copied = {}
                 for entry in schema:
                     if entry["key"] in entry_values:
-                        valid = setting_value(entry, entry_values[entry["key"]])
+                        valid = setting_value(entry, from_bar_entry(entry, entry_values[entry["key"]]))
                         if valid is not None:
                             copied[entry["key"]] = valid
                 save_state(SETTINGS_FILE, copied)

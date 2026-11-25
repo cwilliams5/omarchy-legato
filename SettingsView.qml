@@ -4,7 +4,7 @@ import qs.Commons as Commons
 import qs.Ui
 
 // The panel's Settings page (the header's gear, or `g`): every setting in
-// manifest.json's barWidget.schema, with a control for its type, so a new
+// manifest.json's legatoSettings.schema, with a control for its type, so a new
 // setting shows up here by being added to the schema. Changes are saved by
 // the bridge to settings.json in Legato's state folder (not the widget's bar
 // entry, which Omarchy deletes when the plugin is turned off) and take
@@ -17,8 +17,8 @@ Column {
   property color foreground: Commons.Color.foreground
   property color accent: Commons.Color.accent
   property string fontFamily: Style.font.family
-  property var schema: []      // barWidget.schema
-  property var defaults: ({})  // barWidget.defaults
+  property var schema: []      // legatoSettings.schema
+  property var defaults: ({})  // legatoSettings.defaults
   property var values: ({})    // the settings in use (Service.settings)
   property string problem: ""  // settings.json unreadable, a value not valid, or a change not saved
   property string savedIn: ""  // settings.json's path, with ~

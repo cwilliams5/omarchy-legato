@@ -59,7 +59,10 @@ Panel {
   }
   // How Omarchy's bar wakes it: the bar reaches the panel just after the
   // panel has loaded (BarWidget injectPanel), so not in onCompleted.
-  onSharedServiceChanged: claimService()
+  onSharedServiceChanged: {
+    claimService()
+    if (sharedService) hadShared = true  // see localService
+  }
   // The widget's bar entry (`settings`, injected by BarWidget) goes to the
   // service only for the one-time copy of Legato 1.0's settings into
   // settings.json; the settings in use are the service's (from that file).
@@ -393,6 +396,8 @@ Panel {
       passwordField.text = ""
       return
     }
+    // "Tab to open first": each time it opens (a tab switch is for now).
+    if (service && !detailOpen) currentTab = service.setting("defaultTab", "upnext")
     if (service) {
       service.refreshIfStale()
       service.loadTab(currentTab, false)
@@ -412,10 +417,14 @@ Panel {
   // (BarWidget injects it just after loading this panel): until then
   // there's no telling.
   property bool settled: false
+  // A panel that has had the shell's service never makes its own: a plugin
+  // reload takes the service away a moment before the panel itself goes,
+  // and a copy made then started a probe and a second IPC handler.
+  property bool hadShared: false
   Loader {
     id: localService
     objectName: "localService"
-    active: root.settled && root.sharedService === null
+    active: root.settled && root.sharedService === null && !root.hadShared
     sourceComponent: Service { active: true }
   }
 
@@ -681,8 +690,8 @@ Panel {
           foreground: root.foreground
           accent: root.accent
           fontFamily: root.fontFamily
-          schema: root.manifestData && root.manifestData.barWidget ? (root.manifestData.barWidget.schema || []) : []
-          defaults: root.manifestData && root.manifestData.barWidget ? (root.manifestData.barWidget.defaults || {}) : ({})
+          schema: root.manifestData && root.manifestData.legatoSettings ? (root.manifestData.legatoSettings.schema || []) : []
+          defaults: root.manifestData && root.manifestData.legatoSettings ? (root.manifestData.legatoSettings.defaults || {}) : ({})
           values: root.service && root.serviceCurrent ? root.service.settings : ({})
           problem: !root.serviceCurrent ? root.restartNote
             : root.service ? (root.service.settingsError || root.service.settingsProblem || "") : ""

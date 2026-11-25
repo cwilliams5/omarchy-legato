@@ -12,13 +12,13 @@ python3 -B tests/mutate.py .       # all of them, about 2 hours
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (294 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (322 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
 it. A mutation whose pattern no longer matches the code is reported STALE
 and fails the run (fix its pattern), as does one whose tests fail
 unmutated (SKIP).
 
-## The set (294; strict review rounds 1 to 10, 2026-11-24)
+## The set (322; strict review rounds 1 to 11, 2026-11-24)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
@@ -148,6 +148,21 @@ caught each mutant. By area:
   masked again by the new list check (Up Next's sync data hides it too
   now), positions within the one-second rule, a page's visibility set
   twice (the Flickable alone now), an import over a file made by a script.
+- Round 10's full run: 293 of 294; the survivor was a flag made redundant by
+  round 10's own fix (`stalledPlace`, always set with `unconfirmed`):
+  removed. Round 11 (the reviewers' own): the safety reviewer's paths had
+  no mutants (Play and a drag back on another file, a stale finish, a
+  record without a position); 11 of 14 QML mutants (fit) survived: two
+  screens' claims, a dormant copy's socket, notices said once, the chip's
+  shapes and its marquee. All listed now, with tests. On the way: two
+  more masked by tiny numbers (a push at 1 hid a push at 0; a phone 2 s on
+  sat inside the 3 s drift), and a fix of round 11's own that a test
+  caught (Stop paused first counted an unchecked stretch as paused).
+- Equivalent and left out: "a stall's place confirmed meanwhile" (the
+  poll's paused push needs no "ask first" after a pause since round 11,
+  and `sync_now` checks the stall itself); the dormancy timer ignoring
+  claims, or a claim not stopping it, each alone (one covers the other;
+  both together are planted).
 - Equivalent and left out: dropping `after > before` from the skip count
   (`add_stats` ignores values that aren't positive).
 

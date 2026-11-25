@@ -29,7 +29,7 @@ Item {
   function find(item, test) {
     if (!item) return null
     if (test(item)) return item
-    var kids = item.children || []
+    var kids = (item.children || []).concat(item.resources || [])
     for (var i = 0; i < kids.length; i++) {
       var hit = find(kids[i], test)
       if (hit) return hit
@@ -84,24 +84,27 @@ Item {
   Legato.Service { id: shellService; python: "/usr/bin/python3" }
   // Omarchy's bar hands the panel the shell's service; a replacement bar's
   // facade has no service lookup (shell.qml pluginShellForBarEntry).
-  QtObject { id: builtinBar; property var shell: ({ serviceFor: function(id) { return shellService } }) }
-  QtObject { id: replacementBar; property var shell: ({ serviceFor: function(id) { return null } }) }
+  QtObject { id: builtinBar; property color foreground: "#ffffff"; property color urgent: "#ff0000"; property color barForeground: "#ffffff"; property string fontFamily: "monospace"; property bool vertical: false; property var shell: ({ serviceFor: function(id) { return shellService } }) }
+  QtObject { id: replacementBar; property color foreground: "#ffffff"; property color urgent: "#ff0000"; property color barForeground: "#ffffff"; property string fontFamily: "monospace"; property bool vertical: false; property var shell: ({ serviceFor: function(id) { return null } }) }
   Component { id: panelMaker; Legato.Panel {} }
   // For the order BarWidget injects in: the bar first, then the entry.
   Legato.Service { id: freshService; python: "/usr/bin/python3" }
-  QtObject { id: freshBar; property var shell: ({ serviceFor: function(id) { return freshService } }) }
+  QtObject { id: freshBar; property color foreground: "#ffffff"; property color urgent: "#ff0000"; property color barForeground: "#ffffff"; property string fontFamily: "monospace"; property bool vertical: false; property var shell: ({ serviceFor: function(id) { return freshService } }) }
   property var latePanel: null
   // The claim path Omarchy's bar really takes: the panel loads with no bar,
   // and the bar is handed over just after (BarWidget injectPanel).
   Legato.Service { id: handedService; python: "/usr/bin/python3" }
-  QtObject { id: handedBar; property var shell: ({ serviceFor: function(id) { return handedService } }) }
+  QtObject { id: handedBar; property color foreground: "#ffffff"; property color urgent: "#ff0000"; property color barForeground: "#ffffff"; property string fontFamily: "monospace"; property bool vertical: false; property var shell: ({ serviceFor: function(id) { return handedService } }) }
   property var handedPanel: null
   // Legato 1.0's service, as Omarchy keeps it running through the update to
   // 1.1 (its manifest said keepLoaded): none of the newer calls or
   // properties, `settings` fed by the panel.
   Component { id: oldServiceMaker; V1.Service { python: "/usr/bin/python3" } }
   property var oldService: null
-  QtObject { id: oldBar; property var shell: ({ serviceFor: function(id) { return top.oldService } }) }
+  readonly property var episodeItem: ({ type: "episode", uuid: "aaaaaaaa-0000-0000-0000-000000000001",
+                                        podcast: "bbbbbbbb-0000-0000-0000-000000000001", name: "An episode", show: "A show",
+                                        duration: 100, playedUpTo: 5, status: 2 })
+  QtObject { id: oldBar; property color foreground: "#ffffff"; property color urgent: "#ff0000"; property color barForeground: "#ffffff"; property string fontFamily: "monospace"; property bool vertical: false; property var shell: ({ serviceFor: function(id) { return top.oldService } }) }
   property var oldPanel: null
   property var againPanel: null
   property int noticesBefore: 0
@@ -112,6 +115,11 @@ Item {
 
   property int step: 0
   property int waits: 0
+  property double stepStarted: 0
+  property var secondPanel: null
+  property var rebuiltPanel: null
+  property var swapPanel: null
+  QtObject { id: swapBar; property color foreground: "#ffffff"; property color urgent: "#ff0000"; property color barForeground: "#ffffff"; property string fontFamily: "monospace"; property bool vertical: false; property var shell: ({ serviceFor: function(id) { return shellService } }) }
   Timer {
     interval: 60
     repeat: true
@@ -119,11 +127,16 @@ Item {
     onTriggered: {
       var steps = [top.dormantAtFirst, top.onAReplacementBar, top.onOmarchysBar, top.changes, top.brokenFile,
                    top.injectedLate, top.injectedLateSettled, top.importedOnce, top.problemsSaid,
-                   top.handedOverLate, top.handedOverLateCheck, top.claimingPanelGone, top.dormantAgain,
-                   top.claimedAgain, top.neverStarts, top.neverStartsAnswered, top.oldServiceUpdate, top.oldServiceCheck]
+                   top.handedOverLate, top.handedOverLateCheck, top.twoScreens, top.oneScreenGone, top.stillAwakeWithOne,
+                   top.claimingPanelGone, top.dormantAgain, top.claimedAgain, top.rebuildRelease, top.rebuildClaim, top.rebuiltStillAwake,
+                   top.tabOnOpen, top.reloadMakesNoCopy, top.reloadMakesNoCopyCheck,
+                   top.neverStarts, top.neverStartsAnswered, top.oldServiceUpdate, top.oldServiceCheck]
       if (top.step >= steps.length) { stop(); Qt.exit(top.failures); return }
+      if (top.waits === 0) top.stepStarted = Date.now()
       // A step returns false to wait (up to 1.5 s).
-      if (steps[top.step]() === false) {
+      var result
+      try { result = steps[top.step]() } catch (e) { top.check("step " + top.step + " ran", false, e); result = undefined }
+      if (result === false) {
         if (++top.waits < 25) return
         top.check("step " + top.step + " done in time", false, "still waiting after 25 tries")
       }
@@ -323,14 +336,33 @@ Item {
   // Omarchy's bar swapped for a replacement at run time: the panel that
   // claimed the shell's copy goes; the copy goes dormant again, so the
   // replacement bar's own copy is the only one live.
-  function claimingPanelGone() {
+  // Two screens on Omarchy's bar: two panels hold the shell's copy. One
+  // screen unplugged leaves the other's chip working.
+  function twoScreens() {
     shellService.dormantAfterMs = 100
+    secondPanel = panelMaker.createObject(top, { bar: builtinBar, settings: {} })
+    check("two screens: two claims", shellService.claims === 2, shellService.claims)
+    shellService.mpvSocket = "/run/test/mpv.sock"  // a player is loaded: the event socket connects
+    shellService.applyPlayer({ active: true, playing: false, position: 5, duration: 100, item: top.episodeItem, running: true })
+    check("(the event socket connects)", named(shellService, "playerEvents").connected === true,
+          named(shellService, "playerEvents").connected)
+  }
+  function oneScreenGone() { secondPanel.destroy() }
+  function stillAwakeWithOne() {
+    if (Date.now() - top.stepStarted < 250) return false  // past dormantAfterMs
+    check("one screen unplugged: the other's panel still holds it awake", shellService.active === true
+          && shellService.claims === 1, shellService.active + " " + shellService.claims)
+  }
+
+  function claimingPanelGone() {
     builtinPanel.destroy()
   }
   function dormantAgain() {
     if (shellService.active) return false
     check("the shell's copy goes dormant once no panel holds it", shellService.active === false
           && named(shellService, "ipcLoader").item === null, shellService.active)
+    check("and lets go of mpv's event socket", named(shellService, "playerEvents").connected === false,
+          named(shellService, "playerEvents").connected)
     check("so one copy runs, the replacement bar's", local.active === true, local.active)
     againPanel = panelMaker.createObject(top, { bar: builtinBar, settings: {} })
   }
@@ -339,6 +371,50 @@ Item {
           shellService.active)
     check("and reads where things stand", bridgeCalls("player").length >= 1, bridgeCalls("player").length)
     running().forEach(function(p) { var a = argsOf(p); if (a && a[0] === "player") answer(p, {}) })
+  }
+
+  // A bar rebuilding its widgets: the old panel goes and a new one claims
+  // within the delay, so the copy never goes dormant in between.
+  function rebuildRelease() { againPanel.destroy() }
+  function rebuildClaim() {
+    check("(the old panel let go: the delay runs)", shellService.claims === 0 && shellService.active === true,
+          shellService.claims + " " + shellService.active)
+    rebuiltPanel = panelMaker.createObject(top, { bar: builtinBar, settings: {} })  // 60 ms on, within 100
+  }
+  function rebuiltStillAwake() {
+    if (Date.now() - top.stepStarted < 250) return false
+    check("a bar rebuilt within the delay keeps it awake", shellService.active === true && shellService.claims === 1,
+          shellService.active + " " + shellService.claims)
+  }
+
+  // "Tab to open first": every time the panel opens.
+  function tabOnOpen() {
+    running().forEach(function(p) { var a = argsOf(p); if (a && a[0] !== "notify") answer(p, a[0] === "status" ? status(view({})) : {}) })
+    shellService.applySettings(view({ defaultTab: "progress" }))
+    rebuiltPanel.open()
+    check("it opens on the saved first tab", rebuiltPanel.currentTab === "progress", rebuiltPanel.currentTab)
+    rebuiltPanel.setTab("podcasts")
+    rebuiltPanel.close()
+    rebuiltPanel.open()
+    check("and again after a tab was picked", rebuiltPanel.currentTab === "progress", rebuiltPanel.currentTab)
+    rebuiltPanel.close()
+    shellService.applySettings(view({ defaultTab: "new" }))
+    rebuiltPanel.open()
+    check("a new first tab applies at the next open", rebuiltPanel.currentTab === "new", rebuiltPanel.currentTab)
+    rebuiltPanel.close()
+    running().forEach(function(p) { var a = argsOf(p); if (a && a[0] !== "notify") answer(p, a[0] === "status" ? status(view({})) : {}) })
+  }
+
+  // A plugin reload takes the shell's service away a moment before the
+  // panel goes: the panel makes no copy of its own meanwhile.
+  function reloadMakesNoCopy() {
+    swapPanel = panelMaker.createObject(top, { bar: swapBar, settings: {} })
+    swapBar.shell = ({ serviceFor: function(id) { return null } })
+  }
+  function reloadMakesNoCopyCheck() {
+    if (Date.now() - top.stepStarted < 150) return false
+    check("a panel that had the shell's service makes no copy when it goes away",
+          named(swapPanel, "localService").item === null, named(swapPanel, "localService").item)
   }
 
   // Quickshell sends no `exited` for a process that fails to start: the

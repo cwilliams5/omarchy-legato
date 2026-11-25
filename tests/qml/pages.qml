@@ -46,8 +46,8 @@ Item {
   SettingsView {
     id: settings
     width: top.width
-    schema: top.manifest ? top.manifest.barWidget.schema : []
-    defaults: top.manifest ? top.manifest.barWidget.defaults : ({})
+    schema: top.manifest ? top.manifest.legatoSettings.schema : []
+    defaults: top.manifest ? top.manifest.legatoSettings.defaults : ({})
   }
 
   StatsView {

@@ -14,12 +14,12 @@ Cody's work setup.
 
 Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
-(docs/PLAN.md phases H and SR: rounds 1-10 so far; the fit reviewer has
+(docs/PLAN.md phases H and SR: rounds 1-11 so far; the fit reviewer has
 found nothing critical or high since round 7, the safety reviewer still
-found a high in round 10, fixed). Cody, 2026-11-24: SR86 (settings in
+found a high in round 11, fixed). Cody, 2026-11-24: SR86 (settings in
 Legato's own file) and SR63 (one live service on a replacement bar) were
 folded into 1.1.0 before round 10, and the review loop runs for as long
-as rounds keep finding critical or high issues: round 11 next. Then push,
+as rounds keep finding critical or high issues: round 12 next. Then push,
 release, the stats screenshot re-shot, and the marketplace verification
 request last of all, each on Cody's go. Committed and installed on Cody's
 laptop at each round's end (`./install.sh`), not pushed. Listed on the Omarchy plugin marketplace on 2026-11-23
@@ -90,7 +90,7 @@ what the API lists, or touch the user's Hyprland config.
   - settings: the Settings page's in the bridge's `settings.json`
     (`showTitle`, `scrollTitle`, `maxLabelWidth`, `defaultTab`, `skipBack`,
     `skipForward`, `autoplay`, `unloadAfterMinutes`, `pauseOnSleep`; the
-    schema in manifest.json's `barWidget.schema` drives the page and the
+    schema in manifest.json's `legatoSettings.schema` drives the page and the
     bridge's checks; until 1.0 they were the widget's entry in
     `~/.config/omarchy/shell.json`, copied in once by `settings import`);
     the player's own choices in the bridge's `prefs.json` (`volume`,
@@ -161,11 +161,14 @@ docs/PLAN.md         what's left to build
    last push under `RECHECK_AFTER` ago (not after an unguarded sleep). After
    a long stall the position is `unconfirmed` until Pocket Casts answers.
    An episode that ended here is never pushed as in progress (only
-   `play_again` reopens it). Only the file mpv plays is ever pushed, as the
-   episode playback.json names (`sync_now` checks mpv's `path`: a load cut
-   off before it was recorded, or another program opening a file through
-   mpv-mpris, left the old episode named while mpv played another; round
-   10). Why: Pocket Casts keeps the last write, so re-sending an
+   `play_again` reopens it; a drag back while paused, and the poll it
+   brings, push nothing). Only the file playback.json names is ever pushed,
+   reopened or judged at its end (`sync_now`, `cmd_seek` and `resume_loaded`
+   check mpv's `path`; Play on another file starts over through
+   `resume_last`): another program opening a file through mpv-mpris, or a
+   play cut off, left the old episode named while mpv played another
+   (rounds 10, 11). A play holds the call's deadline from `loadfile` until
+   the new episode is recorded (`deadline_held`). Why: Pocket Casts keeps the last write, so re-sending an
    old position rewinds the phone. The original did this; it was
    reproduced live on 2026-11-21 (phone at 25:00, rewound to 3:20 within
    12 seconds of resuming on the laptop). A fresh-eyes review found two
@@ -285,7 +288,7 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   asks first (`stallHandled` marks the stall done), and a pause before
   that pushes nothing (nor the periodic push: it waits on `unconfirmed`
   too). Where a stall left it doesn't count as a local place Pocket Casts
-  never got (`stalledPlace`): a rewind on the phone meanwhile wins. The watcher keeps the last eight stalls, so a short
+  never got (it's `unconfirmed`): a rewind on the phone meanwhile wins. The watcher keeps the last eight stalls, so a short
   hiccup after a long one doesn't hide it. A periodic push that fails
   twice in a row is said once (`pushFailures`, `syncFailed`). A stalled
   stream used to push its stall over the phone you carried on with. Pocket Casts keeps the playing episode at the
@@ -298,7 +301,9 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   close it.
   `finish_current` marks it played and takes it off Up Next (each step on
   its own; whatever fails waits in `pendingFinish` and a later poll retries
-  it, once a minute at most, for six hours), then autoplays. Play on an
+  it, once a minute at most, for six hours, reading the record first: one
+  moved from where this machine left it, `left`, means another device
+  carried on, and the entry is dropped), then autoplays. Play on an
   ended episode starts what was queued since (if autoplay was on) or plays
   it again (`play_again`, which pushes it as in progress itself, since
   Pocket Casts would say "played" and stop it). Play at a real end no poll
@@ -441,6 +446,11 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   under the state lock so a poll can't write the old numbers back). The
   Stats page shows its own errors (the status line is hidden behind a page)
   and re-reads after each poll while it's open.
+- **Pause and Stop silence mpv first** (`pause_first`), then take the state
+  lock for the count and the push: a poll pushing on a slow link can hold
+  the lock for many seconds, and the click used to wait and fail "busy"
+  with the episode playing on. `sync_now(was_playing=)` keeps the playing
+  rule for what played until that moment.
 - **Before sleep:** while an episode is loaded, the service runs
   `systemd-inhibit --what=sleep --mode=delay … setpriv --pdeathsig TERM
   legato-bridge sleepguard`. The guard waits on `dbus-monitor` for logind's
@@ -553,6 +563,21 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   (tests/qml/service.qml runs it against 1.0.2's real Service.qml,
   tests/qml/v1_0). 1.1 has no keepLoaded: later updates reload the service
   too (mpv is detached; the guard and the proxy restart).
+- **Destroying a Quickshell Process kills its child** (tested 2026-11-24 with
+  a throwaway instance: the destroyed one's `sleep` ended at once, a kept
+  one's ran on). A plugin reload destroys the service (1.1 has no
+  keepLoaded), so an update or install.sh ends the bridge calls in flight.
+  Safe by the path checks above (a play cut short starts over at the next
+  Play); the one cost left is a sign-in refresh cut in its last moment
+  (after Pocket Casts rotated the token, before it was stored): sign in
+  again. Omarchy reloads every plugin whenever any plugin's folder changes
+  (an update or install of any of them): rare, not never.
+- **Pocket Casts' shapes** (checked live 2026-11-24, read-only): every
+  episode record (`/user/episode`) has `playedUpTo` as a number, unplayed
+  ones 0, so a record without one is no answer (`check_server`,
+  `resolve_episode`); Up Next's sync data leaves `playedUpTo` out for
+  episodes not started, so where Next and autoplay start comes from the
+  record whenever the entry has no position (`next_in_up_next`).
 - **A Process that fails to start sends no `exited`** (Quickshell): each
   bridge call has a start watchdog (`startWatchdogMs`, 10 s) that answers
   it as failed, or the poll it was (`playerLoading`) stayed stuck for good.
@@ -714,7 +739,12 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   `barWidget.schema`) are deleted with the entry, and Omarchy 4.5 shows no
   form for them. Legato's live in settings.json since 1.1; `omarchy bar
   set` no longer changes them (the README says so), and the panel hands
-  the entry to the service only for the one-time import (`pushSettings`).
+  the entry to the service only for the one-time import (`pushSettings`,
+  which reads 1.0's text values, "0" or "false", as 1.0 did). Their list
+  is `legatoSettings` in manifest.json, not `barWidget.schema`: tools that
+  read that (third-party settings apps) write the bar entry, so a form
+  there would change nothing. Until the import has run, autoplay and the
+  idle unload stay off.
 
 ## Working on it
 

@@ -27,7 +27,10 @@
       "podcast"
     ],
     "allowMultiple": false,
-    "defaultSection": "right",
+    "defaultSection": "right"
+  },
+  "legatoSettings": {
+    "_comment": "Legato's settings (the Settings page; settings.json in the state folder). Not barWidget.schema: tools reading that write the widget's bar entry, which Legato no longer reads.",
     "defaults": {
       "showTitle": true,
       "scrollTitle": false,
