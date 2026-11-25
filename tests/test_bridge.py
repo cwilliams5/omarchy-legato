@@ -1753,6 +1753,17 @@ class EndToEnd(PlayerTestCase):
         with mock.patch.object(bridge, "sleep_offset", lambda: bridge._SLEEP_BASE + 600):
             run_bridge("toggle")
         self.assertIs(self.mpv_paused(), True)
+        # The sleep after Pocket Casts answered that it's still played, just
+        # before it plays again: still paused.
+        offset = [bridge._SLEEP_BASE]
+
+        def still_played_then_slept(uuid):
+            offset[0] = bridge._SLEEP_BASE + 600
+            return False
+        with mock.patch.object(bridge, "reopened_elsewhere", still_played_then_slept), \
+                mock.patch.object(bridge, "sleep_offset", lambda: offset[0]):
+            run_bridge("toggle")
+        self.assertIs(self.mpv_paused(), True)
 
     def test_status_tells_the_service_which_version_the_files_are(self):
         self.login()
@@ -2763,6 +2774,7 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         # glitch, and the phone's place stands (never marked played).
         bridge.save_prefs({"volume": 0, "speed": 2.0})
         self.fake["upnext"] = [EP_1, EP_2]
+        self.fake["syncStatus"] = True  # (its status in Up Next's sync data: no record read for it)
         self.other_device(EP_2, 105)
         self.login()
         self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
@@ -3084,6 +3096,16 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         self.assertTrue(view["playing"])
         self.assertLess(view["position"], 40)
 
+    def test_the_sleep_guards_mark_is_spent_once_the_suspend_happened(self):
+        # Strict review 19: a 30 s mark tied to nothing left a Play right after
+        # a short suspend loading paused. Once the suspend clock moved on, the
+        # mark is spent.
+        bridge.mark_sleeping()
+        self.assertTrue(bridge.sleeping_soon())
+        later = bridge.sleep_offset() + 60
+        with mock.patch.object(bridge, "sleep_offset", lambda: later):
+            self.assertFalse(bridge.sleeping_soon())
+
     def test_a_load_just_as_the_sleep_guard_pauses_loads_paused(self):
         # L3: a Play holding the state lock when the guard paused for a
         # suspend loaded with pause=no and played behind the lock screen.
@@ -3091,6 +3113,123 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         bridge.mark_sleeping()
         self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
         self.assertIs(self.mpv_paused(), True)
+
+    # --- Strict review 19.
+    def replayed_with_pushes_failing(self):
+        """EP_1 played everywhere (at 120); replayed here from a list (from
+        0), played past 9 s, every push failing."""
+        self.other_device(EP_1, 120, bridge.STATUS_PLAYED)
+        self.login()
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.position() > 9, timeout=25)
+        run_bridge("pause")
+        run_bridge("player")
+        unsent = bridge.load_playback().get("unsentPush")
+        self.assertTrue(unsent and unsent["position"] > 8, unsent)
+
+    def test_a_played_episode_replayed_here_keeps_its_unsent_place_through_stop(self):
+        # "Played" read as a new mark dropped it: Play went to Up Next's next.
+        self.replayed_with_pushes_failing()
+        run_bridge("stop")
+        self.fake["fail"] = {}
+        view = run_bridge("toggle")["data"]
+        self.assertEqual(view["item"]["uuid"], EP_1)
+        self.assertGreater(view["position"], 7)
+
+    def test_a_played_episode_replayed_here_sends_its_unsent_place_after_next(self):
+        self.replayed_with_pushes_failing()
+        self.assertTrue(run_bridge("next")["ok"])
+        self.fake["fail"] = {}
+        self.age_unsent_tries()
+        run_bridge("player")
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_IN_PROGRESS)
+        self.assertTrue(7 < self.fake["progress"][EP_1] < 60, self.fake["progress"][EP_1])
+
+    def test_a_play_again_whose_pushes_fail_isnt_finished_elsewhere(self):
+        self.watched_end_told()
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        self.assertTrue(run_bridge("toggle")["data"]["playing"])  # played again from the top
+        self.assertIsNotNone(bridge.unsent_push(bridge.load_playback()))  # its failed push kept at once
+        self.wait_for(lambda: self.position() > 5, timeout=20)
+        run_bridge("pause")
+        run_bridge("player", "--no-autoplay")
+        self.fake["fail"] = {}
+        view = run_bridge("toggle")["data"]
+        self.assertEqual(view["item"]["uuid"], EP_1)
+        self.assertGreater(view["position"], 4)
+
+    def test_a_push_whose_reply_was_lost_isnt_another_devices_write(self):
+        # It landed, its reply lost; later pushes failed while it played on:
+        # Play took the lost push's place for another device's and went back.
+        self.other_device(EP_1, 20)
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.position() > 26, timeout=20)
+        self.fake["lostReply"] = {"/sync/update_episode": 1}
+        self.age_last_push(31)
+        run_bridge("player")
+        lost_at = self.fake["progress"][EP_1]
+        self.assertGreater(lost_at, 25)
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        self.wait_for(lambda: self.position() > lost_at + 12, timeout=30)
+        self.age_last_push(31)
+        run_bridge("player")
+        run_bridge("pause")
+        run_bridge("player")
+        self.fake["fail"] = {}
+        self.assertGreater(run_bridge("toggle")["data"]["position"], lost_at + 8)
+
+    def test_next_reads_the_record_of_an_up_next_entry_without_a_status(self):
+        # Up Next's entry had a place but no status (the fake's default
+        # shape): taken for in progress, a played episode was loaded and
+        # pushed in progress.
+        self.fake["upnext"] = [EP_1, EP_2, EP_3]
+        self.other_device(EP_2, 110, bridge.STATUS_PLAYED)
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        view = run_bridge("next")["data"]
+        self.assertEqual(self.fake["status"][EP_2], bridge.STATUS_PLAYED)
+        self.assertEqual(view["item"]["uuid"], EP_3)
+
+    def test_a_play_in_flight_longer_than_the_guards_wait_stays_paused(self):
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.position() > 0.5)
+        run_bridge("pause")
+        real = bridge.user_episode
+        guards = []
+
+        def slow_answer(uuid):
+            guard = threading.Thread(target=bridge.pause_for_sleep)
+            guard.start()
+            guards.append(guard)
+            time.sleep(7.5)  # past the guard's 6 s wait for the lock
+            return real(uuid)
+        try:
+            with mock.patch.object(bridge, "user_episode", slow_answer):
+                run_bridge("toggle")
+            guards[0].join(15)
+        finally:
+            bridge.HTTP_TIMEOUT, bridge.REFRESH_ALLOWED = 15, True
+        self.assertIs(self.mpv_paused(), True)
+
+    def test_play_again_as_the_sleep_guard_pauses_for_a_suspend_stays_paused(self):
+        self.watched_end_told()
+        bridge.mark_sleeping()
+        run_bridge("toggle")  # played again from the top, but not unpaused behind the lock screen
+        self.assertIs(self.mpv_paused(), True)
+
+    def test_play_with_nothing_loaded_after_marking_the_last_episode_played_moves_on(self):
+        # Its Up Next removal keeps failing: a pending finish, but a told one
+        # (played), not an end Pocket Casts couldn't confirm.
+        self.fake["upnext"] = [EP_1, EP_2]
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        run_bridge("stop")
+        self.fake["fail"] = {"/up_next/remove": 1000}
+        self.assertTrue(run_bridge("mark", "played", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.assertEqual(run_bridge("toggle")["data"]["item"]["uuid"], EP_2)
 
     # --- Strict review 15 (H2, L1): an end that isn't known to have ended here.
     def test_an_unwatched_end_pocket_casts_couldnt_confirm_is_never_played_again_over_the_phone(self):
@@ -3426,9 +3565,11 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
             run_bridge("toggle")
         guards[0].join(15)
         bridge.HTTP_TIMEOUT, bridge.REFRESH_ALLOWED = 15, True  # (the guard lowers them for its own process)
-        self.assertEqual(results, [True])
+        # Paused: by the guard after the Play (round 14), or, since round 19,
+        # by the Play itself, which sees the guard's mark and doesn't unpause
+        # (the guard then finds nothing to pause).
+        self.assertIn(results, ([True], [False]))
         self.assertIs(self.mpv_paused(), True)
-        self.assertTrue(bridge.load_playback().get("checkServer"))
 
     def test_the_guards_unpushed_pause_after_a_long_sleep_loses_to_the_phone(self):
         # Strict review 13 (M1, P1e): the guard paused but couldn't take the
@@ -3632,6 +3773,7 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         # episode's sync data, or with an entry but no position (the real
         # reply leaves it out for episodes not started), read as 0 and
         # pushed 0 over the phone's 50.
+        self.fake["syncStatus"] = True  # (statuses in the sync data: only a missing entry or place reads the record)
         self.play_then_pause()
         self.fake["upnext"] = [EP_1, EP_2]
         self.other_device(EP_2, 50)

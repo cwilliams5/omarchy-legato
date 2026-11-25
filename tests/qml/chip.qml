@@ -109,7 +109,7 @@ Item {
                    top.pauseEventRead, top.seekEventPoll,
                    top.toggles, top.idleUnload, top.volumeDebounce, top.volumeDebounceCheck, top.importFromBar,
                    top.ipcStopAndSpeed, top.ipcStopAndSpeedCheck, top.signOutLists,
-                   top.guardStopped, top.noScreens, top.noScreensCheck]
+                   top.guardStopped, top.guardStoppedLater, top.noScreens, top.noScreensCheck]
       if (top.step >= steps.length) { stop(); Qt.exit(top.failures); return }
       if (top.waits === 0) top.stepStarted = Date.now()
       // A step returns false to wait for a debounced call (up to 2 s).
@@ -548,6 +548,13 @@ Item {
     shared.applyPlayer({ active: false, playing: false, item: null })
     shared.applyPlayer(top.playing)
     check("after a stop, the next episode's guard starts at once", guards().length === 1, guards().length)
+  }
+  // The stopped guard's `exited` comes a moment later, after the new one was
+  // asked for (as Quickshell does it): not counted, nothing stopped.
+  function guardStoppedLater() {
+    if (Date.now() - top.stepStarted < 150) return false
+    check("the stopped guard's late exit isn't the new one failing", guards().length === 1 && shared._guardFailures === 0,
+          guards().length + " " + shared._guardFailures)
   }
   // With no screen at all, the service stays awake (it would otherwise go
   // dormant with every bar gone: no syncing, no pause before sleep).

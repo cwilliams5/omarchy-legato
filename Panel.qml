@@ -191,7 +191,7 @@ Panel {
     var item = menuItem
     closeMenu()
     if (!item || !service) return
-    if (id === "play" && service.isLoaded(item)) service.playPause()
+    if (id === "play" && service.isLoaded(item) && !service.ended) service.playPause()  // (at its end: played again, as its row)
     else if (id === "play") service.playItem(item, false)
     else if (id === "top") service.queue(item, "next")
     else if (id === "bottom") service.queue(item, "last")

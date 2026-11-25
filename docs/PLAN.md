@@ -1660,6 +1660,59 @@ Safety: two criticals, both more doors into "play again".
   just as the sleep guard pauses for a suspend loads paused (`mark_sleeping`,
   `sleeping_soon`).
 
+### SR, round 19 (2026-11-25)
+
+Fit: nothing critical, high or medium.
+
+- [x] SR211 (low, fit F1) The menu's Play on the loaded episode at its end
+  still sent "resume" (SR202's second door; a node regex pinned the bug):
+  played again, as its row.
+- [x] SR212 (low, fit F2) A failed settings save (or stats switch) with
+  another write waiting was swallowed, the page flipping back silently:
+  an error is said whatever came after.
+- [x] SR213 (low, fit F3) The sleep guard's mark wasn't tied to a sleep (a
+  Play right after a short suspend loaded paused): it records the suspend
+  clock, and is spent once the suspend happened.
+- [x] SR214 (tests, fit T2-T4) Transparency and always on top's superseded
+  answers; a dormant copy re-reading the player when it wakes; the Process
+  stand-in sends `exited` a moment after a stop, as Quickshell does
+  (probed: even after a restart in the same tick), which showed the
+  guard's `onExited` counting a stale exit against the next guard: a
+  signal-15 exit is a stop now (the separate "not wanted" check, its
+  duplicate, removed). README: the idle unload starts two processes.
+Safety: no critical or high; three mediums in the worst-outcome classes,
+fixed before release.
+
+- [x] SR215 (medium, loses a place) A played episode replayed here whose
+  pushes all failed lost its place: "played" read as a new mark
+  (`where_left`), Play with nothing loaded skipping a played last episode,
+  a play-again's failed push not kept, and the check reading its own
+  "played" as finished elsewhere. "Played" is a mark only if Pocket Casts
+  had it otherwise from here; a kept place keeps a played last episode;
+  a play-again's failed push is kept; a landed mark is Pocket Casts'
+  place (`told_played`).
+- [x] SR216 (medium, a finished episode pushed in progress) Next and
+  autoplay took an Up Next entry with a place but no status for in
+  progress (the bridge asks for statuses, but the reply's shape is
+  unverified): such an entry reads its record first.
+- [x] SR217 (medium, rare, loses a place) A push whose reply was lost,
+  then failures while it played on: the next Play took the lost push's
+  place for another device's and went back to it. The unsent place
+  remembers the pushes tried since its base (`triedPushes`).
+- [x] SR218 (low) A Play in flight longer than the guard's 6 s wait played
+  on behind the lock screen: the guard marks the sleep first thing, and
+  Play and play again don't unpause under it.
+- [-] SR219 (low, left) An empty show list reads as "you follow nothing"
+  (`record_expected`), and a 200 that isn't JSON as an empty answer: one
+  layer of three; reading an empty list as "can't tell" would make Play
+  say "try again" for good for someone who follows no show.
+- [x] SR220 (tests) Play with nothing loaded after marking the closed last
+  episode played (its removal failing) moves on: the reviewer's surviving
+  mutant (a told pending end counted as unanswered).
+- Cody's call before pushing: every commit carries his personal address
+  as author (1.0.x's are already public); `media/preview.png` and
+  `media/pages.png` show his own Up Next and subscriptions.
+
 ## Testing
 
 - `tests/run` before every commit: all suites, about 23 minutes, nothing on
@@ -1837,6 +1890,18 @@ Safety: two criticals, both more doors into "play again".
   documented, not enforced (refusing would refuse real setups). 418 Python
   + 47 node tests; 526 mutations, round 18's 30 new or changed all killed.
   Round 19 next (round 18 had criticals).
+- 2026-11-25 (evening): round 19 (SR211-SR220): the first round with no
+  critical or high from either reviewer. Fixed before release all the
+  same: a played episode replayed here keeps a place it couldn't send
+  ("played" is a mark only if it wasn't already), an Up Next entry without
+  a status reads its record, a push whose reply was lost isn't another
+  device's write (`triedPushes`), the guard marks the sleep first; fit: the
+  menu's Play at an end, failed saves said, the sleep mark spent by its
+  suspend, the Process stand-in's `exited` as Quickshell sends it (probed:
+  later, even after a restart) and the guard's `onExited` taking signal 15
+  for a stop. 427 Python + 47 node tests; 541 mutations, round 19's 35 new
+  or changed all killed. Round 20 to verify these (four rounds of fixes in
+  the sync engine each opened a door the next round found).
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

@@ -132,7 +132,7 @@ Item {
                    top.orderedWrites, top.claimingPanelGone, top.dormantAgain, top.dormantSpell, top.claimedAgain, top.rebuildRelease, top.rebuildClaim, top.rebuiltStillAwake,
                    top.tabOnOpen, top.reloadMakesNoCopy, top.reloadMakesNoCopyCheck,
                    top.neverStarts, top.neverStartsAnswered, top.oldServiceUpdate, top.oldServiceCheck,
-                   top.signedOutStartsNothing, top.dormantWithAPlayer, top.dormantWithAPlayerCheck,
+                   top.signedOutStartsNothing, top.spareSleeps, top.spareWakes, top.dormantWithAPlayer, top.dormantWithAPlayerCheck,
                    top.startedWithNoScreen, top.screenBack, top.screenBackCheck]
       if (top.step >= steps.length) { stop(); Qt.exit(top.failures); return }
       if (top.waits === 0) top.stepStarted = Date.now()
@@ -282,6 +282,15 @@ Item {
           shellService.settings.skipBack + " " + shellService.settings.autoplay)
     check("no write left waiting", bridgeCalls("settings set").length === 0 && shellService._writes.length === 0,
           bridgeCalls("settings set").length)
+    // One that fails with another waiting is said all the same (strict
+    // review 19: the page flipped back, silently).
+    shellService.changeSetting("skipBack", 30)
+    shellService.changeSetting("autoplay", false)
+    bridgeCalls("settings set").forEach(function(p) { top.refuse(p, "settings.json is read-only: not saved") })
+    check("a failed save with another waiting is said", shellService.settingsError === "settings.json is read-only: not saved",
+          shellService.settingsError)
+    running().forEach(function(p) { var a = argsOf(p); if (a !== null && a[0] === "settings") answer(p, view({ autoplay: false, defaultTab: "podcasts", unloadAfterMinutes: 0, skipForward: 45, skipBack: 20 })) })
+    running().forEach(function(p) { var a = argsOf(p); if (a !== null && a[0] === "settings") answer(p, view({ autoplay: false, defaultTab: "podcasts", unloadAfterMinutes: 0, skipForward: 45, skipBack: 20 })) })
   }
 
   // Strict review 16 (L7, L3): what a copy starts, and when it wakes.
@@ -295,6 +304,17 @@ Item {
     check("(a woken copy reads its status)", status.length === 1, status.length)
     answer(status[0], { authenticated: false, mpv: "/usr/bin/mpv", socket: "", python: "3.14", running: false })
     check("signed out, no player: it starts no poll", bridgeCalls("player").length === 0, bridgeCalls("player").length)
+  }
+  // A copy that wakes again reads the player at once (strict review 19).
+  function spareSleeps() {
+    top.spare.release()
+  }
+  function spareWakes() {
+    if (Date.now() - top.stepStarted < 300) return false  // past dormantAfterMs
+    check("(the copy went dormant)", top.spare.active === false, top.spare.active)
+    top.spare.claim()
+    check("a copy woken again reads the player", bridgeCalls("player").length === 1, bridgeCalls("player").length)
+    running().forEach(function(p) { var a = argsOf(p); if (a !== null && a[0] === "player") answer(p, { active: false, playing: false, item: null }) })
   }
   function dormantWithAPlayer() {
     top.spare.authenticated = true

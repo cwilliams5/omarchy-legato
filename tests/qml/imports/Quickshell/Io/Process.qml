@@ -21,10 +21,11 @@ QtObject {
   // A user of Process that declares its own `started` property hides the
   // signal from this file (Service's interpreter probe does): skip it then.
   // As Quickshell's (probed): a process stopped (`running = false`) still
-  // sends `exited` (signal 15); one that never started sends nothing.
+  // sends `exited` (signal 15), a moment later, not inside the stop; one
+  // that never started sends nothing.
   onRunningChanged: {
     if (!running) {
-      if (alive) { alive = false; exited(15, 1) }
+      if (alive) { alive = false; Qt.callLater(function() { p.exited(15, 1) }) }
       return
     }
     Processes.add(p)

@@ -12,13 +12,13 @@ python3 -B tests/mutate.py .       # all of them, about 2 hours
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (526 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (541 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
 it. A mutation whose pattern no longer matches the code is reported STALE
 and fails the run (fix its pattern), as does one whose tests fail
 unmutated (SKIP).
 
-## The set (526; strict review rounds 1 to 18, 2026-11-25)
+## The set (541; strict review rounds 1 to 19, 2026-11-25)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
@@ -128,6 +128,16 @@ caught each mutant. By area:
   finished elsewhere; the sleep guard's mark left out, or a load ignoring
   it; a self-check under way trusted. (Three older ones retired: the one
   guard, end_still_stands, replaced the paths they planted.)
+- **Round 19**: the guard's mark outliving its suspend; and the QML ones
+  (the menu's Play at its end resuming; a failed save with another
+  waiting swallowed; a stopped guard's late exit counted as a failure;
+  transparency's and always on top's superseded answers shown; a woken
+  copy never reading the player). Safety: "played" on a replay here read
+  as a mark; a replayed last episode with a kept place skipped; a play
+  again's failed push not kept, or the landed mark not Pocket Casts'
+  place; an Up Next entry without a status taken for in progress; a lost
+  reply's place taken for another device's, or the pushes tried
+  forgotten; Play or play again unpausing under the guard's mark.
 
 ## Results
 
@@ -300,6 +310,18 @@ caught each mutant. By area:
   checked against the value it already had (now on, then off), and the
   volume slider set the volume both as it moved and on release (Omarchy's
   slider releases at the last place it moved to: the second set removed).
+- Round 19 (the reviewers' own): safety 1 of 6 survived (a told pending
+  end counted as unanswered: tested now), fit 6 of 43 (two toggles'
+  superseded answers, a woken copy's read: planted with tests; three
+  layered). Round 19's set, its 35 new or changed: 30 killed at first,
+  one skipped (a new test failed unmutated and was right: play again under
+  the guard's mark played on if mpv hadn't paused itself yet; now it
+  pauses), four survived: Up Next's missing status now reads the record,
+  which hid the older "no sync data" and "no place" checks in a test
+  without statuses (it has them now); play again's sleep check was
+  reached only after the request it makes had already refused the sleep
+  (a sleep after the answer now); a play again's failed push was recorded
+  again by the pause after it (checked at once now). All killed after.
 - Equivalent and left out (round 14): `keep_local` and its rules (the
   loaded player's keep is gone: its check seeks only on another device's
   write); the Stats/About keys while typing (the field takes printable

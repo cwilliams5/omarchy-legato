@@ -179,7 +179,7 @@ test("the loaded episode can't be moved or marked; keys and tabs behave", () => 
   assert.match(service, /function queue\(item, where\) \{\s*if \(!item \|\| !item\.uuid\) return\s*if \(isLoaded\(item\)\) \{ refuseLoaded\(\); return \}/)
   assert.match(service, /function markPlayed\(item, played\) \{\s*if \(!item \|\| !item\.uuid \|\| !item\.podcast\) return\s*if \(isLoaded\(item\)\)/)
   assert.match(panel, /if \(service && service\.isLoaded\(item\)\) return \[\{ id: "play"/)
-  assert.match(panel, /if \(id === "play" && service\.isLoaded\(item\)\) service\.playPause\(\)/)
+  assert.match(panel, /if \(id === "play" && service\.isLoaded\(item\) && !service\.ended\) service\.playPause\(\)/)
   // The shell's key catcher takes x (and Delete) as delete before textKey.
   assert.ok(!/t === "x"/.test(panel), "x never reaches onTextKey")
   assert.match(panel, /t === "p"\) root\.service\.cycleSpeed\(\)/)

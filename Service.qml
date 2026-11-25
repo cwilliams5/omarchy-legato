@@ -825,11 +825,13 @@ Item {
     environment: root.bridgeEnvironment
     running: root.wantSleepGuard && !sleepGuardRestart.running && root._guardFailures < root.guardMaxFailures
     stdout: StdioCollector { id: sleepGuardOut; waitForEnd: true }
-    onExited: {
+    onExited: function(exitCode, exitStatus) {
       // Stopped (no episode loaded, pause before sleep off): Quickshell still
-      // sends `exited`; nothing to restart, and the next episode's guard
-      // starts at once, not after the retry wait.
-      if (!root.wantSleepGuard) return
+      // sends `exited`, signal 15, a moment after the stop, even after a new
+      // guard was asked for in the meantime (probed: it starts that one
+      // once the old has gone). Nothing to count or restart: the next
+      // episode's guard starts at once, not after the retry wait.
+      if (exitStatus !== 0 && exitCode === 15) return
       // It exits once it has handled a sleep: read the player again, and
       // start a fresh guard a moment later. The restart timer first:
       // Quickshell keeps `running`'s binding through an exit, and a change
@@ -1068,9 +1070,10 @@ Item {
   function setStatsCounting(on) {
     var change = ++_statsChanges
     write("stats counting", ["stats", on ? "on" : "off"], function(result) {
+      if (!result.ok) { root.applyStats(result); return }  // said even with a later change on its way
       if (change !== root._statsChanges) return  // a later change answers
       root.applyStats(result)
-      if (result.ok) root.optimistic({ statsCounting: result.data.counting })
+      root.optimistic({ statsCounting: result.data.counting })
     })
   }
 
@@ -1165,13 +1168,14 @@ Item {
     settingsError = ""
     var change = ++_settingsChanges
     write("setting " + key, ["settings", "set", "--", String(key), JSON.stringify(value)], function(result) {
-      if (change !== root._settingsChanges) return  // a later change answers
       if (!result.ok) {
+        // Said even with a later change on its way (strict review 19: the
+        // page flipped back, silently, while the file kept the old value).
         root.settingsError = result.error || "Not saved"
         root.readSettings()
         return
       }
-      root.applySettings(result.data)
+      if (change === root._settingsChanges) root.applySettings(result.data)  // (a later change answers)
     })
   }
 

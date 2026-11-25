@@ -553,6 +553,13 @@ Item {
           exactly("play " + lastItem.uuid + " --podcast " + lastItem.podcast).length === 1 && calls("resume").length === 0,
           calls("play").length + " " + calls("resume").length)
     answer("play", { active: false, playing: false, item: null })
+    service.applyPlayer({ active: true, playing: false, ended: true, position: 100, duration: 100, item: lastItem })
+    panel.openMenu(lastItem, 0, 0)
+    panel.menuAction("play")
+    check("its menu's Play at its end plays it again too (strict review 19)",
+          exactly("play " + lastItem.uuid + " --podcast " + lastItem.podcast).length === 1 && calls("resume").length === 0,
+          calls("play").length + " " + calls("resume").length)
+    answer("play", { active: false, playing: false, item: null })
     // The Settings page's toggles show at once and go one at a time (strict
     // review 18: a quick second click acted on the old value and was lost).
     check("(local feeds off, before)", service.localFeeds === false, service.localFeeds)
@@ -569,7 +576,16 @@ Item {
     answer("localfeeds", { localFeeds: false })
     service.setVideoTransparency(30)
     check("transparency: shown at once", service.videoTransparency === 30, service.videoTransparency)
+    service.setVideoTransparency(50)
     answer("videotransparency", { videoTransparency: 30 })
+    check("its earlier answer doesn't show either", service.videoTransparency === 50, service.videoTransparency)
+    answer("videotransparency", { videoTransparency: 50 })
+    service.setVideoPinned("on")
+    check("always on top: shown at once", service.videoPinned === true, service.videoPinned)
+    service.setVideoPinned("off")
+    answer("videopin", { videoPinned: true })
+    check("nor always on top's", service.videoPinned === false, service.videoPinned)
+    answer("videopin", { videoPinned: false })
     service.applyPlayer({ active: false, playing: false, item: null })
     service.newReleases = savedNew
     panel.setTab("upnext")

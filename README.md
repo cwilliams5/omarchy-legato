@@ -155,8 +155,9 @@ or log out.
 
 - **Paused or idle, nothing runs on a timer.** Pause, resume, seeks and
   the end of an episode all arrive as events from mpv. Paused, one timer
-  waits for the idle unload (15 minutes by default) and starts one process
-  when it fires. (Omarchy restarting its plugins, after any plugin's update
+  waits for the idle unload (15 minutes by default) and starts two short
+  processes when it fires (the stop, and the read of the player its end
+  brings). (Omarchy restarting its plugins, after any plugin's update
   or install, makes Legato read its sign-in and the player once.)
 - **While playing,** one short Python process every 32 seconds sends your
   position to Pocket Casts (about 0.1 to 0.2 s of CPU each, depending on
