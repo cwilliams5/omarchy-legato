@@ -1086,21 +1086,13 @@ Item {
     var w = _writes[0]
     _writes = _writes.slice(1)
     _writing = true
-    writeWatchdog.restart()
+    // (A write whose process never starts still answers: call's start
+    // watchdog says "didn't start", and the next goes.)
     call(w.args, function(result) {
-      writeWatchdog.stop()
       root._writing = false
       w.done(result)
       root.nextWrite()
     })
-  }
-  Timer {
-    // A write that never answers (its process didn't start) doesn't hold
-    // the rest back for good.
-    id: writeWatchdog
-    interval: 10000
-    repeat: false
-    onTriggered: { root._writing = false; root.nextWrite() }
   }
 
   property int _settingsChanges: 0
@@ -1202,13 +1194,6 @@ Item {
 
   function playItem(item, fromStart) {
     if (!item || !item.uuid) return
-    // The episode in the player: Play goes on from where it is. Loaded
-    // again, it started from Pocket Casts' place, up to a poll behind this
-    // machine's (strict review 16).
-    if (!fromStart && isLoaded(item)) {
-      if (!isPlaying) playPause()
-      return
-    }
     cancelSeek()
     var args = ["play", item.uuid]
     if (item.podcast) args.push("--podcast", item.podcast)

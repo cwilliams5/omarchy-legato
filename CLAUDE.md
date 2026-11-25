@@ -14,10 +14,10 @@ Cody's work setup.
 
 Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
-(docs/PLAN.md phases H and SR: rounds 1-15 fixed; round 15's two highs, an
-unsent place lost on a switch to another episode and an unwatched end
-Pocket Casts couldn't confirm played again from 0, are fixed; round 16
-next). Cody, 2026-11-24: SR86 (settings in Legato's own file)
+(docs/PLAN.md phases H and SR: rounds 1-17 fixed; round 16's critical, a
+failed push's place outliving a resume check that took the phone's place,
+and round 17's rewind, Play at a told end over a phone that went back into
+it, are fixed; round 18 next). Cody, 2026-11-24: SR86 (settings in Legato's own file)
 and SR63 (one live service on a replacement bar) were folded into 1.1.0
 before round 10, and the review loop runs for as long as rounds keep
 finding critical or high issues (stop: a round with none, and every
@@ -185,7 +185,10 @@ docs/PLAN.md         what's left to build
    Next and this episode's record. Its answer wins: seek to where another
    device left off, follow it to a different episode, or stop if it finished
    everything: whenever its place differs from the last one this machine
-   knows Pocket Casts has (`lastSyncPos`: its own last push, or a place a
+   knows Pocket Casts has (`lastSyncPos`, with `lastSyncStatus`: its own
+   last push that landed, Pocket Casts' place as a load got it until the
+   load's push lands (round 17, F3: an unpushed start, a skip-intro, was
+   read back as another device's write), or a place a
    resume check took from Pocket Casts), another device wrote, and that wins over anything that moved here
    unpushed (a gap's stretch, an unconfirmed resume's, a stall's, a place
    whose push failed). The one local place kept is where a push failed
@@ -193,7 +196,9 @@ docs/PLAN.md         what's left to build
    Pocket Casts had it from here then): within the hour of the failure,
    and only while Pocket Casts still has it there, neither moved nor marked
    played or unplayed since (`where_left`; a Mark as unplayed puts it at
-   0, where an episode started here also was). It holds only while
+   0, where an episode started here also was: "unplayed" counts as a mark
+   only if Pocket Casts had it otherwise from here, `leftStatus`, so a
+   place played from the top while every push failed is kept). It holds only while
    `lastSyncPos` is still its `left` (`unsent_push`): a resume check that
    takes another device's place makes it history at once (round 16, C1: a
    reload or a switch after one pushed the old place over the phone).
@@ -271,10 +276,12 @@ docs/PLAN.md         what's left to build
    them by itself), the sign-in fields paste only through `bridge paste`
    (4 KiB, 2 s, wl-paste's whole process group killed after); every file is
    opened relative to a checked directory descriptor; HOME and the XDG
-   directories are honoured only as absolute paths (normalized), and one
-   set but unusable stops the call (`bad_env`) rather than fall back to the
-   account's real home (a reviewer's `..` path once acted on the real
-   account that way). The About page's privacy text must stay
+   directories are honoured only as absolute paths (normalized). A HOME set
+   but unusable (empty, relative) stops the call (`bad_env`) rather than
+   fall back to the account's real home (a reviewer's `..` path once acted
+   on the real account that way); an XDG variable that isn't an absolute
+   path is ignored, as the XDG spec says, and its default under HOME
+   applies (a typo like `~/.local/state` doesn't stop Legato). The About page's privacy text must stay
    true (tests compare it with the hosts the bridge can reach).
 7. **Every text that comes from outside renders as plain text**
    (`Text.PlainText`): episode titles, error messages, mpv's error strings.
@@ -379,7 +386,14 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   (`forget_pending`). Play on an
   ended episode starts what was queued since (if autoplay was on) or plays
   it again (`play_again`, which pushes it as in progress itself, since
-  Pocket Casts would say "played" and stop it). Play at a real end no poll
+  Pocket Casts would say "played" and stop it), after asking whether it
+  still is played (`reopened_elsewhere`: another device went back into it,
+  and Play follows it there; no answer, "try again"; round 17, F2: it
+  pushed 0 over the phone). Play with nothing loaded lets the record decide
+  for an end told here (played: the next; reopened: from there). The
+  resume check's switch never follows Up Next to an episode whose record
+  says played (round 17, F1), and an end handled here isn't judged again
+  at Play (F4). Play at a real end no poll
   has handled yet finishes it first (`resume_loaded`: marked played, off Up
   Next; playing it from the top there pushed 0 over it); the next Play
   plays it again. Dragged back from the end, it waits there, paused,
@@ -895,7 +909,7 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   script error in Legato's QML fails the run. Real pointer events reach
   the offscreen window through QtTest's `TestCase` helpers
   (`events.mouseWheel` in panel.qml; force the Columns' layout first, a
-  stale one hides an item from the hit test). About 17 minutes; nothing
+  stale one hides an item from the hit test). About 23 minutes; nothing
   appears on screen, and the test players load no mpv-mpris (they'd be
   media players on the desktop). `tests/mutations.md` lists the planted
   regressions the suite must catch.

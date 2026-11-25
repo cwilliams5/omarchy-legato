@@ -1515,7 +1515,11 @@ second doors into outcomes earlier rounds closed at one door.
   an end (`left_its_feed`), and Play moves on.
 - [x] SR178 (nit, N1) Play on the loaded episode's row reloaded it from
   Pocket Casts' place, up to a poll behind: it resumes it now (from the
-  start still plays it again from the top).
+  start still plays it again from the top). Round 17 (fit) showed that
+  fix unreachable (the row and its menu handle the loaded episode before
+  `playItem`; removed) and the row's real flaw: it took the last episode,
+  with nothing loaded, for the loaded one and sent "resume", which skips
+  an episode that ended here. It asks `isLoaded` now.
 - [x] SR180 (medium, fit M1) The sleep guard's and the feed proxy's exemption
   from the 120 s call deadline was untested (both mutants survived; under
   it the guard restarted every two minutes and gave up, the proxy died
@@ -1549,9 +1553,62 @@ second doors into outcomes earlier rounds closed at one door.
   sends it) removed; `empty_lookup_answers`'s "a show you follow" tested
   (its failure would mark an unfinished episode played).
 
+### SR, round 17 (2026-11-25)
+
+Fit: no critical or high. Safety: none rated above medium, but F2 rewinds
+another device (the worst outcome), so another round follows.
+
+- [x] SR187 (medium, F1) The resume check's switch followed Up Next to an
+  episode played on another device when Up Next's reply had no sync entry
+  for it, and pushed it in progress at 0 (SR156's second door: the record
+  says played, and the switch never read it). It reads it now.
+- [x] SR188 (medium, rewinds another device, F2) Play at an end told here
+  played it again from 0 without asking, over a phone that had gone back
+  into it; with the player closed, Play skipped that episode for the next.
+  Play asks first (`reopened_elsewhere`): reopened, it follows the phone;
+  no answer, "try again". Play with nothing loaded lets the record decide.
+- [x] SR189 (medium, loses a place, F3) `play_item` took the start it chose
+  for Pocket Casts' place before the load's push landed: with a skip-intro
+  and that push failing, the next check read Pocket Casts' own 0 as
+  another write and sent the player back; started from the top with every
+  push failing, the place was read as marked unplayed and dropped. Now
+  `lastSyncPos`/`lastSyncStatus` are Pocket Casts' until a push lands, and
+  "unplayed" is a mark only if Pocket Casts had it otherwise (`leftStatus`).
+- [x] SR190 (low, F4) Play judged an end handled here again (break or end):
+  a verdict changed since (the self-check finishing "failed") pushed the
+  finished episode in progress. An end handled here isn't judged again.
+- [x] SR191 (low, F5) `recordSeen` ignored this machine's own pushes (a push
+  creates the record): a landed push counts now.
+- [x] SR192 (nit) Sign-out drops playback.json under the state lock.
+- [x] SR193 (tests) The reviewer's surviving mutants: the stash's "not an
+  episode that ended here" (N1), the unsent retry's "a record without a
+  place is no answer" (N22), the adoption's `lastSyncPos` (N8), the
+  switch's "finished" arm (N2) tested; the stash's own hour (N18) removed
+  (retry_unsent's and kept_elsewhere's are the rule).
+- [x] SR194 (low-medium, fit 1) The last episode's row, with nothing loaded,
+  was taken for the loaded one and sent "resume", which skips an episode
+  that ended here (a play you chose replays it): the row asks `isLoaded`.
+  SR178's `playItem` branch was unreachable and is gone.
+- [x] SR195 (low, fit 2) The write watchdog repeated call()'s start watchdog
+  and, on a slow write, ran two writes at once: removed; the de-duplication
+  of a waiting write tested.
+- [x] SR196 (fit nits) README: Legato in `plugins` wakes with no screen;
+  CLAUDE.md's status and the suite's 23 minutes.
+- [x] SR198 (Cody, 2026-11-25, from a side agent's note) Round 14's refusal
+  of an unusable directory variable also stopped Legato for an XDG typo
+  (`XDG_STATE_HOME=~/.local/state`), where the XDG spec says to ignore a
+  relative path: only an unusable HOME stops a call now; an XDG variable
+  that isn't absolute is ignored and its default under HOME applies.
+- [ ] SR197 (left) The video window's saved position is global but replayed
+  as a monitor-relative rule on a second monitor not at 0,0 (since 1.0,
+  by reading: needs a live check on two monitors); `wheelSteps` copies
+  Omarchy's; `{ipc=}` can't reach the chip's dotted target (the `legato`
+  target and `{panel=}` can); `media/preview.png` shows Cody's real Up
+  Next (his call with the other screenshots).
+
 ## Testing
 
-- `tests/run` before every commit: all suites, about 17 minutes, nothing on
+- `tests/run` before every commit: all suites, about 23 minutes, nothing on
   screen. Each new behavior gets an end-to-end test against the fake server
   (`tests/test_bridge.py`, `PlayerTestCase`; set `AUDIO_SECONDS` for longer
   audio, and the fake serves byte ranges).
@@ -1703,6 +1760,18 @@ second doors into outcomes earlier rounds closed at one door.
   public files. 396 Python + 47 node tests; 498 mutations, round 16's 31
   new or changed all killed (two after a redundant layer was removed, one
   after its test was tightened). Round 17 next (round 16 had a critical).
+- 2026-11-25 (day): round 17 (SR187-SR198): fit no crit/high; safety none
+  above medium but F2 rewinds the phone (Play at a told end, the phone
+  back in it): Play asks first now. The switch reads a played record;
+  `lastSyncPos`/`lastSyncStatus` stay Pocket Casts' until the load's push
+  lands, and "unplayed" is a mark only if Pocket Casts had it otherwise;
+  a handled end isn't judged again; a landed push counts as a record
+  seen. Fit: the last episode's row plays it (it sent "resume"); the
+  write watchdog removed. Cody: a relative XDG variable is ignored as the
+  spec says (only a bad HOME stops a call). A run was stopped once by the
+  machine running low on memory (not the suite's doing). 409 Python + 47
+  node tests; 510 mutations, round 17's 28 new or changed all killed (two
+  after their tests were tightened). Round 18 next (round 17 had a rewind).
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

@@ -315,7 +315,10 @@ Panel {
       Qt.callLater(function() { if (listFlick) listFlick.contentY = 0 })
       return
     }
-    if (item.uuid === nowUuid) service.playPause()
+    // The episode in the player: play or pause it. Not just the last one
+    // played (nowUuid, with nothing loaded): that's a play you chose, which
+    // replays one that ended (resume_last would skip it for the next).
+    if (service.isLoaded(item)) service.playPause()
     else service.playItem(item, false)
   }
 

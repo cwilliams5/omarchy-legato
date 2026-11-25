@@ -12,13 +12,13 @@ python3 -B tests/mutate.py .       # all of them, about 2 hours
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (498 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (510 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
 it. A mutation whose pattern no longer matches the code is reported STALE
 and fails the run (fix its pattern), as does one whose tests fail
 unmutated (SKIP).
 
-## The set (498; strict review rounds 1 to 16, 2026-11-25)
+## The set (510; strict review rounds 1 to 17, 2026-11-25)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
@@ -104,7 +104,18 @@ caught each mutant. By area:
   the proxy, or nothing; 1.0's values past the range dropped; and the QML
   ones (writes racing, a copy left asleep when
   the screens go, or awake for good after; signed out, a poll all the
-  same; Play on the loaded row reloading or pausing it).
+  same).
+- **Round 17**: the switch following Up Next to an episode its record says
+  is played, or staying when another device finished this one; Play at a
+  told end playing it again unasked, or taking no answer for "played";
+  Play with nothing loaded skipping a told end whatever its record says;
+  a load's unpushed start taken for Pocket Casts' place, or its landed push
+  never recorded; "unplayed from the start" read as a mark; a landed push
+  not a record seen; an ended episode stashed; a record without a place
+  taken for one by the unsent retry; the adoption not taking the phone's
+  place; a relative XDG value stopping the call (the spec ignores it); and
+  the QML ones (the last episode's row resuming with nothing loaded; a
+  waiting write never replaced).
 
 ## Results
 
@@ -256,6 +267,16 @@ caught each mutant. By area:
   and by the change handler, which QML runs for the first value): one
   layer each removed from the code; the third needed its test to check
   the carried place is still valid, not just present.
+- Round 17 (the reviewers' own): safety 6 of 19 survived (the stash's
+  "ended here", the unsent retry's positionless record, the adoption's
+  `lastSyncPos`, the switch's "finished" arm: planted now with tests; the
+  stash's own hour, removed from the code; a Mark-played entry as an
+  unanswered end, minor), fit 3 of 25 (the write watchdog, removed; the
+  de-duplication and the last episode's row, planted with tests). Round
+  17's set, its 28 new or changed: 26 killed at first; two tests never
+  reached the line (Pocket Casts unreachable raised before the empty
+  record's check; a positionless record crashed the mutant to the same
+  outcome): tightened, both killed.
 - Equivalent and left out (round 14): `keep_local` and its rules (the
   loaded player's keep is gone: its check seeks only on another device's
   write); the Stats/About keys while typing (the field takes printable

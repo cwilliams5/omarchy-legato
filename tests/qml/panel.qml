@@ -490,23 +490,34 @@ Item {
           Processes.started.filter(function(p) { try { return p.alive } catch (e) { return false } })
             .map(function(p) { return p.command.slice(-4).join(" ") }).join("; "))
     settle()
-    // Play on the loaded episode's row goes on from where it is (strict
-    // review 16, N1: loaded again, it started up to a poll behind).
-    var loadedItem = { type: "episode", uuid: "aaaaaaaa-0000-0000-0000-0000000000ee", podcast: "bbbbbbbb-0000-0000-0000-000000000001",
-                       name: "Loaded", show: "A show", duration: 100, playedUpTo: 10, status: 2 }
-    service.applyPlayer({ active: true, playing: false, position: 40, duration: 100, item: loadedItem })
-    service.playItem(loadedItem)
-    check("Play on the loaded episode's row resumes it", calls("resume").length === 1 && calls("play").length === 0,
+    // The last episode's row with nothing loaded is a play you chose (strict
+    // review 17: it sent "resume", and Play with nothing loaded skips an
+    // episode that ended here for the next one); loaded, it plays or pauses.
+    var lastItem = { type: "episode", uuid: "aaaaaaaa-0000-0000-0000-0000000000ee", podcast: "bbbbbbbb-0000-0000-0000-000000000001",
+                     name: "Last", show: "A show", duration: 100, playedUpTo: 100, status: 3 }
+    service.applyPlayer({ active: false, playing: false, item: lastItem })
+    check("(the last episode is still the panel's \"now\")", panel.nowUuid === lastItem.uuid, panel.nowUuid)
+    // (On New releases: Up Next lists the "now" episode in the hero.)
+    var savedNew = service.newReleases
+    service.newReleases = [lastItem]
+    service.newReleasesLoading = false
+    service.newReleasesError = ""
+    panel.setTab("new")
+    var lastRow = -1
+    for (var ri = 0; ri < panel.rows.length; ri++) if (panel.rows[ri].kind === "item" && panel.rows[ri].item.uuid === lastItem.uuid) lastRow = ri
+    check("(its row is listed)", lastRow >= 0, JSON.stringify(panel.rows.map(function(r) { return r.kind })))
+    panel.activateRow(lastRow)
+    check("its row, with nothing loaded, plays that episode", exactly("play " + lastItem.uuid + " --podcast " + lastItem.podcast).length === 1
+          && calls("resume").length === 0, calls("play").length + " " + calls("resume").length)
+    answer("play", { active: true, playing: true, position: 0, duration: 100, item: lastItem })
+    service.applyPlayer({ active: true, playing: false, position: 40, duration: 100, item: lastItem })
+    panel.activateRow(lastRow)
+    check("loaded, its row plays or pauses it", calls("resume").length === 1 && calls("play").length === 0,
           calls("resume").length + " " + calls("play").length)
-    answer("resume", { active: true, playing: true, position: 40, duration: 100, item: loadedItem })
-    service.playItem(loadedItem)
-    check("and does nothing while it plays", calls("resume").length === 0 && calls("play").length === 0 && calls("pause").length === 0,
-          calls("resume").length + " " + calls("play").length)
-    service.playItem(loadedItem, true)
-    check("from the start, it's played again from the top", calls("play").length === 1 && calls("--from-start").length === 1,
-          calls("play").length)
-    answer("play", { active: true, playing: true, position: 0, duration: 100, item: loadedItem })
+    answer("resume", { active: false, playing: false, item: null })
     service.applyPlayer({ active: false, playing: false, item: null })
+    service.newReleases = savedNew
+    panel.setTab("upnext")
     settle()
     // A show's page that answers late doesn't overwrite the one you opened since.
     service.openDetail({ type: "podcast", uuid: "bbbbbbbb-0000-0000-0000-00000000000a", name: "Show A" })

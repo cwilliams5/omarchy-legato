@@ -261,6 +261,7 @@ Item {
   // in order; the page ends on the file's value.
   function orderedWrites() {
     shellService.changeSetting("skipBack", 15)
+    shellService.changeSetting("skipBack", 18)  // waiting, then replaced by the next
     shellService.changeSetting("skipBack", 20)
     shellService.changeSetting("autoplay", true)
     var sets = bridgeCalls("settings set")

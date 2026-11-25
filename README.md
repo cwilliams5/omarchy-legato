@@ -422,8 +422,9 @@ counted) in
 video window's menu, the Settings page or (the stats) the Stats page.
 
 Disabling the plugin (or dragging its chip off the bar, which disables it
-unless Legato is also listed in Omarchy's `plugins`, where it stays loaded
-and asleep) removes its entry from the bar; your settings, the player's own choices,
+unless Legato is also listed in Omarchy's `plugins`, where it stays loaded,
+asleep while there's a screen: with none at all it wakes to keep an episode
+playing in sync) removes its entry from the bar; your settings, the player's own choices,
 your sign-in and your listening stats all stay, and are there when you turn
 it back on. A `settings.json` that can't be read (a hand edit gone wrong, or
 a symbolic link: every file in the state folder must be a plain file of

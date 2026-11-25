@@ -433,8 +433,7 @@ class StateFiles(TempHome):
                 self.assertEqual(bridge.home(), os.path.join(self.home, "th"))
                 self.assertEqual(bridge.xdg_home("XDG_STATE_HOME", ".local", "state"), os.path.join(self.home, "th", "state"))
             # (Strict review 15, N1: an empty HOME fell back to the account's.)
-            for name, value in (("HOME", "th"), ("HOME", ""), ("XDG_STATE_HOME", "relative/state"),
-                                ("XDG_RUNTIME_DIR", "//run/x")):
+            for name, value in (("HOME", "th"), ("HOME", "")):
                 with mock.patch.dict(os.environ, {name: value}):
                     with self.assertRaises(bridge.ApiError) as ctx:
                         bridge.scrub_environment()
@@ -443,6 +442,23 @@ class StateFiles(TempHome):
                     with mock.patch.object(sys, "stdout", out):
                         self.assertEqual(bridge.main(["status"]), 0)
                     self.assertEqual(json.loads(out.getvalue())["code"], "bad_env")
+            # An XDG variable that isn't an absolute path is ignored, as the
+            # XDG spec says (a typo like `~/.local/state`): the default under
+            # HOME applies, never the account's real home, and the call runs.
+            for name, value, default in (("XDG_STATE_HOME", "~/.local/state", (".local", "state")),
+                                         ("XDG_CACHE_HOME", "relative/cache", (".cache",))):
+                with mock.patch.dict(os.environ, {"HOME": self.home, name: value}):
+                    bridge.scrub_environment()
+                    self.assertNotIn(name, os.environ)
+                    self.assertEqual(bridge.xdg_home(name, *default), os.path.join(self.home, *default))
+            with mock.patch.dict(os.environ, {"HOME": self.home, "XDG_RUNTIME_DIR": "//run/x"}):
+                bridge.scrub_environment()
+                self.assertNotIn("XDG_RUNTIME_DIR", os.environ)
+            with mock.patch.dict(os.environ, {"HOME": self.home, "XDG_STATE_HOME": "relative/state"}):
+                out = io.StringIO()
+                with mock.patch.object(sys, "stdout", out):
+                    self.assertEqual(bridge.main(["status"]), 0)
+                self.assertTrue(json.loads(out.getvalue())["ok"], out.getvalue())
         self.assertFalse(os.path.exists(fallback))
 
     def test_state_is_private(self):
@@ -2247,8 +2263,13 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         # one), carried on on the phone; now its lookup is empty, but In
         # Progress lists it: no answer, nothing pushed over the phone's 25.
         self.fake["unfollowed"] = {PODCAST_B}
+        # (Its pushes from here fail: a push that lands makes the record seen,
+        # strict review 17, and the empty lookup would be no answer for that
+        # alone, In Progress never asked.)
+        self.fake["fail"] = {"/sync/update_episode": 1000}
         self.play_then_pause(EP_3, PODCAST_B)
         self.assertFalse(bridge.load_playback().get("recordSeen"))
+        self.fake["fail"] = {}
         self.other_device(EP_3, 25)
         self.fake["episodeReply"] = {EP_3: (404, b'{"errorMessage": "not found"}')}
         run_bridge("toggle")
@@ -2742,6 +2763,11 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         self.other_device(EP_2, 105)
         self.login()
         self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        run_bridge("pause")  # (so Next pushes nothing of EP_1's)
+        # EP_2's load push fails: a push that lands makes its record seen
+        # (strict review 17), and the empty lookup would be no answer for that
+        # alone, "a show you follow" never asked.
+        self.fake["fail"] = {"/sync/update_episode": 1}
         self.assertEqual(run_bridge("next")["data"]["item"]["uuid"], EP_2)
         self.assertFalse(bridge.load_playback().get("recordSeen"))
         self.wait_for(lambda: self.position() > 111)
@@ -2753,6 +2779,203 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         run_bridge("player", "--no-autoplay")
         self.assertEqual((self.fake["progress"][EP_2], self.fake["status"][EP_2]), (50, bridge.STATUS_IN_PROGRESS))
         self.assertFalse(self.mpv_running())
+
+    # --- Strict review 17.
+    def test_the_switch_never_follows_up_next_to_a_played_episode_it_has_no_sync_data_for(self):
+        # F1: Up Next's reply had no sync entry for the new top (finished on
+        # the phone, its removal not in yet); its record says played.
+        self.other_device(EP_1, 20)
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.position() > 21)
+        run_bridge("pause")
+        run_bridge("player")
+        self.other_device(EP_2, 100, bridge.STATUS_PLAYED)
+        self.fake["upnext"] = [EP_2] + [u for u in self.fake["upnext"] if u != EP_2]
+        self.fake["noSync"] = [EP_2]
+        before = len(self.pushes_of(EP_2))
+        view = run_bridge("toggle")["data"]
+        self.assertEqual(view["item"]["uuid"], EP_1)
+        self.assertEqual(self.fake["status"][EP_2], bridge.STATUS_PLAYED)
+        self.assertEqual(self.pushes_of(EP_2)[before:], [])
+        run_bridge("pause")
+        self.mpv_set_pause(False)  # a media key: the poll's check, the same
+        self.assertEqual(run_bridge("player")["data"]["item"]["uuid"], EP_1)
+        self.assertEqual(self.pushes_of(EP_2)[before:], [])
+
+    def test_the_switch_follows_up_next_when_another_device_finished_this_one(self):
+        # (The switch's other arm: this episode wasn't on top, and the phone
+        # finished it: Up Next's top plays.)
+        self.fake["upnext"] = [EP_2]
+        self.other_device(EP_1, 20)
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        state = bridge.load_playback()
+        state["atTop"] = False
+        bridge.save_playback(state)
+        self.fake["upnext"] = [EP_2]
+        run_bridge("pause")
+        self.other_device(EP_1, 0, bridge.STATUS_PLAYED)
+        self.assertEqual(run_bridge("toggle")["data"]["item"]["uuid"], EP_2)
+
+    def watched_end_told(self):
+        """EP_1 played to its end here, watched, autoplay off: marked played,
+        off Up Next, the player left loaded at its end."""
+        bridge.save_prefs({"volume": 0, "speed": 2.0})
+        self.other_device(EP_1, 108)
+        self.fake["upnext"] = [EP_1, EP_2]
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.mpv_get("eof-reached") is True
+                      or run_bridge("player", "--no-autoplay") and False, timeout=20)
+        run_bridge("player", "--no-autoplay")
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
+        self.assertEqual(bridge.load_playback()["handledEnd"], EP_1)
+        self.assertTrue(self.mpv_running())
+
+    def test_play_at_an_end_the_phone_went_back_into_follows_the_phone(self):
+        # F2: Play played it again from 0 and pushed 0 over the phone.
+        self.watched_end_told()
+        self.other_device(EP_1, 50)
+        before = len(self.pushes_of(EP_1))
+        view = run_bridge("toggle")["data"]
+        self.assertEqual(view["item"]["uuid"], EP_1)
+        self.assertTrue(48 < view["position"] < 60, view["position"])
+        self.assertNotIn(0, [b["position"] for b in self.pushes_of(EP_1)[before:]])
+        self.assertGreaterEqual(self.fake["progress"][EP_1], 48)
+
+    def test_play_with_the_player_closed_after_an_end_the_phone_went_back_into_follows_it(self):
+        self.watched_end_told()
+        run_bridge("stop")
+        self.other_device(EP_1, 50)
+        self.fake["upnext"] = [EP_1, EP_2]  # the phone plays it: back on top
+        view = run_bridge("toggle")["data"]
+        self.assertEqual(view["item"]["uuid"], EP_1)
+        self.assertTrue(48 < view["position"] < 60, view["position"])
+
+    def test_play_at_an_end_pocket_casts_cant_be_asked_about_plays_nothing(self):
+        self.watched_end_told()
+        before = len(self.pushes_of(EP_1))
+        self.fake["fail"] = {"/user/episode": 1}  # the network
+        self.assertFalse(run_bridge("toggle")["ok"])
+        self.fake["episodeReply"] = {EP_1: (404, b'{"errorMessage": "not found"}')}  # an empty answer
+        self.assertFalse(run_bridge("toggle")["ok"])
+        self.assertEqual(self.pushes_of(EP_1)[before:], [])
+        self.fake["episodeReply"] = None
+        self.assertLess(run_bridge("toggle")["data"]["position"], 5)  # asked, still played: from the top
+
+    def test_play_at_a_handled_end_doesnt_judge_it_again(self):
+        # F4: the self-check's verdict changed since (finished "failed"), and
+        # Play took the finished episode for a break, pushed in progress.
+        self.fake["episodes"][EP_1]["duration"] = 200  # listed longer than the file
+        self.watched_end_told()
+        with bridge.Mpv.connect() as player:
+            version = bridge.player_versions(player)
+        bridge.save_state("watchcheck.json", {"ffmpeg": version, "ok": False, "at": int(time.time())})
+        before = len(self.pushes_of(EP_1))
+        view = run_bridge("toggle")["data"]
+        # Played again from the top (it ended here), not reloaded as a break
+        # at its end and pushed there in progress.
+        self.assertLess(view["position"], 5)
+        self.assertEqual([b["position"] for b in self.pushes_of(EP_1)[before:] if b["position"] > 5], [])
+
+    def test_a_place_played_from_the_top_while_every_push_failed_is_kept(self):
+        # F3 (b): Pocket Casts never had a place from this load (its push
+        # failed too): "unplayed at 0" is where this machine left it, not a
+        # Mark as unplayed.
+        self.login()
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.position() > 9, timeout=25)
+        run_bridge("pause")
+        run_bridge("player")
+        run_bridge("stop")
+        self.fake["fail"] = {}
+        self.assertGreater(run_bridge("toggle")["data"]["position"], 8)
+        self.assertGreater(self.fake["progress"][EP_1], 8)
+
+    def test_a_skip_intro_whose_push_failed_isnt_taken_for_another_devices_write(self):
+        # F3 (a): the unpushed start (the show's skip-intro) was taken for
+        # Pocket Casts' place: the next check read Pocket Casts' own 0 as
+        # another device's write and sent the player back there.
+        self.fake["showSettings"] = {PODCAST_A: {"autoStartFrom": 10}}
+        self.login()
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.position() > 18, timeout=25)
+        run_bridge("pause")
+        run_bridge("player")
+        self.fake["fail"] = {}
+        self.assertGreater(run_bridge("resume")["data"]["position"], 16)
+
+    def test_a_skip_intro_whose_push_landed_is_pocket_casts_place_from_then_on(self):
+        # Its push landed: Pocket Casts has the intro's end (lastSyncPos),
+        # and a later failed stretch here isn't read as another write.
+        self.fake["showSettings"] = {PODCAST_A: {"autoStartFrom": 10}}
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.assertEqual(self.fake["progress"][EP_1], 10)
+        self.wait_for(lambda: self.position() > 18, timeout=25)
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        run_bridge("pause")
+        run_bridge("player")
+        self.fake["fail"] = {}
+        self.assertGreater(run_bridge("resume")["data"]["position"], 16)
+
+    def test_after_following_the_phone_a_failed_stretch_here_isnt_sent_back(self):
+        # The check takes the phone's place as Pocket Casts' (lastSyncPos):
+        # played on here with pushes failing, the next check is no "write
+        # elsewhere" (without it, the player went back to the phone's place).
+        self.took_the_phones_place()   # at 70
+        self.wait_for(lambda: self.position() > 73)
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        run_bridge("pause")
+        run_bridge("player")
+        self.fake["fail"] = {}
+        self.assertGreater(run_bridge("resume")["data"]["position"], 72)
+
+    def test_an_episode_that_ended_here_is_never_left_unsent(self):
+        # Its last stretch couldn't be sent and its finish neither; autoplay
+        # moved on. Stashed, its place would go out in progress later, and
+        # the pending finish then read "carried on": unfinished everywhere.
+        bridge.save_prefs({"volume": 0, "speed": 2.0})
+        self.other_device(EP_1, 100)
+        self.fake["upnext"] = [EP_1, EP_2]
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.position() > 104)
+        self.fake["fail"] = {"/sync/update_episode": 1000, "/up_next/remove": 1000}
+        self.age_last_push(31)
+        run_bridge("player")  # its periodic push fails: unsent
+        self.assertTrue(bridge.load_playback().get("unsentPush"))
+        self.wait_for(lambda: (run_bridge("player")["data"].get("item") or {}).get("uuid") == EP_2, timeout=30)
+        self.assertEqual(bridge.load_playback().get("unsentPlaces") or [], [])
+        self.fake["fail"] = {}
+        state = bridge.load_playback()
+        for p in state.get("pendingFinish") or []:
+            p["tried"] -= 120
+        bridge.save_playback(state)
+        run_bridge("player")
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
+
+    def test_a_record_without_a_place_never_sends_a_place_left_unsent(self):
+        self.stashed()
+        self.fake["fail"] = {}
+        self.fake["episodeReply"] = {EP_1: (200, json.dumps({"uuid": EP_1, "playingStatus": 2}).encode())}
+        self.age_unsent_tries()
+        self.assertTrue(run_bridge("player")["ok"])
+        self.assertEqual(self.fake["progress"][EP_1], 20)
+        self.assertEqual([p["uuid"] for p in bridge.load_playback()["unsentPlaces"]], [EP_1])  # no answer: kept
+
+    def test_a_push_that_lands_counts_as_a_record_seen(self):
+        # F5: an episode of a show you don't follow, loaded from its public
+        # list: its first push creates its record, so a later empty lookup is
+        # a glitch, never "no place anywhere".
+        self.fake["unfollowed"] = {PODCAST_B}
+        self.fake["notListed"] = self.fake["noSync"] = {EP_3}
+        self.login()
+        self.assertTrue(run_bridge("play", EP_3, "--podcast", PODCAST_B)["ok"])
+        self.assertTrue(bridge.load_playback()["recordSeen"])
 
     # --- Strict review 15 (H2, L1): an end that isn't known to have ended here.
     def test_an_unwatched_end_pocket_casts_couldnt_confirm_is_never_played_again_over_the_phone(self):
