@@ -1340,7 +1340,7 @@ def user_episode(uuid):
     return payload if str(payload.get("uuid") or "").lower() == safe_uuid(uuid) else {}
 
 
-def record_held(uuid):
+def record_held(uuid, state=None):
     """Whether this machine knows Pocket Casts keeps a record of `uuid`: one
     came back for it or a push or mark of it landed (`recordSeen`, the last
     episode's), or Pocket Casts had a place in it, played or in progress
@@ -1349,11 +1349,13 @@ def record_held(uuid):
     lookup for one is no answer, on every path that resolves an episode
     (strict review 21, F1: Play from a list; round 23, F1: an episode left
     with its place unsent, restarted from the public list at 0 and its
-    place dropped). A playback.json that can't be read: can't tell, so yes."""
-    try:
-        state = load_playback()
-    except ApiError:
-        return True
+    place dropped). `state`: the caller's playback state (read from
+    playback.json if not given; one that can't be read: can't tell, so yes)."""
+    if state is None:
+        try:
+            state = load_playback()
+        except ApiError:
+            return True
 
     def had_place(place, status):
         return (number(place) and place > DRIFT_SLACK) or as_int(status) in (STATUS_IN_PROGRESS, STATUS_PLAYED)
@@ -1363,6 +1365,21 @@ def record_held(uuid):
         return True
     return any(isinstance(p, dict) and p.get("uuid") == uuid and had_place(p.get("left"), p.get("leftStatus"))
                for p in (state.get("unsentPlaces") or []) + (state.get("pendingFinish") or []))
+
+
+def record_must_exist(uuid, podcast_uuid, state=None):
+    """The one rule for an empty episode lookup (a 404, an empty answer, a
+    redirect): whether Pocket Casts must have a record of this episode, so
+    that coming back with none is no answer (the network, a change in its
+    unofficial API), never "nobody has a place in it". What this machine
+    knows (record_held), a show you follow (record_expected), or a place
+    Pocket Casts lists elsewhere (position_known_elsewhere). Every path
+    that reads an empty lookup asks this: resolving an episode to play, the
+    resume check of the loaded one, a pending end's retry (strict review
+    24, F1: the resume check kept an older rule of its own and took an empty
+    lookup for an episode started from Up Next's place for "same", pushing
+    over the phone's "played")."""
+    return record_held(uuid, state) or record_expected(podcast_uuid) or position_known_elsewhere(uuid)
 
 
 def record_expected(podcast_uuid):
@@ -1434,7 +1451,7 @@ def resolve_episode(uuid, podcast_uuid=""):
     raw = user_episode(uuid)
     if raw and not a_place(raw.get("playedUpTo")):
         raw = {}  # a record with no position says nothing about where you are
-    if not raw and (record_held(uuid) or record_expected(podcast_uuid) or position_known_elsewhere(uuid)):
+    if not raw and record_must_exist(uuid, podcast_uuid):
         # A show you follow: Pocket Casts has a record of every episode; of
         # one you don't, an episode anyone played has one (a push creates it)
         # and shows in Up Next's sync data or In Progress. None came back (a
@@ -1445,7 +1462,7 @@ def resolve_episode(uuid, podcast_uuid=""):
         # on (resume_last, next_in_up_next).
         if left_its_feed(uuid, podcast_uuid):
             raise ApiError("gone", "That episode has left its show's feed")
-        raise ApiError("no_record", "Pocket Casts didn't answer: try again")
+        raise ApiError("no_record", "Pocket Casts sent no record of that episode: try again")
     item = norm_episode(raw) if raw else None
     if item and item["url"]:
         if not item["show"] and item["podcast"]:
@@ -2021,8 +2038,9 @@ def video_rule_lua(geometry, pinned=True, transparency=0):
     It goes through Omarchy's own o.window where there is one, like
     Omarchy's webcam overlay: that marks the app as floating on its own, so
     a floating workspace's open rule (which sizes every other new window to
-    two thirds of the screen, centered) leaves it alone. Named, so adding it
-    again replaces it; o.window also records it in Omarchy's floating-app
+    two thirds of the screen, centered) leaves it alone. Named (on Hyprland
+    0.56 a named rule made again appends its effects rather than replacing
+    them: whether the newest still win is PLAN SR234); o.window also records it in Omarchy's floating-app
     list each time (no check for repeats), so after the first time (until a
     config reload empties the list) it goes in as a plain rule. A second rule turns off the floating workspace's title
     bar for it (its buttons can't minimize or maximize a pinned window). Two
@@ -2348,6 +2366,7 @@ def pushed(state, position):
     state["lastSyncStatus"] = STATUS_IN_PROGRESS
     state["recordSeen"] = True
     state.pop("unsentPush", None)
+    state.pop("pushFailures", None)  # Pocket Casts is reachable: a new run of failures starts from 0
 
 
 def push_failed(state, position):
@@ -2517,12 +2536,12 @@ def retry_unsent(state, force=False):
 
 
 def empty_lookup_answers(state, entry):
-    """check_server's rule for an empty record lookup, for a pending end: an
-    answer ("no place anywhere") only for the loaded episode, whose record
-    Pocket Casts never showed here, of a show you don't follow, with no
-    place listed elsewhere. Otherwise no answer."""
-    return (entry["uuid"] == (state.get("episode") or {}).get("uuid") and not state.get("recordSeen")
-            and not record_expected(entry.get("podcast", "")) and not position_known_elsewhere(entry["uuid"]))
+    """An empty record lookup for a pending end: an answer ("no place
+    anywhere") only for the loaded episode, and only where record_must_exist
+    says none need exist (its own `left` counts: a pending end's place is a
+    record held). Otherwise no answer."""
+    return (entry["uuid"] == (state.get("episode") or {}).get("uuid")
+            and not record_must_exist(entry["uuid"], entry.get("podcast", ""), state))
 
 
 def unanswered_end(state, uuid):
@@ -3633,13 +3652,13 @@ def check_server(state, prefs, player=None, quick=False):
         return "unverified", state
     if slept_since_start():
         return "unverified", state  # asked before a suspend: the answer is from before it
-    if not record and (state.get("recordSeen") or record_expected(episode.get("podcast", ""))
-                       or position_known_elsewhere(uuid)):
-        # Pocket Casts knew this episode a moment ago, or keeps a record of all
-        # of the show's (you follow it), or lists a place in it elsewhere, and
-        # says nothing (a 404, an empty answer, a change in its unofficial
-        # API): that's no answer, and confirming our own place on it could
-        # rewind the phone.
+    if not record and record_must_exist(uuid, episode.get("podcast", ""), state):
+        # Pocket Casts knew this episode a moment ago (a record seen, a push
+        # that landed, a place it had in it: Up Next's for a load from there),
+        # or keeps a record of all of the show's (you follow it), or lists a
+        # place in it elsewhere, and says nothing (a 404, an empty answer, a
+        # change in its unofficial API): that's no answer, and confirming our
+        # own place on it could rewind the phone.
         return "unverified", state
     if record and not a_place(record.get("playedUpTo")):
         # A record with no position (every record has one, unplayed ones at
@@ -3746,6 +3765,10 @@ def check_server(state, prefs, player=None, quick=False):
             episode["playedUpTo"] = server
     state["checkServer"] = False
     state.pop("unconfirmed", None)  # Pocket Casts has answered
+    # A run of failures (unverified checks count) ends with an answer, as with
+    # a push that lands: one failure after it isn't said at once, nor a later
+    # run never (strict review 24, F4).
+    state.pop("pushFailures", None)
     synced(state)
     save_playback(state)
     return "same", state
@@ -4009,7 +4032,6 @@ def poll(autoplay=True, seeked=False):
             if push_position(episode, position):
                 pushed(state, position)
                 episode["playedUpTo"] = int(position)
-                state.pop("pushFailures", None)
         except ApiError:
             synced(state, now)  # try again next interval, not every poll
             push_failed(state, position)
@@ -4682,10 +4704,17 @@ def resume_last(prefs):
         try:
             item = resolve_episode(episode["uuid"], episode.get("podcast", ""))
         except ApiError as err:
+            if err.code == "no_record":
+                # Pocket Casts answered, with no record of an episode it must
+                # have one of (record_must_exist): never something else, never
+                # from 0, never past a place this machine couldn't send. Said
+                # as it is, with the way on: if it truly forgot it, Play here
+                # stays refused (strict review 24, F3: "didn't answer: try
+                # again", for good).
+                raise ApiError("no_record", "Pocket Casts sent no record of \u201c%s\u201d: try again, "
+                               "or play another episode" % text(episode.get("name"), 48)) from None
             if err.code not in ("gone", "not_found"):
-                # No answer about it (an empty lookup, the network): never
-                # something else, never from 0, and never past a place
-                # this machine couldn't send. Try again.
+                # No answer about it (the network): try again.
                 raise
             item = None  # gone from its feed, or no audio: Up Next's next
         if (item and item.get("status") == STATUS_PLAYED

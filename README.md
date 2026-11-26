@@ -270,6 +270,10 @@ devices.
   got through, as it would to your phone's, since the two can't be told
   apart. Rare; what played here since that send is lost, never your
   phone's place.
+- **The sign-in fields take typed keys and pastes only:** dead keys,
+  compose and input methods don't reach them (they aren't native text
+  fields, which the plugin marketplace turns away). Paste a password that
+  needs them.
 - **Playing here within seconds of pausing the phone:** the Pocket Casts
   apps sometimes send a pause's place a few seconds late (they keep a
   minimum gap between saves), so Play here in those seconds can find the
@@ -290,6 +294,20 @@ devices.
   holds, mpv can't seek back there: Legato loads the episode again, which
   on such a host plays from the top, sending nothing until playback gets
   back to your place.
+- **An episode Pocket Casts has no record of** (a show you don't follow,
+  never played anywhere), played here while every send failed: once
+  Pocket Casts is back, Legato doesn't send where you got to. With no
+  record to read, it can't check that nobody played it elsewhere
+  meanwhile, so your other devices start it from the beginning. Play it
+  on here and the next send carries your place. What's lost is what
+  played here, never another device's place.
+- **An odd empty answer about an episode of a show you don't follow:** if
+  Pocket Casts' lookup comes back with no record for one that another
+  device played, and neither Up Next's places nor In Progress lists it,
+  nothing shows it was ever played: Legato starts it from the show's
+  public list at the beginning and sends that. For a show you follow, or
+  an episode this machine knows Pocket Casts has a place in, an empty
+  answer counts as no answer: Legato says so and sends nothing.
 
 ## Built on
 

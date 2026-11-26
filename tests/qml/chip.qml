@@ -102,7 +102,7 @@ Item {
       var steps = [top.handOver, top.awake, top.label, top.clicks, top.wheel, top.afterWheel,
                    top.sleepGuardSwitch, top.guardBackOff, top.socketRetries, top.socketRetry2, top.socketRetry3, top.socketRetry4, top.socketGone, top.socketGoneCheck, top.staleStatus,
                    top.noticesOnce, top.quietReloads, top.chipShapes, top.idleWheel, top.idleWheelCheck, top.marquee,
-                   top.touchpad, top.touchpadCheck, top.wheelDown, top.wheelDownCheck, top.volumeClamp, top.volumeClampCheck, top.noAutoplayPoll,
+                   top.touchpad, top.touchpadCheck, top.wheelDown, top.wheelDownCheck, top.volumeClamp, top.volumeClampCheck, top.noAutoplayPoll, top.bufferAndClamp, top.bufferAndClampCheck,
                    top.seekStale, top.seekStaleCheck, top.liveStatus, top.liveStatusCheck, top.guardBack,
                    top.guardRestart, top.guardRestartCheck, top.mpvEvents, top.pauseEvent, top.pauseEventPoll, top.pauseEventRetry,
                    top.retryTwoEarly, top.retryTwo, top.retryThreeEarly, top.retryThree, top.noFourthRetry,
@@ -110,7 +110,7 @@ Item {
                    top.pauseEventRead, top.seekEventPoll,
                    top.toggles, top.idleUnload, top.volumeDebounce, top.volumeDebounceCheck, top.importFromBar,
                    top.ipcStopAndSpeed, top.ipcStopAndSpeedCheck, top.signOutLists,
-                   top.guardStopped, top.guardStoppedLater, top.guardKilled, top.guardTermed, top.guardTermedCheck, top.guardNeverStarts, top.guardNeverStartsCheck,
+                   top.guardStopped, top.guardStoppedLater, top.guardKilled, top.guardLeftover, top.guardTermed, top.guardTermedCheck, top.guardNeverStarts, top.guardNeverStartsCheck,
                    top.noScreens, top.noScreensCheck]
       if (top.step >= steps.length) { stop(); Qt.exit(top.failures); return }
       if (top.waits === 0) top.stepStarted = Date.now()
@@ -403,6 +403,30 @@ Item {
     shared.videoKey("")
     check("an unknown video-window key does nothing", running().length === before, before + " -> " + running().length)
   }
+  // Strict review 24 (fit): a buffering player's place doesn't run on; a
+  // skip stops a second short of the end; the chip's IPC says "unhandled"
+  // when there's nothing to play or pause (each a surviving mutant).
+  function bufferAndClamp() {
+    answerAll(top.answers)
+    shared.applyPlayer({ active: true, playing: true, buffering: true, position: 100, duration: 1000, volume: 50,
+                         item: top.episode, running: true })
+  }
+  function bufferAndClampCheck() {
+    if (Date.now() - top.stepStarted < 700) return false
+    check("a buffering player's place doesn't run on", Math.abs(shared.livePosition() - 100) < 0.05, shared.livePosition())
+    shared.applyPlayer({ active: true, playing: false, position: 999.5, duration: 1000, volume: 50, item: top.episode, running: true })
+    shared.skip(30)
+    check("a skip stops a second short of the end", shared.player.position === 999, shared.player.position)
+    shared.cancelSeek()
+    var ipc = find(chip, function(i) { return typeof i.isOpen === "function" && typeof i.playPause === "function" })
+    var signedIn = shared.authenticated
+    shared.authenticated = false
+    shared.applyPlayer({ active: false, playing: false, item: null })
+    check("the chip's IPC says unhandled with nothing to play or pause", ipc && ipc.playPause() === "unhandled",
+          ipc && ipc.playPause())
+    shared.authenticated = signedIn
+    answerAll(top.answers)
+  }
   // A poll begun before a seek is sent doesn't put the old place back: one
   // that starts in the 300 ms between the step and its send (an mpv event)
   // reads mpv still at the old place.
@@ -677,6 +701,20 @@ Item {
   // A SIGTERM from anyone else (a kill of systemd-inhibit) isn't Legato's
   // own stop: counted and retried (strict review 22, fit F2: taken for a
   // stop, it left pause before sleep off for the rest of the episode).
+  // A stop whose guard died of another signal first leaves no stop owed:
+  // a later outside SIGTERM is still a failure (strict review 24, L3).
+  function guardLeftover() {
+    if (Date.now() - top.stepStarted < 300) return false
+    answerAll(top.answers)
+    shared.applyPlayer(top.playing)
+    var g = guards()
+    if (g.length === 0) return false
+    g[0].alive = false  // (so the stand-in's stop sends no exit of its own)
+    shared.applyPlayer({ active: false, playing: false, item: null })
+    if (g[0].stdout) g[0].stdout.text = ""
+    g[0].exited(9, 1)
+    check("(no stop left owed once no guard runs)", shared._guardStops === 0, shared._guardStops)
+  }
   function guardTermed() {
     if (Date.now() - top.stepStarted < 300) return false  // (the stopped guard's late exit)
     shared.guardRetryBaseMs = 50

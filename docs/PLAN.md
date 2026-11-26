@@ -1928,6 +1928,75 @@ safety), lows. The reviewers' reports are kept outside the repo.
   cover; the stand-ins' PanelSlider `liveValue`, Button `enabled`,
   `Quickshell.env` "".
 
+### SR, round 24 (2026-11-26)
+
+Safety: one critical by outcome (two faults), one medium, two lows; fit: no
+critical, high or medium, five lows. The reviewers' reports are kept
+outside the repo.
+
+- [x] SR251 (critical, safety F1) `check_server` decides the loaded
+  episode's empty record with its own older rule (`recordSeen`, followed,
+  listed elsewhere), not `record_held`: an episode started from Up Next's
+  sync data (no `fromRecord`) whose pushes all failed, finished on the
+  phone, then a 404: Play said "same" and the next push sent 0:13 in
+  progress over "played" (verified; also through Next).
+  `empty_lookup_answers` has the same narrow rule. Fix: `record_held` in
+  both (or `recordSeen` for a place from sync data).
+  Fixed: one rule, `record_must_exist` (record_held, a followed show, a
+  place listed elsewhere), asked by `resolve_episode`, `check_server` and
+  `empty_lookup_answers` (which keeps its loaded-episode condition);
+  `record_held` takes the caller's state. Tests: both of the reviewer's
+  paths, plus a pending end from Up Next's place retried on an empty
+  lookup (it was marked played over the phone's 60); all three fail on
+  the unfixed code. Every other empty-lookup site refuses already
+  (`paused_push_stands`, `retry_unsent`, `reopened_elsewhere`).
+- [x] SR252 (medium, safety F2) A place played in an episode Pocket Casts
+  has no record of is never sent after a failed push (`paused_push_stands`
+  and `retry_unsent` wait for a record that never comes; dropped after the
+  hour). Fix: an empty lookup is "no place anywhere" for an entry left at
+  0 unplayed when nothing else knows a record (`empty_lookup_answers`'
+  rule), so `where_left` stands.
+  Cody, 2026-11-26: documented, not fixed (README Known limits). It loses
+  only what played here, and the fix treats an empty lookup as an answer,
+  the move behind every recent critical.
+- [x] SR253 (low, safety F3) `record_held`'s refusal never ends for the last
+  episode Pocket Casts truly forgot: Play says "try again" for good. Say
+  which and how to move on.
+  Fixed: "Pocket Casts sent no record of “<episode>”: try again, or play
+  another episode" (Next still moves on: tested); resolve_episode's own
+  refusal says "sent no record of that episode", not "didn't answer".
+- [x] SR254 (low, safety F4) `pushFailures` mixes unverified checks with
+  failed pushes; an answered check doesn't reset it. Reset on any answered
+  check and any landed push.
+  Fixed: `pushed()` (every landed push) and the resume check's "same"
+  reset it ("finished" and "switched" start a fresh state anyway).
+- [x] SR255 (tests, safety T3-T4) Mutants: `record_held` without its
+  pendingFinish clause survives everything (the reviewer's
+  `test_r24_a_pending_ends_place_makes_an_empty_lookup_no_answer` kills
+  it); Play's unverified check not setting `checkServer` survives (test:
+  one poll within 90 s asks). README Known limits: the remaining
+  empty-lookup case for an unfollowed show another device played, listed
+  nowhere (starts from the public list at 0).
+  Fixed: both mutants killed (the T4 test pauses by a media key no poll
+  saw, so nothing else had set `checkServer`); the Known limit added,
+  with SR252's. Nine mutations re-pointed at the one rule, five added; one
+  re-pointed survived (the rule without "a show you follow": its test's
+  episode is now held by its Up Next place), killed by a new test with
+  the followed show alone.
+- [x] SR256 (fit, lows) The sandbox test replaces the bridge while it checks
+  the refusal (with the check mutated away, `status` had run read-only
+  against the real state folder and player socket; nothing was written:
+  checked by the files' times); the 1.0 import's message says to restart
+  the shell; a leftover owed guard stop cleared once no guard runs (tested);
+  stale statements (About's "10-minute list", four processes, the 1.0
+  import's reading of "false", the rule docstring vs SR234); README: the
+  sign-in fields take keys and pastes only; tests for the fit reviewer's
+  surviving mutants (buffering place, skip clamp, the chip IPC's
+  "unhandled", an "unknown" DRM port, the bridge's control-character check).
+- [ ] SR257 (left, fit) `hyprctl repl`'s reply ignored (SR234); the stand-ins'
+  Socket (the real one also emits `error` on a hang-up) and Process (keeps
+  `running`/`processId` until `exited` after a stop).
+
 ## Testing
 
 - `tests/run` before every commit: all suites, about 23 minutes, nothing on
@@ -2158,6 +2227,18 @@ safety), lows. The reviewers' reports are kept outside the repo.
   592 mutations, round 23's 19 new or changed all killed (--confirm; one
   needed its test list completed). Round 24 next (round 23 had a
   critical).
+- 2026-11-26 (night): round 24 (SR251-SR257): safety: the resume check
+  and a pending end's retry kept their own older rule for an empty
+  lookup, so an episode started from Up Next's place, its pushes failing,
+  confirmed "same" and pushed over the phone's "played" (one rule now,
+  `record_must_exist`, asked by every path); "try again" for good on a
+  last episode Pocket Casts forgot (said as it is, naming it); the
+  failure count ends with any answer; two cases documented, not fixed
+  (Cody). Fit: lows (the sandbox test, stale statements, the 1.0
+  import's message, a leftover owed guard stop). 467 Python + 47 node
+  tests; 598 mutations, round 24's 15 new or changed all killed
+  (--confirm; one re-pointed needed a test with the followed show
+  alone). Round 25 next (round 24 had a critical).
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

@@ -14,7 +14,7 @@ Cody's work setup.
 
 Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
-(docs/PLAN.md phases H and SR: rounds 1-23 fixed; round 19 was the first
+(docs/PLAN.md phases H and SR: rounds 1-24 fixed; round 19 was the first
 with no critical or high, but round 20 found one in round 19's own fix
 (withdrawn), round 21 two more through older doors, round 22 two highs
 at boundaries the engine didn't model (another account's sign-in; the
@@ -22,7 +22,8 @@ tests' own isolation), round 23 a critical and a high (an unsent
 place's episode restarted from the public list; autoplay past an entry
 gone from its feed stopping every push), and round 24 a critical (the
 resume check still judging an empty lookup by its own older rule, not
-`record_held`); round 24's fixes are in progress, round 25 next).
+`record_held`; one rule for all of it now, `record_must_exist`); round 25
+next).
 Cody, 2026-11-25: commits carry his personal address as author, accepted
 (1.0.x's are public that way). Cody, 2026-11-24: SR86 (settings in Legato's own file)
 and SR63 (one live service on a replacement bar) were folded into 1.1.0
@@ -253,8 +254,9 @@ docs/PLAN.md         what's left to build
    until Pocket Casts answers; a late answer that nobody carried on marks
    it played, and Play moves on (its finish pending, or its record saying
    played). An empty lookup is an
-   answer only as check_server has it (`empty_lookup_answers`: no record
-   ever seen, a show you don't follow, no place listed elsewhere). A retry that later finds another device
+   answer only for the loaded episode, and only where the one rule says
+   no record need exist (`empty_lookup_answers`, `record_must_exist`,
+   below). A retry that later finds another device
    carried on clears `handledEnd` and closes a player left at the end
    (L1), and Play at an end whose finish is pending asks first. Another episode's record
    (`user_episode` checks the uuid) is no answer. This covers resumes the bridge didn't cause: a poll that sees
@@ -266,8 +268,9 @@ docs/PLAN.md         what's left to build
    load failed: close the player and report it. Why: a failed load must not
    trigger an Up Next switch or a resume check.
 4. **Nothing runs on a timer while paused or idle.** (While an episode is
-   loaded, playing or paused, two processes wait with no timer: the sleep
-   guard, blocked on D-Bus, and the feed proxy mpv fetches through, which
+   loaded, playing or paused, four processes wait with no timer: the sleep
+   guard (`systemd-inhibit`, the bridge's guard under it and its
+   `dbus-monitor`), blocked on D-Bus, and the feed proxy mpv fetches through, which
    ends with mpv; with nothing loaded, nothing at all. Both also end with
    the shell: Quickshell leaves a Process's children running when it
    exits, so `systemd-inhibit` runs under `setpriv --pdeathsig` too.) The only
@@ -400,7 +403,9 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   too). Where a stall left it doesn't count as a local place Pocket Casts
   never got (it's `unconfirmed`): a rewind on the phone meanwhile wins. The watcher keeps the last eight stalls, so a short
   hiccup after a long one doesn't hide it. A periodic push that fails
-  twice in a row is said once (`pushFailures`, `syncFailed`). A stalled
+  twice in a row is said once (`pushFailures`, `syncFailed`; an
+  unverified resume check counts as one, and any answer, a landed push or
+  an answered check, starts the count again: round 24, F4). A stalled
   stream used to push its stall over the phone you carried on with. Pocket Casts keeps the playing episode at the
   top of Up Next; `playback.json`'s `atTop` records whether this machine's
   episode was put there, so a different top later means another device moved
@@ -464,17 +469,30 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   (`position_known_elsewhere`: Up Next's sync data or In Progress; an
   episode of a show you don't follow has a record once anyone played it,
   Legato's own push included) is no answer: the resume check says unverified,
-  and `resolve_episode` refuses (`no_record`, "Pocket Casts didn't answer:
-  try again") rather than start it from the show's public list at 0 and
-  push that, on every path (Play from a list, a reload, following the
-  phone to another episode). What this machine knows counts too, in the
-  one place every path resolves an episode (`record_held` in
-  `resolve_episode`): a record seen for the last episode or a push or mark
-  of it that landed (`recordSeen`), or any place Pocket Casts had in it,
-  played or in progress (the last episode's `lastSyncPos`/`lastSyncStatus`,
-  an unsent place's or a pending end's `left`/`leftStatus`): places live
-  in records (round 21, F1: Play from a list; round 23, F1: an episode left
-  with its place unsent restarted at 0, its place dropped).
+  and `resolve_episode` refuses (`no_record`, "Pocket Casts sent no record
+  of that episode: try again"; for the last episode at Play with nothing
+  loaded, naming it and "or play another episode": Next still moves on)
+  rather than start it from the show's public list at 0 and push that, on
+  every path (Play from a list, a reload, following the phone to another
+  episode). What this machine knows counts too (`record_held`): a record
+  seen for the last episode or a push or mark of it that landed
+  (`recordSeen`), or any place Pocket Casts had in it, played or in
+  progress (the last episode's `lastSyncPos`/`lastSyncStatus`, an unsent
+  place's or a pending end's `left`/`leftStatus`): places live in records
+  (round 21, F1: Play from a list; round 23, F1: an episode left with its
+  place unsent restarted at 0, its place dropped). All of it is one rule,
+  `record_must_exist`, asked by every path that reads an empty lookup:
+  resolving an episode, the loaded episode's resume check, a pending
+  end's retry (round 24, F1: the resume check kept an older rule of its
+  own, and an episode started from Up Next's place, its pushes failing,
+  confirmed "same" on an empty lookup and pushed over the phone's
+  "played"). Two cases stay open (README Known limits): an episode of a
+  show you don't follow that another device played, its lookup empty and
+  listed nowhere, starts from the public list at 0; and a place played
+  here in an episode Pocket Casts has no record of at all, every push
+  failing, is never sent (with no record, nothing can say nobody played
+  it elsewhere; round 24, F2, Cody: documented, not fixed: treating an
+  empty lookup as an answer is how every recent critical got in).
   Next and autoplay start from Up Next's sync
   data, or from the record when the reply leaves an episode's out
   (`next_in_up_next`). Episodes of shows you never followed, played by
@@ -977,7 +995,8 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   form for them. Legato's live in settings.json since 1.1; `omarchy bar
   set` no longer changes them (the README says so), and the panel hands
   the entry to the service only for the one-time import (`pushSettings`,
-  which reads 1.0's text values, "0" or "false", as 1.0 did). Their list
+  which reads 1.0's text values "0" and "false" as off, as the user meant
+  them: 1.0 itself took the text "false" for on). Their list
   is `legatoSettings` in manifest.json, not `barWidget.schema`: tools that
   read that (third-party settings apps) write the bar entry, so a form
   there would change nothing. Until the import has run, autoplay and the

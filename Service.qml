@@ -852,14 +852,19 @@ Item {
     onStarted: root._guardsRunning++
     onExited: function(exitCode, exitStatus) {
       root._guardsRunning = Math.max(0, root._guardsRunning - 1)
+      var owed = root._guardStops > 0
+      // With no guard left running, no stop's exit can still be coming: a
+      // count left over from a race mustn't swallow a later outside SIGTERM
+      // (strict review 24, L3).
+      if (root._guardsRunning === 0) root._guardStops = 0
       // Stopped by Legato (no episode loaded, pause before sleep off):
       // Quickshell still sends `exited`, signal 15, a moment after the stop,
       // even after a new guard was asked for in the meantime (probed: it
       // starts that one once the old has gone). Nothing to count or
       // restart: the next episode's guard starts at once, not after the
       // retry wait. Signal 15 from anyone else falls through: a failure.
-      if (exitStatus !== 0 && exitCode === 15 && root._guardStops > 0) {
-        root._guardStops--
+      if (exitStatus !== 0 && exitCode === 15 && owed) {
+        root._guardStops = Math.max(0, root._guardStops - 1)
         return
       }
       // It exits once it has handled a sleep: read the player again, and
@@ -1200,7 +1205,10 @@ Item {
         // chosen, with no word (strict review 23, L2).
         if (!root._settingsImportSaid) {
           root._settingsImportSaid = true
-          root.reportError("Legato 1.0's settings weren't brought in yet: " + (result.error || "try again"))
+          // (Not "try again": nothing here tries again; a restart of the
+          // shell does. Strict review 24, L1.)
+          root.reportError("Legato 1.0's settings weren't brought in (" + (result.error || "no answer")
+                           + "): restart the shell to try again")
         }
         return
       }
