@@ -463,6 +463,19 @@ class Validation(unittest.TestCase):
                     if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "quit_mpv":
                         callers.add(function.name)
         self.assertEqual(callers, {"close_player", "cmd_login", "cmd_logout"})
+        # Nor a hung player's end (strict review 27: two closes of one went
+        # around it), nor a quit sent some other way.
+        enders = set()
+        for function in ast.walk(tree):
+            if isinstance(function, ast.FunctionDef):
+                for node in ast.walk(function):
+                    if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "end_hung_player":
+                        enders.add(function.name)
+        self.assertEqual(enders, {"close_player", "ensure_mpv"})  # (ensure_mpv: before a load that rebuilds the state)
+        quits = [node for node in ast.walk(tree) if isinstance(node, ast.Constant) and node.value == "quit"]
+        source = pathlib.Path(bridge.__file__).read_text()
+        self.assertEqual(len(quits), 1, "a quit sent outside quit_mpv")
+        self.assertIn('player.command("quit")', source[source.index("def quit_mpv"):source.index("def require_player")])
 
     def test_the_sleep_guard_listens_to_logind_only(self):
         # The system bus lets any process send PrepareForSleep; only the
@@ -1702,6 +1715,21 @@ class EndToEnd(PlayerTestCase):
         self.assertEqual(self.pushes_of(EP_1)[before:], [])
         self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
 
+    def test_next_never_replays_an_end_whose_mark_failed_too(self):
+        # As above, its "played" mark failing as well: Pocket Casts still has
+        # it in progress, and only "ended here" (its pending finish) keeps Next
+        # from playing it again (strict review 27: the played status hid that
+        # in the test above).
+        self.fake["syncStatus"] = True
+        self.fake["upnext"] = [EP_1, EP_2]
+        self.login()
+        run_bridge("play", EP_1, "--podcast", PODCAST_A)
+        self.fake["fail"] = {"/up_next/remove": 1000, "/sync/update_episode": 1000}
+        self.wait_for(lambda: (run_bridge("player")["data"].get("item") or {}).get("uuid") == EP_2, timeout=20)
+        self.assertNotEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
+        run_bridge("pause")
+        self.assertEqual(run_bridge("next").get("code"), "nothing_queued")
+
     def test_autoplay_and_play_at_the_end_never_replay_a_half_told_end(self):
         before = self.end_ep1_with_its_removal_failing(failures=1)  # EP_2's own removal works
         self.wait_for(lambda: bridge.load_playback().get("handledEnd") == EP_2
@@ -2283,6 +2311,28 @@ class EndToEnd(PlayerTestCase):
         # scripts load; without the clipboard flag, it reads the clipboard.
         for flag in (b"--no-config", b"--ytdl=no", b"--clipboard-backends-clr"):
             self.assertIn(flag, argv)
+
+    def test_a_hidden_nvidia_gpu_decodes_nothing_either(self):
+        # Strict review 27 (fit L1: untested): with NVIDIA hidden from Vulkan
+        # (it drives no display), decoding moves too; mpv's auto-safe would
+        # pick nvdec and keep the dGPU awake while a video shows.
+        def argv_of_a_new_player(gpu_env):
+            with mock.patch.object(bridge, "mpv_gpu_env", lambda: gpu_env):
+                self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+            with bridge.Mpv.connect() as player:
+                pid, _ = player.peer_pid()
+            with open("/proc/%d/cmdline" % pid, "rb") as fh:
+                argv = fh.read().split(b"\0")
+            run_bridge("stop")
+            self.wait_for(lambda: not self.mpv_running(), timeout=5)
+            return argv
+        self.login()
+        hidden = argv_of_a_new_player({"VK_LOADER_DRIVERS_DISABLE": "*nvidia*"})
+        self.assertIn(b"--hwdec=vulkan,vaapi", hidden)
+        self.assertNotIn(b"--hwdec=auto-safe", hidden)
+        shown = argv_of_a_new_player({})
+        self.assertIn(b"--hwdec=auto-safe", shown)
+        self.assertNotIn(b"--hwdec=vulkan,vaapi", shown)
 
     def test_logout_stops_the_player_and_forgets_tokens(self):
         self.login()
@@ -3252,6 +3302,88 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         run_bridge("player")
         self.assertGreater(len(self.writes("/user/episode")), before)
         self.assertFalse(bridge.load_playback().get("unconfirmed"))
+
+    # --- Strict review 27 (safety M1, M2, L1-L3).
+    def test_a_session_expired_while_paused_is_said_at_play(self):
+        # M1: the password changed on the phone while paused here; Play's
+        # resume check took the refusal for "not reached", played on unsynced
+        # and lost that stretch at the next close. Now Play fails with the
+        # session, and nothing plays.
+        self.play_then_pause()
+        auth = bridge.load_auth()
+        auth["needs_reauth"] = True
+        bridge.save_auth(auth)
+        result = run_bridge("toggle")
+        self.assertEqual(result.get("code"), "reauth", result)
+        self.assertTrue(self.mpv_paused())
+        self.mpv_set_pause(False)  # a media key all the same: its poll says so too
+        self.assertEqual(run_bridge("player").get("code"), "reauth")
+
+    def end_after_a_stall(self, poll_during_stall):
+        bridge.save_prefs({"volume": 0, "speed": 2.0})
+        self.other_device(EP_1, 100)
+        self.fake["upnext"] = [EP_1, EP_2]
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.position() > 101)
+        now = time.time()
+        stalls = {"watching": True, "stalls": [{"since": now - 25, "ended": now - 3}]}
+        if poll_during_stall:
+            with bridge.Mpv.connect() as player:
+                player.set("user-data/legato", stalls)
+            run_bridge("player")
+        self.other_device(EP_1, 60)  # the phone went back meanwhile
+        self.wait_for(lambda: self.mpv_get("eof-reached") is True, timeout=30)
+        if not poll_during_stall:
+            now = time.time()
+            with bridge.Mpv.connect() as player:
+                player.set("user-data/legato", {"watching": True, "stalls": [{"since": now - 25, "ended": now - 3}]})
+        run_bridge("player", "--no-autoplay")
+
+    def test_an_end_right_after_a_long_stall_reads_the_record_first(self):
+        # L1: a stall no poll had seen ended the stretch, and the end's poll
+        # judged it "watched": marked played over the phone's 60.
+        self.end_after_a_stall(False)
+        self.assertEqual((self.fake["progress"][EP_1], self.fake["status"][EP_1]), (60, bridge.STATUS_IN_PROGRESS))
+
+    def test_a_surviving_player_dragged_back_after_a_carried_end_pushes_nothing(self):
+        # M2 (tests): close_player's `unconfirmed` pinned: the poll's paused
+        # push checks it, not checkServer; without it a widget's drag back on
+        # a player that outlived the quit pushed 29 over the phone's 50.
+        self.end_through_a_gap()
+        self.other_device(EP_1, 50)
+        with mock.patch.object(bridge, "quit_mpv", lambda player: player.close()):
+            run_bridge("player", "--no-autoplay")
+            self.assertTrue(self.mpv_running())
+            with bridge.Mpv.connect() as player:
+                player.set("pause", True)
+                player.command("seek", 30, "absolute")
+            time.sleep(0.5)
+            run_bridge("player", "--no-autoplay", "--seeked")
+        self.assertEqual((self.fake["progress"][EP_1], self.fake["status"][EP_1]), (50, bridge.STATUS_IN_PROGRESS))
+
+    def test_finished_elsewhere_passes_over_a_gone_top_to_whats_next(self):
+        # L2: the phone finished EP_1; Up Next [GONE, EP_2]: Play said "Up
+        # Next is empty" over EP_2.
+        self.gone_on_up_next()
+        self.fake["upnext"] = [EP_1, EP_2]
+        self.play_then_pause()
+        self.other_device(EP_1, 120, bridge.STATUS_PLAYED)
+        self.fake["upnext"] = [GONE, EP_2]
+        self.other_device(EP_2, 20)
+        result = run_bridge("toggle")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(((result.get("data") or {}).get("item") or {}).get("uuid"), EP_2)
+
+    def test_next_with_nothing_loaded_takes_off_only_the_top(self):
+        # L3: the player closed, the phone moved on (Up Next [EP_2, EP_1]):
+        # Next took EP_1 off Up Next wherever it sat.
+        self.fake["upnext"] = [EP_1, EP_2]
+        self.play_then_pause()
+        run_bridge("stop")
+        self.fake["upnext"] = [EP_2, EP_1]
+        self.assertEqual(run_bridge("next")["data"]["item"]["uuid"], EP_2)
+        self.assertIn(EP_1, self.fake["upnext"])
 
     # --- Strict review 26 (fit L2, L3).
     def test_a_player_emptied_by_something_else_is_closed(self):

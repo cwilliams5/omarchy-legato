@@ -3666,7 +3666,13 @@ def check_server(state, prefs, player=None, quick=False):
             # isn't another device moving on (followed, it played from 0).
             top = up_next_top(skip=ended_or_pending(state) - {uuid})
             record = user_episode(uuid)
-    except ApiError:
+    except ApiError as err:
+        if err.code in ("reauth", "signed_out"):
+            # The session, not the network: said as that (the caller fails
+            # with it and the service asks for the sign-in), and Play doesn't
+            # play on unsynced: what played then was lost at the next close,
+            # under "Pocket Casts not reached" (strict review 27, M1).
+            raise
         return "unverified", state
     if slept_since_start():
         return "unverified", state  # asked before a suspend: the answer is from before it
@@ -3853,7 +3859,17 @@ def resume_loaded(player, state, prefs):
     if outcome == "switched":
         return
     if outcome == "finished":
-        raise ApiError("finished_elsewhere", "Finished on another device, and Up Next is empty")
+        # The player is closed: Play goes on as with nothing loaded, which
+        # passes over a top gone from its feed (the resume check found none it
+        # could follow, and said "Up Next is empty" over valid entries:
+        # strict review 27, L2).
+        try:
+            resume_last(prefs)
+        except ApiError as err:
+            if err.code != "nothing_queued":
+                raise
+            raise ApiError("finished_elsewhere", "Finished on another device, and Up Next is empty") from None
+        return
     if outcome == "unverified":
         # It plays (you pressed play), but where it is wasn't confirmed:
         # nothing is pushed until a poll gets Pocket Casts' answer (rule 2),
@@ -3880,10 +3896,10 @@ def poll(autoplay=True, seeked=False):
         return player_view({}, state, prefs)
     if not player.responsive():
         # Nothing is pushed: whatever played last was already sent, and the
-        # next play asks Pocket Casts where to pick up.
-        end_hung_player(player)
-        state["checkServer"] = True
-        save_playback(state)
+        # next play asks Pocket Casts where to pick up. (Through close_player,
+        # as every close: a player not proven Legato's isn't killed, and was
+        # left with the episode confirmed; strict review 27.)
+        close_player(state, player, hung=True)
         view = player_view({}, state, prefs)
         view["playerHung"] = True
         return view
@@ -3928,6 +3944,12 @@ def poll(autoplay=True, seeked=False):
         outro = skip_last_of(snap.get("file-local-options/end"))
         if outro:
             add_stats(outro=outro)
+        if stall_seen(snap.get("user-data/legato"), state):
+            # A stall no poll handled yet interrupted this stretch, as a pause
+            # does: its end is no news until Pocket Casts is asked (the record
+            # first; strict review 27, L1: marked played over the phone).
+            state["checkServer"] = True
+            state["unconfirmed"] = True
         state = finish_current(state, prefs, autoplay)
         return poll_after_change(state, prefs)
     if episode["uuid"] in retry_pending_finish(state):
@@ -4171,7 +4193,7 @@ def save_outgoing(state):
             sync_now(player, state)
 
 
-def close_player(state, player=None):
+def close_player(state, player=None, hung=False):
     """Close the player on an episode playback.json still names, safe whether
     the quit takes or not (quit_mpv returns after 3 s either way, unchecked):
     the episode is left unconfirmed first (`checkServer`, `unconfirmed`), so
@@ -4187,7 +4209,10 @@ def close_player(state, player=None):
     own = player is None
     player = player or Mpv.connect()
     if player:
-        quit_mpv(player)
+        if hung:
+            end_hung_player(player)  # (a player that stopped answering can't be asked to quit)
+        else:
+            quit_mpv(player)
         if own:
             player.close()
 
@@ -5255,24 +5280,38 @@ def cmd_next(args):
         state = load_playback()
         episode = state.get("episode") or {}
         player = Mpv.connect()
+        loaded = False
         if player:
             with player:
+                loaded = bool(episode.get("url")) and player.get("path") == episode.get("url")
                 sync_now(player, state)  # (play_item's save_outgoing counts the listening)
+        skipped = episode.get("uuid", "") if loaded else ""
+        if not loaded and episode.get("uuid"):
+            # Nothing loaded: the last episode is what Next skips only while
+            # it's still Up Next's top. Otherwise (the phone moved on) Next
+            # plays the top and takes nothing off: it took the last episode off
+            # Up Next wherever it sat (strict review 27, L3).
+            try:
+                episodes, _ = up_next_raw()
+            except ApiError:
+                episodes = []
+            if episodes and str((episodes[0] or {}).get("uuid") or "").lower() == episode["uuid"]:
+                skipped = episode["uuid"]
         # What's next first: a Next that can't tell (an entry without an
         # answer) leaves Up Next as it was. Taken off first, the episode stayed
         # loaded, off Up Next, still "at the top", and every resume check
         # after read the entry for another device's move it couldn't follow:
         # unverified, nothing pushed (strict review 25, F2).
-        item = next_in_up_next(state, episode.get("uuid", ""))
+        item = next_in_up_next(state, skipped)
         if not item:
             raise ApiError("nothing_queued", "Up Next is empty")
         play_item(item, prefs, queue=False)
         # Off Up Next once the next one loaded: a load refused before it
         # (a local feed with local feeds off, the proxy, mpv) left the episode
         # loaded, off Up Next, still "at the top" (strict review 26, F2).
-        if episode.get("uuid"):
+        if skipped:
             try:
-                up_next_remove([episode["uuid"]])
+                up_next_remove([skipped])
             except ApiError:
                 pass
         view = poll_after_change(load_playback(), prefs)
@@ -5285,7 +5324,7 @@ def cmd_stop(args):
         state = load_playback()
         player = Mpv.connect()
         if player and not player.responsive():
-            end_hung_player(player)
+            close_player(state, player, hung=True)
             out(player_view({}, load_playback(), load_prefs()))
             return
         if player and args.if_paused and (player.get("pause") is False and player.get("eof-reached") is not True

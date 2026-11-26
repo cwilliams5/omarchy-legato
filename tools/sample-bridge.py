@@ -3,7 +3,8 @@
 Usage: python3 -I tools/sample-bridge.py <seconds> [label]
 
 Run it while Legato plays, sits paused, or idles, to see how often the panel
-starts the bridge (each call is a fresh Python process, ~75-85 ms of CPU).
+starts the bridge (each call is a fresh Python process, about 0.1 to 0.2 s of CPU
+depending on the machine: the script is compiled at every call).
 Each bridge call lives ~100 ms; a 20 ms sample interval catches nearly all.
 CPU per process is the last utime+stime seen before it exited (a lower bound).
 """

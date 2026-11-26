@@ -109,7 +109,7 @@ Item {
                    top.dormantNotRetried, top.dormantNotRetriedCheck,
                    top.pauseEventRead, top.seekEventPoll,
                    top.toggles, top.idleUnload, top.volumeDebounce, top.volumeDebounceAgain, top.volumeDebounceCheck, top.importFromBar,
-                   top.ipcStopAndSpeed, top.ipcStopAndSpeedCheck, top.nextLoadsUpNextOnce, top.sessionExpired, top.signOutLists,
+                   top.ipcStopAndSpeed, top.ipcStopAndSpeedCheck, top.nextLoadsUpNextOnce, top.sessionExpired, top.staleOpenings, top.signOutLists,
                    top.guardStopped, top.guardStoppedLater, top.guardKilled, top.guardLeftover, top.guardTermed, top.guardTermedCheck, top.guardRetryTermed, top.guardRetryTermedCheck, top.guardNeverStarts, top.guardNeverStartsCheck,
                    top.noScreens, top.noScreensCheck]
       if (top.step >= steps.length) { stop(); Qt.exit(top.failures); return }
@@ -725,6 +725,40 @@ Item {
     shared.needsReauth = false
     shared.authenticated = true
     shared.applyPlayer(top.playing)
+    answerAll(top.answers)
+  }
+
+  // Openings after the status read went stale (strict review 27, fit L2,
+  // L3: untested): on another first tab, Up Next still loads (Next and the
+  // queued marks need it; refresh() loads none); signed out, a fresh status
+  // is read again; the service's IPC refresh reads the status.
+  function staleOpenings() {
+    answerAll(top.answers)
+    var ipc = find(chip, function(i) { return typeof i.isOpen === "function" && typeof i.toggle === "function" })
+    var count = function(command) { return running().filter(function(p) { var a = argsOf(p); return a && a[0] === command }).length }
+    var savedSettings = shared.settings
+    var progressFirst = {}
+    for (var key in savedSettings) progressFirst[key] = savedSettings[key]
+    progressFirst.defaultTab = "progress"
+    shared.settings = progressFirst
+    shared.probedAt = Date.now() - shared.staleMs - 1000
+    shared.upNextLoadedAt = 0
+    ipc.toggle()
+    check("opened on another tab after the status went stale, Up Next loads", count("up-next") >= 1, count("up-next"))
+    answerAll(top.answers)
+    ipc.toggle()
+    answerAll(top.answers)
+    shared.settings = savedSettings
+    shared.authenticated = false
+    shared.probedAt = Date.now()
+    ipc.toggle()
+    check("signed out, a fresh status is read again on opening", count("status") >= 1, count("status"))
+    answerAll(top.answers)
+    ipc.toggle()
+    answerAll(top.answers)
+    shared.authenticated = true
+    find(shared, function(i) { return i.objectName === "ipcLoader" }).item.refresh()
+    check("the service's IPC refresh reads the status", count("status") >= 1, count("status"))
     answerAll(top.answers)
   }
 

@@ -722,6 +722,22 @@ Item {
     events.keyClick(Qt.Key_Down)
     check("the arrows don't move the list behind an open menu", rowCount >= 2 && panel.cursorIndex === cursorBefore
           && panel.menuItem !== null, rowCount + " rows, " + cursorBefore + " -> " + panel.cursorIndex)
+    // The cursor stops at the list's ends, never wrapping (strict review 27,
+    // fit L3: untested).
+    panel.closeMenu()
+    var last = rowCount - 1
+    while (last > 0 && panel.rows[last].kind !== "item") last--
+    panel.cursorIndex = last
+    panel.moveCursor(1)
+    var stoppedAtEnd = panel.cursorIndex === last
+    var first = 0
+    while (first < rowCount - 1 && panel.rows[first].kind !== "item") first++
+    panel.cursorIndex = first
+    panel.moveCursor(-1)
+    check("the cursor stops at the list's ends", stoppedAtEnd && panel.cursorIndex === first && first !== last,
+          first + ".." + last + " " + stoppedAtEnd + " " + panel.cursorIndex)
+    panel.openMenu(unplayed, 0, 0)
+    keys.forceActiveFocus()
     service.upNext = upNextBefore
     events.keyClick(Qt.Key_Return)
     events.keyClick(Qt.Key_Space)

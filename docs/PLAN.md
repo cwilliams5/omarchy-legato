@@ -2142,6 +2142,56 @@ repo.
   checked live, and guessing it wrong refuses every unfollowed episode
   while Up Next is empty; N3 moot (above).
 
+### SR, round 27 (2026-11-26)
+
+Verifying round 26's fixes; the third round running with no critical
+or high from either reviewer. Fit: test gaps and nits. Safety: two
+mediums, three lows. The reviewers' reports are kept outside the repo.
+
+- [x] SR284 (medium, safety M1) A session that expired while paused (a
+  password changed on the phone): Play's resume check took the refusal for
+  "unverified", played on unsynced, said "Pocket Casts not reached", and
+  what played was lost at the next close. The check lets `reauth` and
+  `signed_out` through: Play fails with it (nothing plays), the poll's
+  check too, and the service asks for the sign-in, said once whichever
+  call found it.
+- [x] SR285 (medium, safety tests) close_player's `unconfirmed` was pinned
+  by no test (the poll's paused push checks it, not checkServer: a drag
+  back on a player that outlived its quit pushed 29 over the phone's 50):
+  tested. The two closes of a hung player went around close_player (one
+  set checkServer only, Stop's nothing): through it now (`hung=True`); the
+  static test pins `end_hung_player`'s callers too and that no quit is
+  sent another way.
+- [x] SR286 (low, safety L1) An end reached right after a stall no poll had
+  handled was judged "watched" and marked played over the phone: the poll
+  leaves it unconfirmed first, so the record is read.
+- [x] SR287 (low, safety L2) "Finished elsewhere" with a gone entry on top
+  said "Up Next is empty" over valid entries: Play goes on as with nothing
+  loaded (past a gone top).
+- [x] SR288 (low, safety L3) Next with nothing loaded took the last episode
+  off Up Next wherever it sat (the phone had moved on): it skips it only
+  while it's Up Next's top.
+- [x] SR289 (nit, safety) README: an odd answer with a record but no place
+  counts as an empty one.
+- [ ] SR290 (observation, left) A stop judged a break isn't remembered: a
+  player that outlived its quit is judged again by the next poll; the
+  evidence model makes the second verdict the better-informed one.
+
+- [x] SR281 (low, fit L1-L3: test gaps) The decoder moved off a hidden
+  NVIDIA GPU (`--hwdec=vulkan,vaapi`), asserted on a new player's command
+  line; Up Next loaded when the panel opens on another tab after the
+  status went stale; a signed-out opening reads the status again; the
+  service's IPC refresh reads it; the cursor stops at the list's ends.
+- [x] SR282 (nits, fit N3) README: a plugin reload with an episode loaded
+  starts the pause-before-sleep helpers again; the sleep guard's 4 s is per
+  request (10 s in all); tools/sample-bridge.py's CPU figure matches.
+- [ ] SR283 (left, fit N1, N2) Layered guards that hide each other (the
+  unload timer's `active` and refreshPlayer's, behind call()'s "dormant";
+  the QML "never" check behind the bridge's, which saves a process per
+  pause): kept, not in the mutation set; notifications with no icon
+  (Omarchy's own sender takes a glyph); README's How it works and Known
+  limits read as review notes (a rewrite for users before the release).
+
 ## Testing
 
 - `tests/run` before every commit: all suites, about 23 minutes, nothing on
@@ -2410,6 +2460,22 @@ repo.
   and the GPU choice now tested. 491 Python + 48 node tests; 639
   mutations, round 26's 21 new or changed all killed (--confirm). Round 27
   next, verifying round 26's fixes.
+- 2026-11-26 (morning): round 27 (SR281-SR290): no critical or high from
+  either reviewer, the third round running. Safety: two mediums (an
+  expired session found at Play played on unsynced under "not reached":
+  Play now fails with it and the sign-in is asked; close_player's
+  `unconfirmed` untested, and a hung player's two closes went around it),
+  three lows (an end right after an unhandled stall marked played
+  unasked; "finished elsewhere" over a gone top said Up Next was empty;
+  Next with nothing loaded took the last episode off Up Next anywhere).
+  Fit: test gaps (the decoder on a hidden NVIDIA GPU, Up Next on another
+  first tab, a signed-out opening, the IPC refresh, the cursor's ends),
+  wording. 498 Python + 48 node tests; 650 mutations, round 27's 16 new or
+  changed all killed (--confirm; one re-pointed survived, Next ignoring an
+  end here hidden by Pocket Casts' "played", until a test with the mark
+  failing too). The loop stops here (Cody's rule: a
+  round with no critical or high, and the author comfortable; three
+  running). Next: SR234's live check with Cody, then H6.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

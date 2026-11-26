@@ -393,7 +393,15 @@ Item {
   function absorbAuthError(result) {
     if (!result || result.ok !== false) return false
     if (result.code === "signed_out") { authenticated = false; return true }
-    if (result.code === "reauth") { authenticated = false; needsReauth = true; return true }
+    if (result.code === "reauth") {
+      // Said once, whichever call found it (a Play, a poll, a periodic push):
+      // with the panel closed nothing else shows it (strict review 27, M1).
+      var first = !needsReauth
+      authenticated = false
+      needsReauth = true
+      if (first) reportError("Session expired: sign in again")
+      return true
+    }
     return false
   }
 
@@ -649,11 +657,9 @@ Item {
     // expired): said once per run of failures, or nobody would know.
     if (view.syncFailed === true) reportError("Pocket Casts not reached: not synced")
     // The session expired mid-episode (a periodic push refused): the sign-in
-    // card, said once, not "not reached" (strict review 26, fit L3).
-    if (view.sessionExpired === true && !needsReauth) {
-      absorbAuthError({ ok: false, code: "reauth" })
-      reportError("Session expired: sign in again")
-    }
+    // card, said once (absorbAuthError), not "not reached" (strict review 26,
+    // fit L3).
+    if (view.sessionExpired === true) absorbAuthError({ ok: false, code: "reauth" })
     // Every message here fits the panel's status line (and a notification's
     // single line; about 38 characters); the README has the detail.
     // The stream broke off part way (the network or the episode's

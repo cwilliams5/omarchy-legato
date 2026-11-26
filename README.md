@@ -162,7 +162,8 @@ or log out.
   waits for the idle unload (15 minutes by default) and starts two short
   processes when it fires (the stop, and the read of the player its end
   brings). (Omarchy restarting its plugins, after any plugin's update
-  or install, makes Legato read its sign-in and the player once.)
+  or install, makes Legato read its sign-in and the player once, and,
+  with an episode loaded, start its pause-before-sleep helpers again.)
 - **While playing,** one short Python process every 32 seconds sends your
   position to Pocket Casts (about 0.1 to 0.2 s of CPU each, depending on
   the machine), and with the video window showing, asks Hyprland where the
@@ -307,7 +308,8 @@ devices.
   starts where you were and sends that. What can be lost is what played
   here, never another device's place.
 - **An odd empty answer about an episode of a show you don't follow:** if
-  Pocket Casts' lookup comes back with no record for one that another
+  Pocket Casts' lookup comes back with no record (or one without a place)
+  for one that another
   device played, and neither Up Next's places nor In Progress lists it,
   nothing shows it was ever played, and Legato sends its own place over
   the other device's: the beginning, if it starts it from the show's
@@ -503,7 +505,8 @@ which stay off; a key that isn't a setting is kept and named.
   media key) asks Pocket Casts before it's marked played.
 - **Before sleep,** a small guard holds a logind sleep delay while an
   episode is loaded. When the computer is about to sleep it pauses the
-  episode, sends your position (within 4 seconds) and lets go.
+  episode, sends your position (each request gets 4 seconds, all of it
+  10) and lets go.
 
 ## Privacy and security
 

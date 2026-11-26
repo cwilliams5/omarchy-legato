@@ -14,7 +14,7 @@ Cody's work setup.
 
 Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
-(docs/PLAN.md phases H and SR: rounds 1-26 fixed; round 19 was the first
+(docs/PLAN.md phases H and SR: rounds 1-27 fixed; round 19 was the first
 with no critical or high, but round 20 found one in round 19's own fix
 (withdrawn), round 21 two more through older doors, round 22 two highs
 at boundaries the engine didn't model (another account's sign-in; the
@@ -24,8 +24,9 @@ gone from its feed stopping every push), and round 24 a critical (the
 resume check still judging an empty lookup by its own older rule, not
 `record_held`; one rule for all of it now, `record_must_exist`); round 25
 was the first since 19 with no critical or high from either reviewer, and
-26 the second (a medium, a second door into round 25's own fix, closed
-as a class); round 27 verifies round 26's fixes).
+26 and 27 the second and third (their mediums and lows fixed). The loop
+stopped there, on 2026-11-26: three rounds running with no critical or
+high (Cody's rule: a round with none, and the author comfortable)).
 Cody, 2026-11-25: commits carry his personal address as author, accepted
 (1.0.x's are public that way). Cody, 2026-11-24: SR86 (settings in Legato's own file)
 and SR63 (one live service on a replacement bar) were folded into 1.1.0
@@ -43,8 +44,11 @@ marketplace until it's verified: ship updates through their "Plugin
 verification" issue form (the go-public skill's omarchy.md, section 5).
 Cody's laptop runs it from GitHub.
 
-Next (docs/PLAN.md): strict review until a round finds no critical or
-high issue and every planted mutation is killed, then ship 1.1.0 (H6).
+Next (docs/PLAN.md): the strict-review loop is done (rounds 25-27 with
+no critical or high; every planted mutation killed). Before shipping
+1.1.0 (H6): the video window's rules live check with Cody (SR234), the
+screenshots he re-checks, then push, release and the marketplace
+verification request, each on his go.
 Upstream, Nine Point Labs' PRs #7-9 (the old fork
 `cwilliams5/omarchy-pocketcasts` carries them) stay offered as they are:
 their review of 2026-11-23 is answered (#8's default changed). Nothing
@@ -261,7 +265,18 @@ docs/PLAN.md         what's left to build
    (`quit_mpv` returns after 3 s either way, unchecked) pushes nothing and
    has no end judged "watched" and marked played until Pocket Casts is
    asked (round 25, F1: two closes; round 26, F1: three more, one marking
-   an episode played over the phone; a test pins the callers). The resume
+   an episode played over the phone; round 27: a hung player's two, through
+   `close_player(hung=True)`; a test pins the callers of `quit_mpv` and
+   `end_hung_player` and that no quit is sent another way). An end reached
+   right after a stall no poll handled yet is no news either: the poll
+   leaves it unconfirmed before `finish_current` (round 27, L1: it was
+   marked played over the phone). A resume check that finds the session
+   expired (`reauth`, `signed_out`) fails with it rather than "unverified":
+   Play doesn't play on unsynced, and the service asks for the sign-in,
+   said once whichever call found it (round 27, M1: what played was lost
+   at the next close, under "not reached"). Play after "finished
+   elsewhere" goes on as with nothing loaded (`resume_last`, past a gone
+   top; round 27, L2). The resume
    check's "finished elsewhere" never sets `handledEnd` (that end isn't
    this machine's, and its "played" read as one let play again push over
    it). An empty lookup is an
@@ -539,7 +554,10 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   the loaded episode off Up Next only once it knows what's next (an entry
   without an answer, named, leaves Up Next as it was: taken off first, the
   episode stayed "at the top" and every check after read the entry as
-  another device's move; round 25, F2).
+  another device's move; round 25, F2), and only after the next one
+  loaded (round 26, F2). With nothing loaded, Next skips the last episode
+  only while it's still Up Next's top; otherwise it plays the top and
+  takes nothing off (round 27, L3).
   An unverified check is said (`syncFailed`, once per run, as failed
   pushes are), and Play's asks again at the next poll (round 23, F4).
 - **Idle unload:** paused for `unloadAfterMinutes` (15), the player closes
