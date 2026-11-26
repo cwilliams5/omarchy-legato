@@ -1749,8 +1749,8 @@ round 19's own `triedPushes`.
   the real pointer path); `isOpen` across several screens; the stepper's
   clamp; `tests/qml/panel.qml` has no per-step deadline.
 - [ ] SR225 (nits, left) `load_into_mpv`'s `pause=` ignores the guard's mark
-  (a moment of audio as the lid closes; it's paused right after the load);
-  `refuse_loaded` runs outside the state lock in `cmd_mark` and `cmd_queue`.
+  (a moment of audio as the lid closes; it's paused right after the load).
+  (`refuse_loaded` outside the state lock: fixed in round 25, SR268.)
 
 ### SR, round 21 (2026-11-25)
 
@@ -2074,6 +2074,74 @@ surviving mutants. The reviewers' reports are kept outside the repo.
   for after 1.1.0); the bridge compiled at every call (SR141); comments
   that narrate review history.
 
+### SR, round 26 (2026-11-26)
+
+Verifying round 25's fixes. Safety: no critical or high; one medium (a
+second door into round 25's F1 class), three lows, nits. Fit: no
+critical, high or medium; three lows, five test gaps (one medium,
+security-relevant), nits. The reviewers' reports are kept outside the
+repo.
+
+- [x] SR275 (low, fit L1) One Next loaded Up Next twice with the panel
+  open (its callback's reload on top of the new episode's) and once for
+  nobody with it closed: stale now, loaded only for an open panel and
+  only if not already loading.
+- [x] SR276 (low, fit L2) An mpv emptied by something else (an MPRIS Stop:
+  `playerctl stop`) stayed resident with its feed proxy for good: the next
+  event's poll closes it (close_player).
+- [x] SR277 (low, fit L3) A session that expired mid-episode read as
+  "Pocket Casts not reached" (a refused periodic push counted as a failed
+  one), the chip carrying on signed in: the poll says `sessionExpired`,
+  and the service shows the sign-in card and says so once.
+- [x] SR278 (tests, fit T1-T3, T5) Rule 6's `--no-config`, `--ytdl=no` and
+  `--clipboard-backends-clr` asserted on the main player (without
+  `--ytdl=no`, a load the feed proxy refused went to yt-dlp, which fetched
+  it directly); the owed-stop rule on the real Quickshell (a stop and a
+  restart in one tick: the round 25 test passed without it); NVIDIA hidden
+  only when another GPU is seen driving; CLAUDE.md says what the timer
+  check covers. The start watchdog's second guard (`began`, unreachable)
+  removed.
+- [x] SR279 (nits, fit N1-N4) BarWidget's comment (the panel is built at
+  load, on every screen); SR225's note; README's keys (`h` `j` `k` `l`);
+  stale `/tmp/pc-bridge-*` homes removed.
+- [ ] SR280 (left, fit T4, N5 and older items) `isOpen` across screens
+  (SR227); a resident Python sleep guard per loaded episode (~40 MB; QML
+  could start the bridge only on PrepareForSleep); SR181, SR141, SR263,
+  SR153/SR186, SR234/SR257, SR197/SR165 as before.
+
+- [x] SR270 (medium, safety F1; verified by fault injection) Round 25
+  made two closes leave the episode unconfirmed before the unchecked
+  `quit_mpv`; three more didn't: finish_current's unwatched close (a
+  surviving player still at its end had that end judged again as one
+  watched here, fresh from its `synced`, and marked played over the
+  phone's 50, or, after an unanswered read, without asking), resume_loaded's
+  close when the end was reopened elsewhere (the same, when resume_last
+  failed), and stream_stopped's (by reading). Fixed as a class: every close
+  of an episode playback.json still names goes through `close_player`
+  (unconfirmed first, then the quit): those five, Stop, the stray file's
+  and a failed load's; only the sign-in and sign-out, which drop the state,
+  quit directly, and a static test pins the callers. Tests: the three new
+  doors with the quit failing. (`synced` at an unwatched end left as it
+  was: with the flags it's moot, and moving it was a second layer.)
+- [x] SR271 (low, safety F2) Next took the episode off Up Next before the
+  next one's load, which can still fail (a local feed with local feeds
+  off, the proxy, mpv): every Play and poll after failed the same, nothing
+  pushed. The removal follows the load now.
+- [x] SR272 (low, safety F3) The resume check passed over a gone top only
+  for shows you follow (an unfollowed show's says "not found"): every
+  check said unverified, and "not synced" was said though Pocket Casts
+  answered. "Not found" plus `left_its_feed` is gone too.
+- [x] SR273 (low, safety F4) The feed proxy's "public" included global
+  IPv6 addresses in this machine's own network (a home router, a NAS): a
+  feed's redirect reached them with local feeds off. Those count as the
+  local network now (`interface_prefixes`, /proc/net/if_inet6); README:
+  a router's own public IPv4 can still be reached, as from any web page.
+- [x] SR274 (nits, safety N1-N3) README's odd-empty-answer limit names
+  which episodes this machine remembers; N2 (a non-empty odd list reply,
+  `{"episodes": null}`) left: the real empty lists' shape was never
+  checked live, and guessing it wrong refuses every unfollowed episode
+  while Up Next is empty; N3 moot (above).
+
 ## Testing
 
 - `tests/run` before every commit: all suites, about 23 minutes, nothing on
@@ -2330,6 +2398,18 @@ surviving mutants. The reviewers' reports are kept outside the repo.
   mutations, round 25's 40 new or changed all killed (--confirm). Round 26
   next, to verify round 25's fixes (round 20 found a critical in round
   19's).
+- 2026-11-26 (early morning): round 26 (SR270-SR280): no critical or high
+  from either reviewer, the second round running. Safety: a medium, three
+  more closes trusting the unchecked quit (one marked an episode played
+  over the phone): every close of a named episode goes through
+  `close_player` now, a static test pinning the callers; Next removes
+  after the load; an unfollowed show's gone top; global IPv6 in this
+  machine's own prefixes is the local network. Fit: Next loaded Up Next
+  twice; an mpv stopped from outside stayed resident; an expired session
+  read as "not reached"; rule 6's flags, the owed stop on real Quickshell
+  and the GPU choice now tested. 491 Python + 48 node tests; 639
+  mutations, round 26's 21 new or changed all killed (--confirm). Round 27
+  next, verifying round 26's fixes.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

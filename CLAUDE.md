@@ -14,7 +14,7 @@ Cody's work setup.
 
 Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
-(docs/PLAN.md phases H and SR: rounds 1-25 fixed; round 19 was the first
+(docs/PLAN.md phases H and SR: rounds 1-26 fixed; round 19 was the first
 with no critical or high, but round 20 found one in round 19's own fix
 (withdrawn), round 21 two more through older doors, round 22 two highs
 at boundaries the engine didn't model (another account's sign-in; the
@@ -23,8 +23,9 @@ place's episode restarted from the public list; autoplay past an entry
 gone from its feed stopping every push), and round 24 a critical (the
 resume check still judging an empty lookup by its own older rule, not
 `record_held`; one rule for all of it now, `record_must_exist`); round 25
-was the first since 19 with no critical or high from either reviewer (its
-lows fixed); round 26 verifies those fixes).
+was the first since 19 with no critical or high from either reviewer, and
+26 the second (a medium, a second door into round 25's own fix, closed
+as a class); round 27 verifies round 26's fixes).
 Cody, 2026-11-25: commits carry his personal address as author, accepted
 (1.0.x's are public that way). Cody, 2026-11-24: SR86 (settings in Legato's own file)
 and SR63 (one live service on a replacement bar) were folded into 1.1.0
@@ -254,12 +255,16 @@ docs/PLAN.md         what's left to build
    from 0 over the phone); Play with nothing loaded fails "try again"
    until Pocket Casts answers; a late answer that nobody carried on marks
    it played, and Play moves on (its finish pending, or its record saying
-   played). The close after a retry finds another device carried on, and
-   the resume check's "finished elsewhere" (which never sets `handledEnd`:
-   that end isn't this machine's, and its "played" read as one let play
-   again push over it), leave the episode unconfirmed first, so a player
-   that outlives the quit (unchecked) pushes nothing (round 25, F1). An
-   empty lookup is an
+   played). Every close of an episode playback.json still names goes
+   through `close_player`, which leaves it unconfirmed first
+   (`checkServer`, `unconfirmed`), so a player that outlives the quit
+   (`quit_mpv` returns after 3 s either way, unchecked) pushes nothing and
+   has no end judged "watched" and marked played until Pocket Casts is
+   asked (round 25, F1: two closes; round 26, F1: three more, one marking
+   an episode played over the phone; a test pins the callers). The resume
+   check's "finished elsewhere" never sets `handledEnd` (that end isn't
+   this machine's, and its "played" read as one let play again push over
+   it). An empty lookup is an
    answer only for the loaded episode, and only where the one rule says
    no record need exist (`empty_lookup_answers`, `record_must_exist`,
    below). A retry that later finds another device
@@ -271,8 +276,10 @@ docs/PLAN.md         what's left to build
    is pushed until Pocket Casts has answered.
 3. **An idle player never resumes, switches or pushes.** When mpv has
    nothing loaded, `poll` returns early; if mpv still lists an episode, the
-   load failed: close the player and report it. Why: a failed load must not
-   trigger an Up Next switch or a resume check.
+   load failed: close the player and report it; if it lists nothing (an
+   MPRIS Stop, `playerctl stop`: mpv-mpris runs mpv's `stop`), close it too,
+   its feed proxy with it (round 26, fit L2: it stayed resident for good).
+   Why: a failed load must not trigger an Up Next switch or a resume check.
 4. **Nothing runs on a timer while paused or idle.** (While an episode is
    loaded, playing or paused, four processes wait with no timer: the sleep
    guard (`systemd-inhibit`, the bridge's guard under it and its
@@ -283,7 +290,9 @@ docs/PLAN.md         what's left to build
    repeating timers run while playing: one poll every 32 s (just over the bridge's 30 s
    `SYNC_INTERVAL`, so each one pushes) and the slider tick while a panel is
    open. Everything else arrives as an mpv event on the socket.
-   `tests/model.test.cjs` enforces it. Why: each bridge call is a fresh
+   `tests/model.test.cjs` checks Service.qml's timers for it (a pattern
+   check: a looping animation in the panel or chip wouldn't show). Why:
+   each bridge call is a fresh
    Python process (about 0.1 to 0.2 s of CPU, depending on the machine;
    the script is compiled at every call); the original's polling started 37
    per 3 minutes while playing and 5 per 3 minutes forever while idle.
@@ -305,7 +314,11 @@ docs/PLAN.md         what's left to build
    never connects to this computer (loopback refused by class; its other
    addresses, Wi-Fi, docker, a tailnet's or a global one, by the
    connection showing one address at both ends: `same_address`, round 15)
-   and to the local network only with `localFeeds`; sign-in, sign-out and every token write hold the auth lock
+   and to the local network only with `localFeeds` (private ranges, and
+   global IPv6 addresses inside this machine's own prefixes,
+   `interface_prefixes` from /proc/net/if_inet6: a home network's router,
+   NAS or printer hold those; round 26, F4. A router's own public IPv4 is
+   reachable, as from any web page); sign-in, sign-out and every token write hold the auth lock
    (`auth_lock`, innermost of the three locks) and re-read auth.json before
    writing to a session, so nothing writes back a signed-out session; a
    sign-in to another account than the last session's (`same_account`: its

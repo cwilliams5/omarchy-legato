@@ -448,6 +448,22 @@ class Validation(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["code"], "sleepguard")
 
+    def test_every_close_of_a_named_episode_goes_through_close_player(self):
+        # Strict reviews 25 and 26 (F1): five closes rested on quit_mpv, which
+        # returns after 3 s whether mpv went or not; a player that outlived it
+        # pushed, or had its end marked played, over the phone. Only
+        # close_player (which leaves the episode unconfirmed first) and the
+        # sign-in and sign-out (which drop playback.json right after) quit.
+        import ast
+        tree = ast.parse(pathlib.Path(bridge.__file__).read_text())
+        callers = set()
+        for function in ast.walk(tree):
+            if isinstance(function, ast.FunctionDef):
+                for node in ast.walk(function):
+                    if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "quit_mpv":
+                        callers.add(function.name)
+        self.assertEqual(callers, {"close_player", "cmd_login", "cmd_logout"})
+
     def test_the_sleep_guard_listens_to_logind_only(self):
         # The system bus lets any process send PrepareForSleep; only the
         # match rule's sender keeps others from pausing and pushing.
@@ -509,6 +525,13 @@ class Validation(unittest.TestCase):
         intel_only = sysfs([("card0", "0x8086", [("eDP-1", "connected")])])
         self.assertEqual(bridge.mpv_gpu_env(intel_only), {})
         self.assertEqual(bridge.mpv_gpu_env("/nonexistent"), {})
+        # Nothing reported driving a display (no nvidia-drm modeset, no
+        # connectors): can't tell, so nothing hidden; the only GPU may be
+        # NVIDIA's (strict review 26, fit T3: untested).
+        nvidia_only = sysfs([("card0", "0x10de", [])])
+        self.assertEqual(bridge.mpv_gpu_env(nvidia_only), {})
+        none_connected = sysfs([("card0", "0x10de", []), ("card1", "0x8086", [("eDP-1", "disconnected")])])
+        self.assertEqual(bridge.mpv_gpu_env(none_connected), {})
 
     def test_speed_is_clamped(self):
         self.assertEqual(bridge.clamp_speed("9"), 3.0)
@@ -2251,7 +2274,15 @@ class EndToEnd(PlayerTestCase):
         with bridge.Mpv.connect() as player:
             pid, _ = player.peer_pid()
         with open("/proc/%d/cmdline" % pid, "rb") as fh:
-            self.assertIn(b"--tls-verify=yes", fh.read().split(b"\0"))
+            argv = fh.read().split(b"\0")
+        self.assertIn(b"--tls-verify=yes", argv)
+        # The rest of rule 6 on the main player (strict review 26, fit T1:
+        # only the self-check's player had them asserted). Without --ytdl=no,
+        # mpv's ytdl_hook hands a load the feed proxy refused to yt-dlp, which
+        # fetches it directly; without --no-config, the user's mpv.conf and
+        # scripts load; without the clipboard flag, it reads the clipboard.
+        for flag in (b"--no-config", b"--ytdl=no", b"--clipboard-backends-clr"):
+            self.assertIn(flag, argv)
 
     def test_logout_stops_the_player_and_forgets_tokens(self):
         self.login()
@@ -3221,6 +3252,133 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         run_bridge("player")
         self.assertGreater(len(self.writes("/user/episode")), before)
         self.assertFalse(bridge.load_playback().get("unconfirmed"))
+
+    # --- Strict review 26 (fit L2, L3).
+    def test_a_player_emptied_by_something_else_is_closed(self):
+        # L2: an MPRIS Stop (`playerctl stop`; mpv-mpris runs mpv's `stop`)
+        # left an idle, empty mpv and its feed proxy resident for good.
+        self.play_then_pause()
+        with bridge.Mpv.connect() as player:
+            player.command("stop")
+        time.sleep(0.5)
+        self.assertFalse(run_bridge("player")["data"]["active"])
+        self.wait_for(lambda: not self.mpv_running(), timeout=5)
+
+    def test_a_session_that_expires_mid_episode_is_said_as_that(self):
+        # L3: the refresh token revoked while playing (a password changed on
+        # the phone): the periodic push's failure read as "Pocket Casts not
+        # reached", the chip carrying on as signed in.
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: (self.mpv_get("time-pos") or 0) > 1, timeout=20)
+        auth = bridge.load_auth()
+        auth["needs_reauth"] = True  # as a refresh refused with a 401 leaves it
+        bridge.save_auth(auth)
+        views = []
+        for _ in range(2):
+            self.wait_for(lambda: (self.mpv_get("time-pos") or 0) > float(bridge.load_playback().get("lastSyncPos") or 0) + 1.5,
+                          timeout=20)
+            self.age_last_push(40)
+            views.append(run_bridge("player"))
+        self.assertTrue(all(v["ok"] for v in views), views)
+        self.assertTrue(all(v["data"].get("sessionExpired") for v in views), views)
+        self.assertFalse(any(v["data"].get("syncFailed") for v in views), views)
+        self.assertIsNone(bridge.load_playback().get("pushFailures"))
+
+    # --- Strict review 26 (safety F1-F3): every close of a named episode
+    # leaves it unconfirmed first (close_player); its tests make the quit fail.
+    def test_an_unwatched_end_carried_on_elsewhere_isnt_marked_after_a_failed_quit(self):
+        # F1 (a): the phone went back to 50 while this machine played to the end
+        # unwatched; the first poll reads that and closes, but the quit doesn't
+        # take; the next poll judged the same end "watched" (the first had
+        # called it synced) and marked it played over the phone.
+        self.end_through_a_gap()
+        self.other_device(EP_1, 50)
+        with mock.patch.object(bridge, "quit_mpv", lambda player: player.close()):  # (it never goes)
+            run_bridge("player", "--no-autoplay")
+            self.assertTrue(self.mpv_running())
+            run_bridge("player", "--no-autoplay")
+            run_bridge("toggle")
+        self.assertEqual((self.fake["progress"][EP_1], self.fake["status"][EP_1]), (50, bridge.STATUS_IN_PROGRESS))
+
+    def test_an_unanswered_unwatched_end_isnt_marked_unasked_after_a_failed_quit(self):
+        # F1 (a), its other half: the record couldn't be read at first; once it
+        # could, a Play on the surviving player marked it played without asking.
+        self.end_through_a_gap()
+        self.other_device(EP_1, 50)
+        self.fake["fail"] = {"/user/episode": 1}
+        with mock.patch.object(bridge, "quit_mpv", lambda player: player.close()):
+            run_bridge("player", "--no-autoplay")
+            run_bridge("toggle")
+            run_bridge("player", "--no-autoplay")
+        self.assertEqual((self.fake["progress"][EP_1], self.fake["status"][EP_1]), (50, bridge.STATUS_IN_PROGRESS))
+
+    def test_play_on_an_end_reopened_elsewhere_after_a_failed_quit_marks_nothing(self):
+        # F1 (b): an end handled here, the phone went back into it; Play's
+        # close doesn't take and its resume_last fails; the next poll judged
+        # the end "watched" and marked it played over the phone. (12 s, the
+        # phone back at 2: well outside DRIFT_SLACK of the end.)
+        bridge.save_prefs({"volume": 0, "speed": 2.0})
+        self.fake["media"] = {EP_1: make_audio(12)}
+        self.fake["episodes"][EP_1]["duration"] = 12
+        self.fake["upnext"] = [EP_1, EP_2]
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.mpv_get("eof-reached") is True, timeout=20)
+        run_bridge("player", "--no-autoplay")
+        self.assertEqual(bridge.load_playback().get("handledEnd"), EP_1)
+        self.other_device(EP_1, 2)
+        failing = mock.Mock(side_effect=bridge.ApiError("network", "Pocket Casts didn't answer"))
+        with mock.patch.object(bridge, "quit_mpv", lambda player: player.close()), \
+                mock.patch.object(bridge, "resume_last", failing):
+            run_bridge("toggle")
+            run_bridge("player", "--no-autoplay")
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_IN_PROGRESS)
+
+    def test_a_next_whose_load_is_refused_leaves_up_next_alone(self):
+        # F2: Next took the episode off Up Next, then the next one's load was
+        # refused before loadfile (a local feed with local feeds off): every
+        # Play and poll after failed the same, and nothing was pushed.
+        self.fake["upnext"] = [EP_1, EP_2]
+        self.play_then_pause()
+        real = bridge.check_feed_host
+
+        def refuse(url, prefs):
+            if EP_2 in url:
+                raise bridge.ApiError("local_feed", "This episode is on your local network.")
+            return real(url, prefs)
+        with mock.patch.object(bridge, "check_feed_host", refuse):
+            self.assertEqual(run_bridge("next").get("code"), "local_feed")
+            self.assertEqual(self.fake["upnext"], [EP_1, EP_2])
+            before = len(self.pushes_of(EP_1))
+            self.assertTrue(run_bridge("toggle")["ok"])
+            self.wait_for(lambda: (self.mpv_get("time-pos") or 0) > 4, timeout=20)
+            run_bridge("pause")
+        self.assertTrue(self.pushes_of(EP_1)[before:], "nothing pushed after the refused Next")
+
+    def test_an_unfollowed_shows_entry_gone_from_its_feed_isnt_another_devices_move(self):
+        # F3: the loaded episode taken off Up Next elsewhere, an unstarted
+        # episode of a show you don't follow, gone from its feed, next: its
+        # lookup is "not found", not "gone", and every check said unverified
+        # ("not synced", though Pocket Casts answered); nothing was pushed.
+        self.fake["unfollowed"] = {PODCAST_B}
+        g = dict(self.fake["episodes"][EP_3], uuid=GONE, title="Gone B")
+        g["url"] = self.base + "/audio/%s.mp3" % GONE
+        self.fake["episodes"][GONE] = g  # PODCAST_B's, not in its list
+        self.fake["episodeReply"] = {GONE: (404, b'{"errorMessage": "not found"}')}
+        self.fake["upnext"] = [EP_1, GONE]
+        self.play_then_pause()
+        self.assertTrue(bridge.load_playback().get("atTop"))
+        self.fake["upnext"] = [GONE]
+        before = len(self.pushes_of(EP_1))
+        run_bridge("toggle")
+        self.wait_for(lambda: (self.mpv_get("time-pos") or 0) > 4, timeout=20)
+        self.age_last_push(40)
+        view = run_bridge("player")["data"]
+        run_bridge("pause")
+        self.assertFalse(bridge.load_playback().get("unconfirmed"))
+        self.assertFalse(view.get("syncFailed"))
+        self.assertTrue(self.pushes_of(EP_1)[before:])
 
     # --- Strict review 25 (safety F1-F5, its surviving mutants MB, MH, MM).
     def test_a_player_that_outlives_finished_elsewhere_pushes_nothing(self):
@@ -7025,6 +7183,26 @@ ShellRoot {
         self.assertEqual(out.count("GUARD PID"), 2, out[-2000:])
         self.assertIn("RESULT failures=0 running=true", out, out[-2000:])
 
+    def test_a_stop_and_a_restart_in_one_tick_isnt_a_failure(self):
+        # The owed-stop rule itself on the real Process (strict review 26, fit
+        # T2: the test above passes without it, the stop's exit arriving with
+        # no guard wanted): stopped and wanted again in one handler, the old
+        # guard's signal-15 exit arrives while the next is wanted.
+        shell = self.SHELL.replace("%s", "%BLOCK%").replace(
+            "    Component.onCompleted: guardRetryBaseMs = 50", """    Component.onCompleted: { guardRetryBaseMs = 50; startWatchdogMs = 3000 }
+    Connections {
+      target: sleepGuard
+      function onStarted() { console.warn("GUARD PID " + sleepGuard.processId) }
+      function onExited(code, status) { console.warn("GUARD EXIT " + code + " " + status) }
+    }
+    Timer { interval: 800; running: true; onTriggered: { root.playerActive = false; root.playerActive = true } }""").replace(
+            "interval: 6000; running: true", "interval: 2600; running: true").replace(
+            'console.warn("RESULT failures=" + root._guardFailures + " reports=" + root.reports)',
+            'console.warn("RESULT failures=" + root._guardFailures + " running=" + (sleepGuard.processId !== null))')
+        out = self.run_guard_block(shell, ["/usr/bin/setpriv", "--pdeathsig", "KILL", "/usr/bin/sleep", "30"])
+        self.assertIn("GUARD EXIT 15", out, out[-2000:])
+        self.assertIn("RESULT failures=0 running=true", out, out[-2000:])
+
     def test_a_sleep_guard_that_never_starts_is_counted_and_said(self):
         out = self.run_guard_block(self.SHELL.replace("%s", "%BLOCK%"), ["/nonexistent/legato-guard-probe"])
         result = re.search(r"RESULT failures=(\d+) reports=(\d+)", out)
@@ -7266,6 +7444,24 @@ class FeedProxyRules(TempHome):
         for address in ("127.0.0.1", "::1", "169.254.169.254", "fe80::1", "0.0.0.0", "224.0.0.1",
                         "255.255.255.255", "not an address"):
             self.assertFalse(allowed(address, True), address)  # never, even when allowed
+
+    def test_this_networks_own_ipv6_prefix_is_the_local_network(self):
+        # Strict review 26 (F4): on most IPv6 home networks the router, a NAS
+        # or a printer hold global addresses in this machine's own prefix; a
+        # feed's redirect reached them with local feeds off.
+        sample = ("2a0014504001080b0000000000000123 02 40 00 00 wlan0\n"   # global, /64
+                  "fe80000000000000aabbccfffe001122 02 40 20 80 wlan0\n"   # link-local
+                  "fd7a115ca1e0000000000000000000aa 03 80 00 80 tailscale0\n"  # unique-local, /128
+                  "00000000000000000000000000000001 01 80 10 80 lo\n")
+        networks = bridge.interface_prefixes(sample)
+        self.assertEqual([str(n) for n in networks], ["2a00:1450:4001:80b::/64"])
+        allowed = REAL_FEED_ADDRESS_ALLOWED
+        with mock.patch.object(bridge, "interface_prefixes", lambda: networks):
+            self.assertFalse(allowed("2a00:1450:4001:80b::1", False))  # the router, by its global address
+            self.assertTrue(allowed("2a00:1450:4001:80b::1", True))    # local feeds on
+            self.assertTrue(allowed("2a00:1450:4001:80c::1", False))   # another network
+            self.assertTrue(allowed("8.8.8.8", False))
+        self.assertIsInstance(bridge.interface_prefixes(), list)  # (this machine's, readable or not)
 
     def ask(self, proxy, request):
         with socket.create_connection(("127.0.0.1", proxy.port), timeout=3) as sock:

@@ -219,7 +219,6 @@ Item {
       id: proc
       property var callback: null
       property string secret: ""
-      property bool began: false
       running: false
       clearEnvironment: true
       environment: root.bridgeEnvironment
@@ -227,8 +226,7 @@ Item {
       stdout: StdioCollector { id: outCollector; waitForEnd: true }
       stderr: StdioCollector { id: errCollector; waitForEnd: true }
       onStarted: {
-        began = true
-        startWatchdog.stop()
+        startWatchdog.stop()  // (the one guard: a start stops it before it can fire)
         if (secret === "") return
         write(secret)
         secret = ""
@@ -243,7 +241,6 @@ Item {
         running: true
         repeat: false
         onTriggered: {
-          if (proc.began) return
           var cb = proc.callback
           proc.callback = null
           proc.running = false
@@ -651,6 +648,12 @@ Item {
     // Its position pushes keep failing (Pocket Casts down, the session
     // expired): said once per run of failures, or nobody would know.
     if (view.syncFailed === true) reportError("Pocket Casts not reached: not synced")
+    // The session expired mid-episode (a periodic push refused): the sign-in
+    // card, said once, not "not reached" (strict review 26, fit L3).
+    if (view.sessionExpired === true && !needsReauth) {
+      absorbAuthError({ ok: false, code: "reauth" })
+      reportError("Session expired: sign in again")
+    }
     // Every message here fits the panel's status line (and a notification's
     // single line; about 38 characters); the README has the detail.
     // The stream broke off part way (the network or the episode's
@@ -969,7 +972,14 @@ Item {
   function next() {
     if (!authenticated) return false
     cancelSeek()
-    action(["next"], "", function() { root.upNextLoadedAt = 0; root.loadUpNext() })
+    action(["next"], "", function() {
+      // Up Next changed: stale now, and loaded again only for an open panel
+      // and only if the new episode's applyPlayer hasn't already (it does on
+      // a change of episode): one Next loaded it twice, or for nobody with
+      // the panel closed (strict review 26, fit L1).
+      root.upNextLoadedAt = 0
+      if (root.panelOpen && !root.upNextLoading) root.loadUpNext()
+    })
     return true
   }
 

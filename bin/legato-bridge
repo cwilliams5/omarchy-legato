@@ -3016,10 +3016,11 @@ def finish_current(state, prefs, autoplay):
             # where (resume_last), and a retry settles the end.
             state["handledEnd"] = ""
             state.pop("endedAutoplay", None)
-            save_playback(state)
-            player = Mpv.connect()
-            if player:
-                quit_mpv(player)
+            # (A player that outlived the quit, still at its end, had that end
+            # judged again as one watched here, fresh from the `synced` above,
+            # and marked played over the phone: strict review 26, F1.
+            # Unconfirmed, it reads the record again first.)
+            close_player(state)
         return state
     tell_finished(entry)
     told_played(state, entry)
@@ -3616,10 +3617,7 @@ def stream_stopped(state, prefs, position, stalled=False, unproven=False):
         if again and isinstance(begun, (int, float)) and 0 <= position - begun < 2:
             nothing_more = True
         state["breakStrike"] = {"uuid": episode.get("uuid"), "at": float(position)}
-    save_playback(state)
-    player = Mpv.connect()
-    if player:
-        quit_mpv(player)
+    close_player(state)  # (judged again by a player that outlived the quit, it could read as the end)
     view = player_view({}, state, prefs)
     view["streamBroke"] = True
     if nothing_more:
@@ -3696,7 +3694,12 @@ def check_server(state, prefs, player=None, quick=False):
         try:
             item = resolve_episode(top["uuid"], top.get("podcast", ""))
         except ApiError as err:
-            if err.code != "gone":
+            # (A show you don't follow says "not found" for an episode its
+            # list no longer has: gone as well, once left_its_feed says so;
+            # strict review 26, F3: unverified at every check, and "not
+            # synced" said though Pocket Casts answered.)
+            if err.code != "gone" and not (err.code == "not_found"
+                                           and left_its_feed(top["uuid"], top.get("podcast", ""))):
                 return "unverified", state
             # Gone from its feed: nothing can follow it there, as
             # next_in_up_next skips it; no move on (strict review 23, F2: it
@@ -3711,18 +3714,8 @@ def check_server(state, prefs, player=None, quick=False):
     if finished:
         # Another device's end, not this machine's: never `handledEnd` (an end
         # handled here, whose "played" end_still_stands would read as its own
-        # and play again over), and nothing of it pushed should the player
-        # outlive the quit (unchecked: it returns after 3 s either way): the
-        # next poll asks again, and quits again (strict review 25, F1).
-        state["checkServer"] = True
-        state["unconfirmed"] = True
-        save_playback(state)
-        own = player is None
-        player = player or Mpv.connect()
-        if player:
-            quit_mpv(player)
-            if own:
-                player.close()
+        # and play again over: strict review 25, F1).
+        close_player(state, player)
         return "finished", state
 
     if record:
@@ -3811,7 +3804,7 @@ def resume_loaded(player, state, prefs):
         # Nothing about it is this episode's: neither its end nor its place.
         # Play starts over, as on an idle player: Pocket Casts says what
         # plays, and from where.
-        quit_mpv(player)
+        close_player(state, player)
         resume_last(prefs)
         return
     if at_end and not ended_here(state):
@@ -3842,7 +3835,7 @@ def resume_loaded(player, state, prefs):
             # end was told: Play follows it there (resume_last), rather
             # than play it again over it.
             forget_end(state)
-            quit_mpv(player)
+            close_player(state, player)
             resume_last(prefs)
             return
         # It played to its end here and is still loaded. With autoplay on,
@@ -3904,10 +3897,16 @@ def poll(autoplay=True, seeked=False):
         # player and say so. Nothing is pushed: whatever played last was
         # already sent, and an idle player must never resume or switch.
         if episode.get("uuid") and snap.get("idle-active") is True and as_int(snap.get("playlist-count")) > 0:
-            player = Mpv.connect()
-            if player:
-                quit_mpv(player)
+            close_player(state)
             return player_view({}, state, prefs, load_failed=True)
+        if snap.get("idle-active") is True and as_int(snap.get("playlist-count")) == 0:
+            # Emptied by something else (an MPRIS Stop: `playerctl stop`, a
+            # phone remote; mpv-mpris runs mpv's `stop`): closed, its feed
+            # proxy with it, as the idle unload would; it stayed resident for
+            # good (strict review 26, fit L2). (Never mid-load: a load holds
+            # the state lock from starting mpv to loadfile.)
+            close_player(state)
+            return player_view({}, state, prefs)
         return player_view(snap, state, prefs)
     if not episode.get("uuid") or snap.get("path") != url:
         # mpv is playing something this plugin did not load.
@@ -3935,15 +3934,10 @@ def poll(autoplay=True, seeked=False):
         # It ended here, and a retry found another device carried on in it
         # since: the player closes (paused mid-way, its place isn't news
         # either), and the next Play follows Pocket Casts, as finish_current
-        # does. Unconfirmed first: a player that outlived the quit would be
-        # an ordinary paused episode, and the next poll pushed its place over
-        # that device's (strict review 25, F1).
-        state["checkServer"] = True
-        state["unconfirmed"] = True
-        save_playback(state)
-        player = Mpv.connect()
-        if player:
-            quit_mpv(player)
+        # does. (A player that outlived the quit was an ordinary paused
+        # episode, and the next poll pushed its place over that device's:
+        # close_player.)
+        close_player(state)
         return player_view({}, state, prefs)
     retry_unsent(state)
     if ended_here(state) and unanswered_end(state, episode["uuid"]):
@@ -4056,17 +4050,26 @@ def poll(autoplay=True, seeked=False):
     if due and paused and not paused_push_stands(state):
         due = False
     failures_said = False
+    expired = False
     if due and isinstance(position, (int, float)):
         try:
             if push_position(episode, position):
                 pushed(state, position)
                 episode["playedUpTo"] = int(position)
-        except ApiError:
+        except ApiError as err:
             synced(state, now)  # try again next interval, not every poll
             push_failed(state, position)
-            state["pushFailures"] = int(state.get("pushFailures") or 0) + 1
-            failures_said = state["pushFailures"] == PUSH_FAILURES_SAID
+            if err.code == "reauth":
+                # The session expired (a password changed on the phone): said
+                # as that, and the service asks for the sign-in; it read as
+                # "Pocket Casts not reached" (strict review 26, fit L3).
+                expired = True
+            else:
+                state["pushFailures"] = int(state.get("pushFailures") or 0) + 1
+                failures_said = state["pushFailures"] == PUSH_FAILURES_SAID
     view = player_view(snap, state, prefs)
+    if expired:
+        view["sessionExpired"] = True
     if failures_said:
         view["syncFailed"] = True  # said once per run of failures: in the poll whose push made it two
     if state.pop("tellStart", None):
@@ -4166,6 +4169,27 @@ def save_outgoing(state):
         if url and player.get("path") == url:
             count_listening(state, listen_snap(player), load_prefs())
             sync_now(player, state)
+
+
+def close_player(state, player=None):
+    """Close the player on an episode playback.json still names, safe whether
+    the quit takes or not (quit_mpv returns after 3 s either way, unchecked):
+    the episode is left unconfirmed first (`checkServer`, `unconfirmed`), so
+    a player that outlives the quit pushes nothing, nor has its end judged as
+    one watched here and marked played, until Pocket Casts has been asked.
+    Every close of a named episode goes through here (strict review 25, F1:
+    two closes; round 26, F1: three more, one marking an episode played over
+    the phone)."""
+    if (state.get("episode") or {}).get("uuid"):
+        state["checkServer"] = True
+        state["unconfirmed"] = True
+        save_playback(state)
+    own = player is None
+    player = player or Mpv.connect()
+    if player:
+        quit_mpv(player)
+        if own:
+            player.close()
 
 
 def quit_mpv(player):
@@ -4327,6 +4351,33 @@ def local_feeds_allowed(prefs=None):
     return (prefs if prefs is not None else load_prefs()).get("localFeeds") is True
 
 
+def interface_prefixes(text=None):
+    """This machine's global IPv6 networks, from /proc/net/if_inet6 (per line:
+    address, interface index, prefix length, scope, flags, name; all hex but
+    the name): on most IPv6 home networks the other machines there (the
+    router, a NAS, a printer) hold addresses in them, global like any
+    server's. [] if it can't be read."""
+    if text is None:
+        try:
+            with open("/proc/net/if_inet6", encoding="ascii", errors="replace") as fh:
+                text = fh.read(256 * 1024)
+        except OSError:
+            return []
+    networks = []
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 6 or parts[3] != "00" or len(parts[0]) != 32:
+            continue
+        try:
+            address = ipaddress.IPv6Address(int(parts[0], 16))
+            network = ipaddress.IPv6Network((address, int(parts[2], 16)), strict=False)
+        except ValueError:
+            continue
+        if address.is_global and network.prefixlen < 128:
+            networks.append(network)
+    return networks
+
+
 def feed_address_allowed(address, allow_local):
     """May mpv fetch from this IP address?"""
     try:
@@ -4338,7 +4389,10 @@ def feed_address_allowed(address, allow_local):
     if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved:
         return False  # this computer, link-local (cloud metadata), broadcast: never
     if ip.is_global:
-        return True
+        # Another machine on this network by its global IPv6 address is the
+        # local network too (strict review 26, F4: a feed's redirect reached
+        # the router at <prefix>::1 with local feeds off).
+        return bool(allow_local) or ip.version != 6 or not any(ip in net for net in interface_prefixes())
     return bool(allow_local)  # private ranges, CGNAT (Tailscale), unique-local IPv6
 
 
@@ -5212,12 +5266,15 @@ def cmd_next(args):
         item = next_in_up_next(state, episode.get("uuid", ""))
         if not item:
             raise ApiError("nothing_queued", "Up Next is empty")
+        play_item(item, prefs, queue=False)
+        # Off Up Next once the next one loaded: a load refused before it
+        # (a local feed with local feeds off, the proxy, mpv) left the episode
+        # loaded, off Up Next, still "at the top" (strict review 26, F2).
         if episode.get("uuid"):
             try:
                 up_next_remove([episode["uuid"]])
             except ApiError:
                 pass
-        play_item(item, prefs, queue=False)
         view = poll_after_change(load_playback(), prefs)
     out(view)
 
@@ -5243,7 +5300,7 @@ def cmd_stop(args):
         if player:
             count_listening(state, listen_snap(player), load_prefs())
             sync_now(player, state, was_playing=paused_first)
-            quit_mpv(player)
+            close_player(state, player)
         view = player_view({}, load_playback(), load_prefs())
     out(view)
 

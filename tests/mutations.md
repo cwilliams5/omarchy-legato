@@ -12,13 +12,13 @@ python3 -B tests/mutate.py .       # all of them, about 2 hours
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (625 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (639 x 5 minutes is
 too long; `--confirm` re-runs a kill's tests unmutated); when a mutation survives, run `tests/run` on it before believing
 it. A mutation whose pattern no longer matches the code is reported STALE
 and fails the run (fix its pattern), as does one whose tests fail
 unmutated (SKIP).
 
-## The set (625; strict review rounds 1 to 25, 2026-11-26)
+## The set (639; strict review rounds 1 to 26, 2026-11-26)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated

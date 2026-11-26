@@ -203,8 +203,11 @@ devices.
   pause, as in the Pocket Casts Android app.
 - **Episodes on your local network** (a home media server, a Tailscale
   machine) need the **local network feeds** setting turned on; it's off so
-  that a feed can't point Legato at other machines on your network.
-  Episodes served from this computer itself never play.
+  that a feed can't point Legato at other machines on your network (by
+  their private addresses, or by global IPv6 addresses in this computer's
+  own network). Your router's own public IPv4 address can still be
+  reached, as from any web page. Episodes served from this computer itself
+  never play.
 - **A cover isn't a video:** some feeds pack the episode's cover into the
   file as a video stream. Legato treats those episodes as audio.
 - **A feed that keeps only its newest episodes** drops older ones, and
@@ -247,8 +250,9 @@ devices.
   about a minute and handled as a dropped stream; a server that keeps the
   connection open but sends nothing leaves it buffering until you stop it.
 - **Messages while the panel is closed** (a dropped stream, a load that
-  failed, Pocket Casts not answering for a minute or more of pushes) come
-  as desktop notifications: Omarchy's on-screen display takes none from a
+  failed, Pocket Casts not answering for a minute or more of pushes, a
+  session that expired mid-episode: sign in again) come as desktop
+  notifications: Omarchy's on-screen display takes none from a
   plugin like Legato.
 - **On a bar that replaces Omarchy's,** the panel can't reach the shell's
   copy of Legato's service, so it runs its own and the shell's stays
@@ -308,9 +312,11 @@ devices.
   nothing shows it was ever played, and Legato sends its own place over
   the other device's: the beginning, if it starts it from the show's
   public list, or where it was here, on a resume or after a send that
-  failed. For a show you follow, an episode this machine knows Pocket
-  Casts has a place in, or lists that came back as nothing at all, an
-  empty answer counts as no answer: Legato says so and sends nothing.
+  failed. The same goes for an episode you played here earlier that is no
+  longer the last one. For a show you follow, the episode played last
+  here, one whose place or end Legato still has to send, or lists that
+  came back as nothing at all, an empty answer counts as no answer:
+  Legato says so and sends nothing.
 
 ## Built on
 
@@ -373,8 +379,8 @@ In the panel:
 | --- | --- |
 | Space | Play / pause |
 | Enter | Play the highlighted episode, or open the highlighted show |
-| ↑ ↓ | Move through the list |
-| ← → | Switch tabs (on a show's page, ← goes back) |
+| ↑ ↓ (or `k` `j`) | Move through the list |
+| ← → (or `h` `l`) | Switch tabs (on a show's page, ← or `h` goes back) |
 | `1` `2` `3` `4` | Up Next, In Progress, New releases, Podcasts |
 | `f` or `.` / `b` or `,` | Skip forward / back |
 | `n` | Next in Up Next |

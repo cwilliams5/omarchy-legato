@@ -109,7 +109,7 @@ Item {
                    top.dormantNotRetried, top.dormantNotRetriedCheck,
                    top.pauseEventRead, top.seekEventPoll,
                    top.toggles, top.idleUnload, top.volumeDebounce, top.volumeDebounceAgain, top.volumeDebounceCheck, top.importFromBar,
-                   top.ipcStopAndSpeed, top.ipcStopAndSpeedCheck, top.signOutLists,
+                   top.ipcStopAndSpeed, top.ipcStopAndSpeedCheck, top.nextLoadsUpNextOnce, top.sessionExpired, top.signOutLists,
                    top.guardStopped, top.guardStoppedLater, top.guardKilled, top.guardLeftover, top.guardTermed, top.guardTermedCheck, top.guardRetryTermed, top.guardRetryTermedCheck, top.guardNeverStarts, top.guardNeverStartsCheck,
                    top.noScreens, top.noScreensCheck]
       if (top.step >= steps.length) { stop(); Qt.exit(top.failures); return }
@@ -666,6 +666,65 @@ Item {
     var entry = imports.length === 1 ? JSON.parse(argsOf(imports[0])[3]) : null
     check("a 1.0 bar entry is copied into settings.json once", entry && entry.autoplay === false
           && entry.unloadAfterMinutes === 0 && entry.id === undefined, JSON.stringify(entry) + " x" + imports.length)
+    answerAll(top.answers)
+  }
+
+  // One Next loads Up Next once with the panel open (the new episode's
+  // applyPlayer does it), and not at all with it closed (it loads when the
+  // panel opens): strict review 26, fit L1 (twice, and once for nobody).
+  function nextLoadsUpNextOnce() {
+    answerAll(top.answers)
+    var ipc = find(chip, function(i) { return typeof i.isOpen === "function" && typeof i.toggle === "function" })
+    var upNextCalls = function() { return running().filter(function(p) { var a = argsOf(p); return a && a[0] === "up-next" }).length }
+    var moved = function(uuid) {
+      var view = JSON.parse(JSON.stringify(top.playing))
+      view.item.uuid = uuid
+      return view
+    }
+    var answerNext = function(view) {
+      running().filter(function(p) { var a = argsOf(p); return a && a[0] === "next" })
+        .forEach(function(p) { p.finish(0, JSON.stringify({ ok: true, data: view }), "") })
+    }
+    shared.applyPlayer(top.playing)
+    check("(the panel closed)", chip.opened === false, chip.opened)
+    shared.next()
+    answerNext(moved("aaaaaaaa-0000-0000-0000-0000000000a2"))
+    check("a Next with the panel closed loads no Up Next", upNextCalls() === 0, upNextCalls())
+    answerAll(top.answers)
+    ipc.toggle()
+    answerAll(top.answers)
+    shared.applyPlayer(top.playing)
+    answerAll(top.answers)
+    check("(the panel open, nothing loading)", chip.opened === true && upNextCalls() === 0, chip.opened + " " + upNextCalls())
+    shared.next()
+    answerNext(moved("aaaaaaaa-0000-0000-0000-0000000000a3"))
+    check("a Next with the panel open loads Up Next once", upNextCalls() === 1, upNextCalls())
+    answerAll(top.answers)
+    answerAll(top.answers)
+    check("(and no second load after it)", upNextCalls() === 0, upNextCalls())
+    ipc.toggle()
+    answerAll(top.answers)
+    shared.applyPlayer(top.playing)
+    answerAll(top.answers)
+  }
+
+  // A session that expired mid-episode (a periodic push refused): the
+  // sign-in card, said once, never "not reached" (strict review 26, fit L3).
+  function sessionExpired() {
+    answerAll(top.answers)
+    var expired = JSON.parse(JSON.stringify(top.playing))
+    expired.sessionExpired = true
+    shared.actionError = ""
+    shared.applyPlayer(expired)
+    check("an expired session asks for the sign-in", shared.needsReauth === true && shared.authenticated === false
+          && shared.actionError.indexOf("sign in") >= 0 && shared.actionError.indexOf("not reached") < 0,
+          shared.needsReauth + " " + shared.authenticated + " " + shared.actionError)
+    shared.actionError = ""
+    shared.applyPlayer(expired)
+    check("said once", shared.actionError === "", shared.actionError)
+    shared.needsReauth = false
+    shared.authenticated = true
+    shared.applyPlayer(top.playing)
     answerAll(top.answers)
   }
 
