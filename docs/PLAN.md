@@ -1997,6 +1997,83 @@ outside the repo.
   Socket (the real one also emits `error` on a hang-up) and Process (keeps
   `running`/`processId` until `exited` after a stop).
 
+### SR, round 25 (2026-11-26)
+
+The first round since 19 with no critical or high from either reviewer.
+Fit: six lows, nits, test gaps. Safety: four lows, a nit, three
+surviving mutants. The reviewers' reports are kept outside the repo.
+
+- [x] SR264 (low, safety F1; verified by fault injection) Two paths rested
+  on a player stop nothing checks (`quit_mpv` returns after 3 s either
+  way): the resume check's "finished elsewhere" set `handledEnd`, so a
+  player that outlived the quit took the phone's "played" for its own end
+  and play again pushed in progress over it; the poll's carried retry left
+  an ordinary paused episode whose next poll pushed its place over the
+  phone's. Fixed: "finished elsewhere" never sets `handledEnd`; both
+  leave the episode unconfirmed (`checkServer`, `unconfirmed`) before the
+  quit. Tests: both, with the quit failing.
+- [x] SR265 (low, safety F2) Next took the loaded episode off Up Next
+  before it knew what was next; an entry without an answer stopped it, the
+  episode stayed "at the top", and every resume check after read the entry
+  as another device's move: unverified, nothing pushed. Fixed: Next
+  resolves first, and names the entry that stopped it. A top whose lookup
+  refuses is still no answer for the resume check (unverified, said): the
+  safe direction, left.
+- [x] SR266 (low, safety F3) Play with nothing loaded took a top gone from
+  its feed for another device's move ("Up Next is empty" over the episode
+  in progress): passed over now, as the resume check does.
+- [x] SR267 (low, safety F4) The Known limits and "one rule" were narrower
+  than the code: the odd-empty-answer case also sends this machine's place
+  on a resume or a reload, not only 0 on a start (README restated); a list
+  that comes back as nothing at all (a 200 not JSON or empty, read as {})
+  is "can't tell" now, not "listed nowhere" (tested with the fake's new
+  `oddReply`); the no-record limit says a reload sends the place (pinned
+  by a test); CLAUDE.md names the three sites with a stricter rule.
+- [x] SR268 (nit, safety F5) Mark and queue checked "the loaded episode"
+  outside the state lock (a Play of the same episode could load it in
+  between): both under it now; `forget_pending` folded into `cmd_queue`.
+- [x] SR269 (tests, safety) The reviewer's survivors: `had_place`'s status
+  leg (a place in progress at 0), `same_account`'s "no earlier session"
+  (a sign-in after a half-done sign-out), a load from the record as a
+  record seen: each has a test that kills it.
+
+- [x] SR258 (low, fit L1) A setting changed before the one-time import
+  landed (it failed, or was still on its way) made settings.json with that
+  key alone: the 1.0 entry (autoplay off) was never brought in, and the
+  failure's "restart the shell to try again" imported nothing. Fixed: the
+  change carries the entry (`settings set --entry`), and the bridge brings
+  it in first, in the same save, while no file is there and none was
+  imported; the message says a change or a restart tries again. Tests:
+  the bridge's two cases, the service passing the entry until stored.
+- [x] SR259 (low, fit L2, L4, L5, N4; test gaps) A stop owed with no guard
+  running (chip.qml: a guard's SIGTERM from outside after a retry wait);
+  dbus-monitor's `--pdeathsig` (the argv pinned); a list answer from before
+  a sign-out, and the loaded episode's menu, by behaviour (only source
+  patterns had them); the volume debounce across two ticks; a talking
+  socket resets its retry count; a failed paste said; closing the panel
+  closes the Settings page; the arrows don't move the list behind a menu;
+  Legato's own stop of a guard on the real Quickshell (RealQuickshell).
+- [x] SR260 (low, fit L6) The Omarchy stand-ins were hand-written copies
+  nothing compared: a node check now fails when a stand-in declares a
+  property, signal or function Omarchy's own component doesn't (four
+  test helpers named).
+- [x] SR261 (nits, fit N1-N3) Play (the transport, space) at an end showed
+  "Finished" under a pause glyph while the resume asked (round 21's fix
+  was in playItem only): it clears `ended` too. The chip's IPC refresh,
+  broadcast to every screen's chip, forced every panel's lists on the one
+  service: open panels reload what they show, and with none open the
+  service reads its status once. The import's unreachable
+  `settingsWritable` check gone (folded into `entryToImport`).
+- [x] SR262 (claims, fit) "The 1.1 bridge parses every call 1.0 makes"
+  tested (`OldServiceCalls`: every argv shape of tests/qml/v1_0, checked
+  against the file); README: dimmed text on a light theme reads darker,
+  and a panel opened five minutes after the last status read applies
+  settings too.
+- [ ] SR263 (left, fit L3, N5, N6) The Settings and Stats pages take the
+  mouse only (README says so; keyboard use of the pages is a design change
+  for after 1.1.0); the bridge compiled at every call (SR141); comments
+  that narrate review history.
+
 ## Testing
 
 - `tests/run` before every commit: all suites, about 23 minutes, nothing on
@@ -2239,6 +2316,20 @@ outside the repo.
   tests; 598 mutations, round 24's 15 new or changed all killed
   (--confirm; one re-pointed needed a test with the followed show
   alone). Round 25 next (round 24 had a critical).
+- 2026-11-26 (small hours): round 25 (SR258-SR269): no critical or high
+  from either reviewer, the first such round since 19. Safety lows: a
+  player that outlived its quit after "finished elsewhere" or a carried
+  retry could push over the phone (both unconfirmed first now; "finished
+  elsewhere" no longer "ended here"); a half-done Next stopped syncing
+  (resolves first); Play passed over no gone top; odd list replies read
+  as "listed nowhere"; the Known limits restated; Mark and queue under the
+  state lock. Fit lows: a change before the one-time import loses it
+  (carried now); the IPC refresh forced every screen's lists; Play at an
+  end showed "Finished"; stand-ins checked against Omarchy's components;
+  1.0's calls parsed; a dozen test gaps. 481 Python + 48 node tests; 625
+  mutations, round 25's 40 new or changed all killed (--confirm). Round 26
+  next, to verify round 25's fixes (round 20 found a critical in round
+  19's).
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

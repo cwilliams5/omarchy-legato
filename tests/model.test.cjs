@@ -602,6 +602,43 @@ test("the QML's own version is manifest.json's (an update the shell hasn't resta
   assert.equal(Model.qmlVersion, manifest.version)
 })
 
+// Strict review 25 (L6): the other stand-ins are hand-written copies; an
+// Omarchy rename would leave the suite green while the real widget failed
+// to load. Each property, signal and function a stand-in declares must be
+// declared by Omarchy's own component too, except the stand-ins' own test
+// helpers, named here.
+const STAND_IN_ONLY = {
+  "Ui/KeyboardPanel.qml": ["fading"],          // a test holds a closing panel visible
+  "Ui/Panel.qml": ["_open"],                   // the stand-in's own open state
+  "Ui/PanelSlider.qml": ["dragTo", "releaseDrag"],  // a test drags it
+}
+test("the Omarchy stand-ins declare nothing Omarchy's own components don't", { skip: !fs.existsSync("/usr/share/omarchy/shell/Ui") }, () => {
+  const declared = (src) => {
+    const out = new Set()
+    for (const m of src.matchAll(/^\s*(?:(?:readonly|required|default)\s+)*property\s+[\w.<>]+\s+(\w+)/gm)) out.add(m[1])
+    for (const m of src.matchAll(/^\s*signal\s+(\w+)/gm)) out.add(m[1])
+    for (const m of src.matchAll(/^\s*function\s+(\w+)\s*\(/gm)) out.add(m[1])
+    return out
+  }
+  let checked = 0
+  for (const dir of ["Ui", "Commons"]) {
+    for (const file of fs.readdirSync(path.join(ROOT, "tests/qml/imports/qs", dir))) {
+      if (!file.endsWith(".qml") || file === "PanelKeyCatcher.qml") continue  // (compared whole, above)
+      const name = dir + "/" + file
+      const real = "/usr/share/omarchy/shell/" + name
+      assert.ok(fs.existsSync(real), name + ": no such Omarchy component")
+      const theirs = declared(fs.readFileSync(real, "utf8"))
+      const ours = declared(fs.readFileSync(path.join(ROOT, "tests/qml/imports/qs", name), "utf8"))
+      const allowed = new Set(STAND_IN_ONLY[name] || [])
+      const missing = [...ours].filter((member) => !theirs.has(member) && !allowed.has(member))
+      assert.deepEqual(missing, [], name + ": the stand-in declares what Omarchy's doesn't (renamed or gone?)")
+      for (const helper of allowed) assert.ok(ours.has(helper), name + ": " + helper + " listed as a helper but gone")
+      checked++
+    }
+  }
+  assert.ok(checked >= 12, "only " + checked + " stand-ins checked")
+})
+
 test("the PanelKeyCatcher stand-in is Omarchy's own, unchanged (the panel's keys are tested through it)", { skip: !fs.existsSync("/usr/share/omarchy/shell/Ui/PanelKeyCatcher.qml") }, () => {
   const copy = fs.readFileSync(path.join(ROOT, "tests/qml/imports/qs/Ui/PanelKeyCatcher.qml"), "utf8")
   const real = fs.readFileSync("/usr/share/omarchy/shell/Ui/PanelKeyCatcher.qml", "utf8")

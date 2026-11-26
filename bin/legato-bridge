@@ -1306,8 +1306,12 @@ def podcast_titles():
         return {}
 
 
-def up_next_raw():
-    payload = api("/up_next/list", {"version": 2, "model": "webplayer", "serverModified": 0, "showPlayStatus": True})
+def up_next_payload():
+    return api("/up_next/list", {"version": 2, "model": "webplayer", "serverModified": 0, "showPlayStatus": True})
+
+
+def up_next_raw(payload=None):
+    payload = up_next_payload() if payload is None else payload
     sync = {}
     for s in payload.get("episodeSync") or []:
         if isinstance(s, dict) and s.get("uuid"):
@@ -1417,13 +1421,21 @@ def cached_subscriptions():
 def position_known_elsewhere(uuid):
     """Whether Pocket Casts lists a place in this episode outside its record:
     in Up Next's sync data, or on In Progress. Asked only when the record
-    came back empty. Can't tell (a list didn't load): assume it does."""
+    came back empty. Can't tell (a list didn't load, or came back as
+    nothing at all: a 200 that isn't JSON, or empty, reads as {}): assume it
+    does (strict review 25, F4: an odd reply was read as "listed nowhere")."""
     try:
-        _, sync = up_next_raw()
+        payload = up_next_payload()
+        if not isinstance(payload, dict) or not payload:
+            return True
+        _, sync = up_next_raw(payload)
         entry = sync.get(uuid) or {}
         if as_int(entry.get("playedUpTo")) > 0 or as_int(entry.get("playingStatus")) == STATUS_IN_PROGRESS:
             return True
-        return any(item.get("uuid") == uuid for item in episode_list("/user/in_progress"))
+        listed = api("/user/in_progress")
+        if not isinstance(listed, dict) or not listed:
+            return True
+        return any(isinstance(e, dict) and str(e.get("uuid") or "").lower() == uuid for e in listed.get("episodes") or [])
     except ApiError:
         return True
 
@@ -1519,16 +1531,21 @@ def up_next_put(item, where):
     return True
 
 
-def up_next_top(skip=()):
+def up_next_top(skip=(), past_gone=None):
     """The episode at the top of Up Next (where Pocket Casts keeps the one
     playing on whichever device played last), or None when it is empty;
     past `skip` (episodes that ended here, whose removal may be pending)
-    and past any Pocket Casts says is played (its removal not in yet)."""
+    and past any Pocket Casts says is played (its removal not in yet).
+    `past_gone` (an episode's uuid, never checked itself): also past any
+    other that has left its show's feed (left_its_feed): nothing can follow
+    one there, so it's no other device's move (strict review 25, F3)."""
     episodes, sync = up_next_raw()
     for e in episodes:
         uuid = str((e or {}).get("uuid") or "").lower()
         item = norm_episode(e, sync=sync.get(uuid))
         if item and uuid not in skip and item["status"] != STATUS_PLAYED:
+            if past_gone is not None and uuid != past_gone and left_its_feed(uuid, item.get("podcast", "")):
+                continue
             return item
     return None
 
@@ -2939,6 +2956,9 @@ def next_in_up_next(state, current=""):
                 except ApiError as err:
                     if err.code == "gone":
                         continue  # left its feed: Pocket Casts can't play it either
+                    if err.code == "no_record":  # (which one: strict review 25, F2)
+                        raise ApiError("no_record", "Pocket Casts sent no record of \u201c%s\u201d, next in Up Next: "
+                                       "try again" % text(item.get("name"), 48)) from None
                     raise
                 if item.get("status") == STATUS_PLAYED:
                     continue
@@ -3689,16 +3709,20 @@ def check_server(state, prefs, player=None, quick=False):
         if item is not None and item.get("status") != STATUS_PLAYED:
             return "switched", play_item(item, prefs, queue=False, save_previous=False, at_top=True)
     if finished:
+        # Another device's end, not this machine's: never `handledEnd` (an end
+        # handled here, whose "played" end_still_stands would read as its own
+        # and play again over), and nothing of it pushed should the player
+        # outlive the quit (unchecked: it returns after 3 s either way): the
+        # next poll asks again, and quits again (strict review 25, F1).
+        state["checkServer"] = True
+        state["unconfirmed"] = True
+        save_playback(state)
         own = player is None
         player = player or Mpv.connect()
         if player:
             quit_mpv(player)
             if own:
                 player.close()
-        state["handledEnd"] = uuid
-        state["checkServer"] = False
-        state.pop("unconfirmed", None)
-        save_playback(state)
         return "finished", state
 
     if record:
@@ -3911,7 +3935,12 @@ def poll(autoplay=True, seeked=False):
         # It ended here, and a retry found another device carried on in it
         # since: the player closes (paused mid-way, its place isn't news
         # either), and the next Play follows Pocket Casts, as finish_current
-        # does.
+        # does. Unconfirmed first: a player that outlived the quit would be
+        # an ordinary paused episode, and the next poll pushed its place over
+        # that device's (strict review 25, F1).
+        state["checkServer"] = True
+        state["unconfirmed"] = True
+        save_playback(state)
         player = Mpv.connect()
         if player:
             quit_mpv(player)
@@ -4722,7 +4751,10 @@ def resume_last(prefs):
             item = None  # (one replayed here whose place couldn't be sent starts there: round 19)
         if item and state.get("atTop") is True:
             try:
-                top = up_next_top(skip=ended_or_pending(state) - {item["uuid"]})
+                # (Past a top gone from its feed: Play said "Up Next is empty"
+                # over the episode in progress, as the resume check had it
+                # before round 23. Strict review 25, F3.)
+                top = up_next_top(skip=ended_or_pending(state) - {item["uuid"]}, past_gone=item["uuid"])
             except ApiError:
                 top = None
             if top and top["uuid"] != item["uuid"]:
@@ -5172,14 +5204,19 @@ def cmd_next(args):
         if player:
             with player:
                 sync_now(player, state)  # (play_item's save_outgoing counts the listening)
+        # What's next first: a Next that can't tell (an entry without an
+        # answer) leaves Up Next as it was. Taken off first, the episode stayed
+        # loaded, off Up Next, still "at the top", and every resume check
+        # after read the entry for another device's move it couldn't follow:
+        # unverified, nothing pushed (strict review 25, F2).
+        item = next_in_up_next(state, episode.get("uuid", ""))
+        if not item:
+            raise ApiError("nothing_queued", "Up Next is empty")
         if episode.get("uuid"):
             try:
                 up_next_remove([episode["uuid"]])
             except ApiError:
                 pass
-        item = next_in_up_next(state, episode.get("uuid", ""))
-        if not item:
-            raise ApiError("nothing_queued", "Up Next is empty")
         play_item(item, prefs, queue=False)
         view = poll_after_change(load_playback(), prefs)
     out(view)
@@ -5458,23 +5495,50 @@ def setting_now(key):
     return None if view.get("waiting") else view["values"].get(key)
 
 
+def entry_settings(schema, raw):
+    """The widget's old bar entry (JSON text) as settings: each setting the
+    schema allows, 1.0's text values read as 1.0's user meant them, values
+    outside a range brought to its ends; nothing else."""
+    try:
+        entry_values = json.loads(raw)
+    except ValueError:
+        entry_values = None
+    if not isinstance(entry_values, dict):
+        raise ApiError("bad_args", "settings import: not a JSON object")
+    copied = {}
+    for entry in schema:
+        if entry["key"] in entry_values:
+            value = from_bar_entry(entry, entry_values[entry["key"]])
+            valid = setting_value(entry, value)
+            if valid is None:
+                valid = setting_value(entry, clamped(entry, value))
+            if valid is not None:
+                copied[entry["key"]] = valid
+    return copied
+
+
 def cmd_settings(args):
     """The settings in use (settings_view), after an optional change:
-    `set [--] <key> <json value>` saves one setting, checked against the schema,
-    re-reading the file first under its own lock so nothing else in it is
-    lost (keys it doesn't know included); `import <json object>` copies the
-    widget's old bar entry into a settings.json that doesn't exist yet (each
-    setting the schema allows; nothing else), once: with a file there it
-    changes nothing. Neither writes over a file that can't be read."""
+    `set [--entry <json object>] [--] <key> <json value>` saves one setting,
+    checked against the schema, re-reading the file first under its own lock
+    so nothing else in it is lost (keys it doesn't know included); `import
+    <json object>` copies the widget's old bar entry into a settings.json
+    that doesn't exist yet (entry_settings), once: with a file there it
+    changes nothing. A `set` before that copy landed brings `--entry` in
+    first, in the same save (strict review 25, L1: a change made after a
+    failed import created the file, and the 1.0 user's settings, autoplay
+    off among them, were never brought in). Neither writes over a file that
+    can't be read."""
     schema = settings_schema()
     words = list(args.words or [])
-    if args.action is None and words:
+    if args.action is None and (words or args.entry is not None):
         raise ApiError("bad_args", "settings: set or import?")
     if args.action in ("set", "import"):
-        if len(words) != (2 if args.action == "set" else 1):
+        if len(words) != (2 if args.action == "set" else 1) or (args.action == "import" and args.entry is not None):
             raise ApiError("bad_args", "settings %s: wrong number of arguments" % args.action)
         with StateLock(timeout=5.0, name="settings.lock"):
             data, problem = read_settings()
+            importable = data is None and not problem and load_prefs().get("settingsImported") is not True
             if args.action == "set":
                 key, raw = words
                 entry = next((e for e in schema if e["key"] == key), None)
@@ -5488,26 +5552,15 @@ def cmd_settings(args):
                     raise ApiError("bad_args", "Not a valid value for %s" % key)
                 if problem:
                     raise ApiError("settings_unreadable", problem + ": not saved")
-                data = dict(data or {})
+                bring_in = importable and args.entry is not None
+                data = dict(entry_settings(schema, args.entry) if bring_in else (data or {}))
                 data[key] = value
                 save_state(SETTINGS_FILE, data)
-            elif data is None and not problem and load_prefs().get("settingsImported") is not True:
-                try:
-                    entry_values = json.loads(words[0])
-                except ValueError:
-                    entry_values = None
-                if not isinstance(entry_values, dict):
-                    raise ApiError("bad_args", "settings import: not a JSON object")
-                copied = {}
-                for entry in schema:
-                    if entry["key"] in entry_values:
-                        value = from_bar_entry(entry, entry_values[entry["key"]])
-                        valid = setting_value(entry, value)
-                        if valid is None:
-                            valid = setting_value(entry, clamped(entry, value))
-                        if valid is not None:
-                            copied[entry["key"]] = valid
-                save_state(SETTINGS_FILE, copied)
+                if bring_in:
+                    with prefs_update() as prefs:
+                        prefs["settingsImported"] = True
+            elif importable:
+                save_state(SETTINGS_FILE, entry_settings(schema, words[0]))
                 with prefs_update() as prefs:
                     prefs["settingsImported"] = True  # once: a settings.json deleted later isn't refilled
     out(settings_view(schema))
@@ -5530,12 +5583,15 @@ def refuse_loaded(uuid):
 def cmd_mark(args):
     uuid = safe_uuid(args.uuid)
     podcast = safe_uuid(args.podcast)
-    refuse_loaded(uuid)
     item = {"uuid": uuid, "podcast": podcast}
     # Under the state lock, the episode's own retries dropped first: a poll's
     # retry that read its record just before couldn't write its place, or
-    # "played", over the mark just after (strict review 18, L2).
+    # "played", over the mark just after (strict review 18, L2). The loaded
+    # episode is refused under it too: checked before it, a Play of the same
+    # episode could load it in between, and the mark was read as another
+    # device's (strict review 25, F5).
     with StateLock():
+        refuse_loaded(uuid)
         state = load_playback()
         drop_unsent(state, uuid)  # a place unsent would undo the mark
         if args.state != "played":
@@ -5579,23 +5635,20 @@ def drop_pending(state, uuid):
     state["pendingFinish"] = [p for p in state.get("pendingFinish") or [] if p.get("uuid") != uuid]
 
 
-def forget_pending(uuid):
-    with StateLock():
-        state = load_playback()
-        drop_pending(state, uuid)
-        save_playback(state)
-
-
 def cmd_queue(args):
     uuid = safe_uuid(args.uuid)
-    refuse_loaded(uuid)
-    if args.where == "remove":
-        up_next_remove([uuid])
-        out({"uuid": uuid})
-        return
-    item = resolve_episode(uuid, safe_uuid(args.podcast) if args.podcast else "")
-    up_next_put(item, args.where)
-    forget_pending(uuid)
+    # Under the state lock, as a Mark (strict review 25, F5: a Play of the
+    # same episode could load it between the check and the move).
+    with StateLock():
+        refuse_loaded(uuid)
+        if args.where == "remove":
+            up_next_remove([uuid])
+        else:
+            item = resolve_episode(uuid, safe_uuid(args.podcast) if args.podcast else "")
+            up_next_put(item, args.where)
+            state = load_playback()
+            drop_pending(state, uuid)  # queued again: nothing left to finish for it
+            save_playback(state)
     out({"uuid": uuid})
 
 
@@ -5696,7 +5749,7 @@ def build_parser():
     sub.add_parser("next").set_defaults(fn=cmd_next)
     p = sub.add_parser("stop"); p.add_argument("--if-paused", action="store_true"); p.set_defaults(fn=cmd_stop)
     p = sub.add_parser("settings"); p.add_argument("action", nargs="?", choices=("set", "import"))
-    p.add_argument("words", nargs="*"); p.set_defaults(fn=cmd_settings)
+    p.add_argument("--entry"); p.add_argument("words", nargs="*"); p.set_defaults(fn=cmd_settings)
     p = sub.add_parser("stats"); p.add_argument("value", nargs="?", choices=("on", "off", "clear"))
     p.set_defaults(fn=cmd_stats)
 

@@ -958,7 +958,9 @@ Item {
       optimistic({ playing: false, position: livePosition() })
       action(["pause"])
     } else {
-      if (playerActive) optimistic({ playing: true, position: livePosition() })
+      // (Not ended either, while the resume asks Pocket Casts: "Finished"
+      // under a pause glyph otherwise, as playItem had it: strict review 25.)
+      if (playerActive) optimistic({ playing: true, ended: false, position: livePosition() })
       action(["resume"])
     }
     return true
@@ -1188,15 +1190,24 @@ Item {
   onEntrySettingsChanged: importEntrySettings()
   property bool _settingsImportTried: false
   property bool _settingsImportSaid: false
+  // The bar entry still to be copied in (no settings.json yet, none copied
+  // before: the bridge answers `stored` otherwise, a file it can't write
+  // included), as JSON; "" if none.
+  function entryToImport() {
+    if (!settingsKnown || settingsStored || entrySettings === null) return ""
+    var entry = {}
+    for (var key in entrySettings) if (key !== "id") entry[key] = entrySettings[key]
+    return JSON.stringify(entry)
+  }
   function importEntrySettings() {
     // Tried once per service: the bridge copies the entry only once ever
     // (prefs.json `settingsImported`), and answers `stored` from then on.
-    if (!settingsKnown || settingsStored || !settingsWritable || entrySettings === null || _settingsImportTried) return
+    // (A setting changed meanwhile brings it in too: changeSetting.)
+    var entry = entryToImport()
+    if (entry === "" || _settingsImportTried) return
     _settingsImportTried = true
-    var entry = {}
-    for (var key in entrySettings) if (key !== "id") entry[key] = entrySettings[key]
     var change = ++_settingsChanges
-    call(["settings", "import", "--", JSON.stringify(entry)], function(result) {
+    call(["settings", "import", "--", entry], function(result) {
       if (!result.ok) {
         // Not copied (the settings lock held, a start refused): not tried
         // again in this shell (a loop of imports is the worst way to find
@@ -1205,10 +1216,11 @@ Item {
         // chosen, with no word (strict review 23, L2).
         if (!root._settingsImportSaid) {
           root._settingsImportSaid = true
-          // (Not "try again": nothing here tries again; a restart of the
-          // shell does. Strict review 24, L1.)
+          // (What tries again: a restart of the shell, or a setting
+          // changed here, which brings the entry in first: strict review
+          // 25, L1.)
           root.reportError("Legato 1.0's settings weren't brought in (" + (result.error || "no answer")
-                           + "): restart the shell to try again")
+                           + "): changing a setting, or restarting the shell, tries again")
         }
         return
       }
@@ -1241,7 +1253,12 @@ Item {
     settings = next
     settingFailed(key, "")  // (tried again)
     var change = ++_settingsChanges
-    write("setting " + key, ["settings", "set", "--", String(key), JSON.stringify(value)], function(result) {
+    // Before the 1.0 entry is copied in (its import failed, or is still on
+    // its way), the change brings it in first: made alone, it created
+    // settings.json and the import never ran (strict review 25, L1).
+    var entry = entryToImport()
+    var args = ["settings", "set"].concat(entry === "" ? [] : ["--entry", entry], ["--", String(key), JSON.stringify(value)])
+    write("setting " + key, args, function(result) {
       if (!result.ok) {
         // Said even with a later change on its way (strict review 19: the
         // page flipped back, silently, while the file kept the old value).

@@ -332,7 +332,6 @@ Item {
     keys.textKey("a", 0)
     check("Stats replaces Settings", panel.showStats && !panel.showSettings && service.pagesOpen === 1,
           panel.showStats + " " + panel.showSettings + " " + service.pagesOpen)
-    settle()
 
     // The broken stream's two messages, and a host that can't start part way.
     service.applyPlayer({ active: false, playing: false, streamBroke: true, nothingMore: true, item: null })
@@ -475,6 +474,14 @@ Item {
     panel.close()
     check("closing the panel counts its page off", service.statsPagesOpen === 0 && service.pagesOpen === 0 && !panel.showStats,
           service.statsPagesOpen + " " + service.pagesOpen)
+    // The Settings page too (only Stats was checked: strict review 25, fit N4).
+    panel.open()
+    settle()
+    panel.setSettings(true)
+    panel.close()
+    check("closing the panel closes the Settings page", service.pagesOpen === 0 && !panel.showSettings,
+          service.pagesOpen + " " + panel.showSettings)
+    settle()
 
     // The seek flag: set by mpv's playback-restart, sent with the next poll,
     // given back when that poll fails.
@@ -578,6 +585,14 @@ Item {
           exactly("play " + lastItem.uuid + " --podcast " + lastItem.podcast).length === 1 && calls("resume").length === 0,
           calls("play").length + " " + calls("resume").length)
     answer("play", { active: false, playing: false, item: null })
+    // Play (the transport, space) at its end: not "Finished" under a pause
+    // glyph while the resume asks (strict review 25, fit N1: round 21's fix
+    // went into playItem only).
+    service.applyPlayer({ active: true, playing: false, ended: true, position: 100, duration: 100, item: lastItem })
+    service.playPause()
+    check("Play at its end isn't ended meanwhile", service.ended === false && service.isPlaying === true,
+          service.ended + " " + service.isPlaying)
+    answer("resume", { active: false, playing: false, item: null })
     // The Settings page's toggles show at once and go one at a time (strict
     // review 18: a quick second click acted on the old value and was lost).
     check("(local feeds off, before)", service.localFeeds === false, service.localFeeds)
@@ -644,6 +659,16 @@ Item {
     check("a paste under way when focus moves is dropped", email.text === "me", email.text)
     check("quietly (Quickshell sends exited for a stopped paste, with nothing on stdout)", service.actionError === "",
           service.actionError)
+    // A paste the bridge refuses is said (strict review 25, fit N4: untested).
+    email.forceActiveFocus()
+    events.keyClick(Qt.Key_V, Qt.ControlModifier)
+    exactly("paste").forEach(function(p) {
+      p.finish(0, JSON.stringify({ ok: false, code: "paste", error: "Nothing to paste" }), "")
+    })
+    check("a paste that fails is said, the field left as it was", service.actionError === "Nothing to paste" && email.text === "me",
+          service.actionError + " / " + email.text)
+    service.actionError = ""
+    keys.forceActiveFocus()
     // A sign-in: the password doesn't stay in the panel after it's sent.
     named("passwordField").text = "hunter2"
     panel.signIn()
@@ -673,8 +698,31 @@ Item {
     played.status = 3
     mark = panel.menuEntries(played).filter(function(e) { return e.label === "Mark as unplayed" })
     check("a played one's offers Mark as unplayed", mark.length === 1 && mark[0].id === "unplayed", JSON.stringify(mark))
+    // The episode loaded now offers Play or Pause alone: moving or marking
+    // it would be undone by its next push (strict review 25, L5: only a
+    // source pattern checked this).
+    var savedPlayer = service.player
+    service.applyPlayer({ active: true, playing: false, position: 10, duration: 100, item: unplayed })
+    var loadedEntries = panel.menuEntries(unplayed)
+    check("the loaded episode's menu offers Play alone", loadedEntries.length === 1 && loadedEntries[0].id === "play",
+          JSON.stringify(loadedEntries))
+    service.player = savedPlayer
     panel.openMenu(unplayed, 0, 0)
     keys.forceActiveFocus()
+    // Nor do the arrows move the list's cursor behind it (strict review 25,
+    // fit N4: untested). (Two rows, so the cursor could move.)
+    var upNextBefore = service.upNext
+    var second = JSON.parse(JSON.stringify(unplayed))
+    second.uuid = "aaaaaaaa-0000-0000-0000-00000000000d"
+    service.upNext = [unplayed, second]
+    panel.currentTab = "upnext"
+    var cursorBefore = panel.cursorIndex
+    var rowCount = panel.rows.length
+    events.keyClick(Qt.Key_Down)
+    events.keyClick(Qt.Key_Down)
+    check("the arrows don't move the list behind an open menu", rowCount >= 2 && panel.cursorIndex === cursorBefore
+          && panel.menuItem !== null, rowCount + " rows, " + cursorBefore + " -> " + panel.cursorIndex)
+    service.upNext = upNextBefore
     events.keyClick(Qt.Key_Return)
     events.keyClick(Qt.Key_Space)
     check("Enter and Space don't act behind an open menu", calls("play").length === 0 && exactly("toggle").length === 0

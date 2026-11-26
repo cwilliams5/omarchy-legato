@@ -108,9 +108,9 @@ Item {
                    top.retryTwoEarly, top.retryTwo, top.retryThreeEarly, top.retryThree, top.noFourthRetry,
                    top.dormantNotRetried, top.dormantNotRetriedCheck,
                    top.pauseEventRead, top.seekEventPoll,
-                   top.toggles, top.idleUnload, top.volumeDebounce, top.volumeDebounceCheck, top.importFromBar,
+                   top.toggles, top.idleUnload, top.volumeDebounce, top.volumeDebounceAgain, top.volumeDebounceCheck, top.importFromBar,
                    top.ipcStopAndSpeed, top.ipcStopAndSpeedCheck, top.signOutLists,
-                   top.guardStopped, top.guardStoppedLater, top.guardKilled, top.guardLeftover, top.guardTermed, top.guardTermedCheck, top.guardNeverStarts, top.guardNeverStartsCheck,
+                   top.guardStopped, top.guardStoppedLater, top.guardKilled, top.guardLeftover, top.guardTermed, top.guardTermedCheck, top.guardRetryTermed, top.guardRetryTermedCheck, top.guardNeverStarts, top.guardNeverStartsCheck,
                    top.noScreens, top.noScreensCheck]
       if (top.step >= steps.length) { stop(); Qt.exit(top.failures); return }
       if (top.waits === 0) top.stepStarted = Date.now()
@@ -215,6 +215,10 @@ Item {
       shared.syncPlayerEvents()
     }
     check("a socket that keeps hanging up gets three tries, not a loop", shared._eventAttempts === 3, shared._eventAttempts)
+    // A connection that talks (any reply: here observe_property's) works:
+    // the count starts again (strict review 25, fit N4: untested).
+    socket.parser.read(JSON.stringify({ request_id: 0, error: "success" }))
+    check("a connection that talks starts the count again", shared._eventAttempts === 0, shared._eventAttempts)
     socket.connected = false
     // Refused, as the real Socket refuses (strict review 22, fit F3: only
     // `error` says so, and its retry, a second later, went untested).
@@ -594,6 +598,22 @@ Item {
     ipc.toggle()
     check("and closes it", chip.opened === false, chip.opened)
     answerAll(top.answers)
+    // The IPC refresh: a closed panel loads no lists (each screen's forced
+    // them on the one service: strict review 25, fit N2); an open one
+    // reloads what it shows.
+    var upNextCalls = function() { return running().filter(function(p) { var a = argsOf(p); return a && a[0] === "up-next" }).length }
+    var statusCalls = function() { return running().filter(function(p) { var a = argsOf(p); return a && a[0] === "status" }).length }
+    ipc.refresh()
+    check("the IPC refresh with the panel closed reads the status, no lists", statusCalls() === 1 && upNextCalls() === 0,
+          statusCalls() + " " + upNextCalls())
+    answerAll(top.answers)
+    ipc.toggle()
+    answerAll(top.answers)
+    ipc.refresh()
+    check("with it open, it reloads what the panel shows", upNextCalls() === 1, upNextCalls())
+    answerAll(top.answers)
+    ipc.toggle()
+    answerAll(top.answers)
   }
 
   // The idle unload leaves a player a media key resumed since (--if-paused).
@@ -606,10 +626,23 @@ Item {
   }
 
   // Volume changes in quick succession (a drag) go out as one call.
+  // The second change comes a tick later (80 ms), inside the 180 ms debounce
+  // but not in the same JS turn, which coalesces at any interval (strict
+  // review 25, fit N4: the interval went untested).
+  property double volumeAt: 0
   function volumeDebounce() {
     answerAll(top.answers)
     shared.applyPlayer(top.playing)
     shared.setVolume(40)
+    top.volumeAt = Date.now()
+  }
+  function volumeDebounceAgain() {
+    if (Date.now() - top.volumeAt >= 150) {  // (the tick came late: start over, so the test can't flake)
+      volumes().forEach(function(p) { p.finish(0, JSON.stringify({ ok: true, data: {} }), "") })
+      shared.setVolume(40)
+      top.volumeAt = Date.now()
+      return false
+    }
     shared.setVolume(45)
   }
   function volumeDebounceCheck() {
@@ -657,10 +690,17 @@ Item {
   function signOutLists() {
     answerAll(top.answers)
     shared.upNext = [top.episode]
+    shared.loadUpNext(true)  // a load under way as the session ends
+    var loads = running().filter(function(p) { var a = argsOf(p); return a && a[0] === "up-next" })
+    check("(an Up Next load under way)", loads.length === 1, loads.length)
     shared.signOut()
     running().forEach(function(p) { var a = argsOf(p); if (a && a[0] === "logout") p.finish(0, JSON.stringify({ ok: true, data: {} }), "") })
     check("signing out forgets the account's lists", shared.upNext.length === 0 && shared.authenticated === false,
           shared.upNext.length + " " + shared.authenticated)
+    // Its answer is the old account's: it lands in nothing (strict review
+    // 25, L5: only a source pattern checked this).
+    loads.forEach(function(p) { p.finish(0, JSON.stringify({ ok: true, data: { items: [top.episode] } }), "") })
+    check("a list load from before the sign-out answers into nothing", shared.upNext.length === 0, shared.upNext.length)
     answerAll(top.answers)
   }
 
@@ -729,6 +769,32 @@ Item {
     g[0].exited(15, 1)
     check("a guard sent SIGTERM by someone else counts as a failure", shared._guardFailures === before + 1,
           before + " to " + shared._guardFailures)
+    shared._guardFailures = 0
+    shared.applyPlayer({ active: false, playing: false, item: null })
+  }
+  // A fall of guardWanted with no guard running (the retry wait after a
+  // failure) owes no stop: the next guard's SIGTERM from someone else is
+  // still a failure (strict review 25, L2: counted unconditionally, it was
+  // taken for Legato's own stop and pause before sleep stayed off).
+  function guardRetryTermed() {
+    if (Date.now() - top.stepStarted < 300) return false  // (the stopped guard's late exit)
+    shared.guardRetryBaseMs = 50
+    shared.applyPlayer(top.playing)
+    var g = guards()
+    if (g.length !== 1) return false
+    g[0].finish(1, "", "")  // it failed: the retry wait, no guard running
+    check("(waiting out the retry, no guard running)", !shared.guardWanted && shared._guardsRunning === 0,
+          shared.guardWanted + " " + shared._guardsRunning)
+  }
+  function guardRetryTermedCheck() {
+    var g = guards()
+    if (g.length !== 1) return false  // (the retry's guard)
+    var before = shared._guardFailures
+    g[0].alive = false
+    if (g[0].stdout) g[0].stdout.text = ""
+    g[0].exited(15, 1)
+    check("after a retry wait, a guard sent SIGTERM by someone else counts as a failure",
+          shared._guardFailures === before + 1, before + " to " + shared._guardFailures)
     shared._guardFailures = 0
     shared.applyPlayer({ active: false, playing: false, item: null })
   }

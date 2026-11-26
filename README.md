@@ -98,7 +98,8 @@ by Nine Point Labs (MIT). What's new compared to the original:
   window (see [Keys](#keys)), and scriptable through `omarchy-shell` for
   your own keybindings. (The Settings, Stats and About pages' buttons take
   the mouse.)
-- **Follows your Omarchy theme,** light or dark.
+- **Follows your Omarchy theme,** light or dark (on a light one, its
+  dimmed text reads darker rather than fainter, as in Omarchy's own panels).
 
 ![The panel's In Progress, New releases and Podcasts tabs, and its Settings page](media/pages.png)
 
@@ -296,18 +297,20 @@ devices.
   back to your place.
 - **An episode Pocket Casts has no record of** (a show you don't follow,
   never played anywhere), played here while every send failed: once
-  Pocket Casts is back, Legato doesn't send where you got to. With no
-  record to read, it can't check that nobody played it elsewhere
-  meanwhile, so your other devices start it from the beginning. Play it
-  on here and the next send carries your place. What's lost is what
-  played here, never another device's place.
+  Pocket Casts is back, Stop, Next or the idle unload don't send where
+  you got to, so until you play it here again, your other devices start
+  it from the beginning. Play it here again (within the hour) and it
+  starts where you were and sends that. What can be lost is what played
+  here, never another device's place.
 - **An odd empty answer about an episode of a show you don't follow:** if
   Pocket Casts' lookup comes back with no record for one that another
   device played, and neither Up Next's places nor In Progress lists it,
-  nothing shows it was ever played: Legato starts it from the show's
-  public list at the beginning and sends that. For a show you follow, or
-  an episode this machine knows Pocket Casts has a place in, an empty
-  answer counts as no answer: Legato says so and sends nothing.
+  nothing shows it was ever played, and Legato sends its own place over
+  the other device's: the beginning, if it starts it from the show's
+  public list, or where it was here, on a resume or after a send that
+  failed. For a show you follow, an episode this machine knows Pocket
+  Casts has a place in, or lists that came back as nothing at all, an
+  empty answer counts as no answer: Legato says so and sends nothing.
 
 ## Built on
 
@@ -429,8 +432,9 @@ script: `~/.config/omarchy/plugins/io.github.cwilliams5.legato/bin/legato-bridge
 settings set -- <key> <value>` (the value as JSON: `false`, `30`,
 `"podcasts"`). Turning autoplay or pause before sleep off, or the idle
 unload to never, takes effect at once (Legato's helper reads the file
-whenever it acts); everything else when the Settings page next opens or
-the shell restarts.
+whenever it acts); everything else when the Settings page next opens, when
+the panel opens five minutes or more after Legato last read its status, or
+when the shell restarts.
 Up to 1.0 they lived in the chip's entry in `~/.config/omarchy/shell.json`;
 1.1 copies them from there once, then no longer reads it, so `omarchy bar
 set` doesn't change them any more.

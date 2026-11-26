@@ -14,7 +14,7 @@ Cody's work setup.
 
 Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
-(docs/PLAN.md phases H and SR: rounds 1-24 fixed; round 19 was the first
+(docs/PLAN.md phases H and SR: rounds 1-25 fixed; round 19 was the first
 with no critical or high, but round 20 found one in round 19's own fix
 (withdrawn), round 21 two more through older doors, round 22 two highs
 at boundaries the engine didn't model (another account's sign-in; the
@@ -23,7 +23,8 @@ place's episode restarted from the public list; autoplay past an entry
 gone from its feed stopping every push), and round 24 a critical (the
 resume check still judging an empty lookup by its own older rule, not
 `record_held`; one rule for all of it now, `record_must_exist`); round 25
-next).
+was the first since 19 with no critical or high from either reviewer (its
+lows fixed); round 26 verifies those fixes).
 Cody, 2026-11-25: commits carry his personal address as author, accepted
 (1.0.x's are public that way). Cody, 2026-11-24: SR86 (settings in Legato's own file)
 and SR63 (one live service on a replacement bar) were folded into 1.1.0
@@ -253,7 +254,12 @@ docs/PLAN.md         what's left to build
    from 0 over the phone); Play with nothing loaded fails "try again"
    until Pocket Casts answers; a late answer that nobody carried on marks
    it played, and Play moves on (its finish pending, or its record saying
-   played). An empty lookup is an
+   played). The close after a retry finds another device carried on, and
+   the resume check's "finished elsewhere" (which never sets `handledEnd`:
+   that end isn't this machine's, and its "played" read as one let play
+   again push over it), leave the episode unconfirmed first, so a player
+   that outlives the quit (unchecked) pushes nothing (round 25, F1). An
+   empty lookup is an
    answer only for the loaded episode, and only where the one rule says
    no record need exist (`empty_lookup_answers`, `record_must_exist`,
    below). A retry that later finds another device
@@ -431,7 +437,8 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   15, M1): played from there, it started at 0, pushed in progress (round
   13). Only a play you chose from a list replays one, and that drops its
   pending entry; queueing it again or Mark as unplayed drops it too
-  (`forget_pending`). Play on an
+  (`drop_pending`, under the state lock, where the loaded episode is
+  refused too: round 25, F5). Play on an
   ended episode starts what was queued since (if autoplay was on) or plays
   it again (`play_again`, which pushes it as in progress itself, since
   Pocket Casts would say "played" and stop it), only after asking whether
@@ -480,19 +487,26 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   progress (the last episode's `lastSyncPos`/`lastSyncStatus`, an unsent
   place's or a pending end's `left`/`leftStatus`): places live in records
   (round 21, F1: Play from a list; round 23, F1: an episode left with its
-  place unsent restarted at 0, its place dropped). All of it is one rule,
-  `record_must_exist`, asked by every path that reads an empty lookup:
-  resolving an episode, the loaded episode's resume check, a pending
-  end's retry (round 24, F1: the resume check kept an older rule of its
-  own, and an episode started from Up Next's place, its pushes failing,
-  confirmed "same" on an empty lookup and pushed over the phone's
-  "played"). Two cases stay open (README Known limits): an episode of a
-  show you don't follow that another device played, its lookup empty and
-  listed nowhere, starts from the public list at 0; and a place played
-  here in an episode Pocket Casts has no record of at all, every push
-  failing, is never sent (with no record, nothing can say nobody played
-  it elsewhere; round 24, F2, Cody: documented, not fixed: treating an
-  empty lookup as an answer is how every recent critical got in).
+  place unsent restarted at 0, its place dropped). Wherever an empty
+  lookup could be taken as an answer, it's one rule, `record_must_exist`:
+  resolving an episode, the loaded episode's resume check, a pending end's
+  retry (round 24, F1: the resume check kept an older rule of its own, and
+  an episode started from Up Next's place, its pushes failing, confirmed
+  "same" on an empty lookup and pushed over the phone's "played"). Three
+  sites never take one for an answer at all: a paused push after a failed
+  one (`paused_push_stands`), an unsent place's retry (`retry_unsent`) and
+  a told end's check (`reopened_elsewhere`) wait or refuse. A list that
+  comes back as nothing at all (a 200 that isn't JSON or is empty reads as
+  `{}`) is "can't tell", not "listed nowhere" (round 25, F4). Two cases
+  stay open (README Known limits): an episode of a show you don't follow
+  that another device played, its lookup empty and listed nowhere, gets
+  this machine's place sent over the other device's (the public list's 0
+  on a start, its own place on a resume or a reload after a failed send);
+  and a place played here in an episode Pocket Casts has no record of at
+  all, every push failing, isn't sent by Stop, Next or the idle unload,
+  only by playing it here again (round 24, F2, Cody: documented, not
+  fixed: treating an empty lookup as an answer is how every recent
+  critical got in).
   Next and autoplay start from Up Next's sync
   data, or from the record when the reply leaves an episode's out
   (`next_in_up_next`). Episodes of shows you never followed, played by
@@ -506,7 +520,13 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   queues what it plays at the top (as Pocket Casts does what plays), and
   the resume check passes over a top it can't follow: it took a gone entry
   left on Up Next for another device's move, said unverified at every
-  check, and nothing was pushed for the rest of the episode (round 23, F2).
+  check, and nothing was pushed for the rest of the episode (round 23, F2);
+  so does Play with nothing loaded (`up_next_top(past_gone=)`: it said Up
+  Next was empty over the episode in progress; round 25, F3). Next takes
+  the loaded episode off Up Next only once it knows what's next (an entry
+  without an answer, named, leaves Up Next as it was: taken off first, the
+  episode stayed "at the top" and every check after read the entry as
+  another device's move; round 25, F2).
   An unverified check is said (`syncFailed`, once per run, as failed
   pushes are), and Play's asks again at the next poll (round 23, F4).
 - **Idle unload:** paused for `unloadAfterMinutes` (15), the player closes

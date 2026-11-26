@@ -51,10 +51,23 @@ BarWidget {
     return Qt.darker(bar.barForeground, 1.35)
   }
 
+  // The chip's IPC `refresh` (one chip answers it for every screen): each
+  // open panel reloads what it shows; with none open, the one shared
+  // service reads its status again. (Omarchy's broadcast had every screen's
+  // panel force its lists on that one service, open or not: Up Next and the
+  // show page loaded once per screen; strict review 25, fit N2.)
   function refresh() {
-    if (service) service.refreshIfStale()
-    if (panelLoader.item && panelLoader.item.refresh) panelLoader.item.refresh()
+    var items = bar && typeof bar.moduleWidgets === "function" ? bar.moduleWidgets(moduleName) : [root]
+    var reloaded = false
+    for (var i = 0; i < items.length; i++) {
+      if (items[i] && items[i].opened === true && typeof items[i].reloadPanel === "function") {
+        items[i].reloadPanel()
+        reloaded = true
+      }
+    }
+    if (!reloaded && service) service.refresh()
   }
+  function reloadPanel() { if (panelLoader.item && panelLoader.item.refresh) panelLoader.item.refresh() }
 
   // ---- Panel popup. Shape contract for shell.summon/hide/toggle routing:
   //      Bar.findPanelWidget requires open/close/opened on the bar-widget root.
@@ -115,7 +128,7 @@ BarWidget {
     function about(): void { root.open(); if (panelLoader.item) panelLoader.item.setAbout(true) }
     function stats(): void { root.open(); if (panelLoader.item) panelLoader.item.setStats(true) }
     function isOpen(): string { return root.anyOpened() ? "true" : "false" }
-    function refresh(): void { root.broadcast("refresh") }
+    function refresh(): void { root.refresh() }
     function playPause(): string { return root.service && root.service.playPause() ? "ok" : "unhandled" }
     function next(): string { return root.service && root.service.next() ? "ok" : "unhandled" }
     function skipBack(): string { return root.service && root.service.skipBack() ? "ok" : "unhandled" }

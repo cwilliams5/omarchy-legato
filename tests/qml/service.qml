@@ -436,6 +436,22 @@ Item {
     freshService.readSettings()
     reads().forEach(function(p) { answer(p, view({}, { stored: false })) })
     check("a failed import isn't tried again", bridgeCalls("settings import").length === 0, bridgeCalls("settings import").length)
+    check("the message says what tries again", freshService.actionError.indexOf("changing a setting") >= 0, freshService.actionError)
+    // A setting changed now brings the entry in first (strict review 25, L1:
+    // alone, it made settings.json and the import never ran).
+    freshService.changeSetting("skipForward", 45)
+    var sets = bridgeCalls("settings set")
+    var args = sets.length === 1 ? argsOf(sets[0]) : []
+    var at = args.indexOf("--entry")
+    var carried = at >= 0 ? JSON.parse(args[at + 1]) : null
+    check("a change before the import landed carries the entry", carried !== null && carried.id === undefined
+          && JSON.stringify(args.slice(args.indexOf("--"))) === JSON.stringify(["--", "skipForward", "45"]), JSON.stringify(args))
+    sets.forEach(function(p) { answer(p, view({ skipForward: 45 })) })
+    freshService.changeSetting("skipBack", 20)
+    var later = bridgeCalls("settings set")
+    check("once it's stored, a change carries none", later.length === 1 && argsOf(later[0]).indexOf("--entry") < 0,
+          later.length ? JSON.stringify(argsOf(later[0])) : "none")
+    later.forEach(function(p) { answer(p, view({ skipForward: 45, skipBack: 20 })) })
   }
 
   // Any problem is said (a value not valid too, not only a file that can't

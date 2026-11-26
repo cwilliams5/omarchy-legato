@@ -166,6 +166,49 @@ def run_bridge(*argv, stdin=""):
 
 # --------------------------------------------------------------- unit tests
 
+class OldServiceCalls(unittest.TestCase):
+    """An update runs Legato 1.0's QML against the new bridge until the shell
+    restarts (CLAUDE.md: Quickshell keeps the compiled QML): every call 1.0's
+    service makes must still parse (strict review 25: claimed, untested)."""
+
+    U, P = "aaaaaaaa-0000-0000-0000-000000000001", "bbbbbbbb-0000-0000-0000-000000000001"
+    CALLS = [  # every argv shape in tests/qml/v1_0/Service.qml (with 1.0.2 Panel.qml's values)
+        ["status"], ["login"], ["logout"], ["stop", "--if-paused"], ["stop"], ["pause"], ["resume"], ["next"],
+        ["volume", "40"], ["speed", "cycle"], ["video", "toggle"],
+        ["videopin", "toggle"], ["videopin", "on"], ["videopin", "off"],
+        ["localfeeds", "on"], ["localfeeds", "off"], ["videotransparency", "50"], ["boost", "toggle"], ["trim", "cycle"],
+        ["mark", "played", U, "--podcast", P], ["mark", "unplayed", U, "--podcast", P], ["episodes", P],
+        ["paste"], ["paste", "--primary"], ["player"], ["player", "--no-autoplay"],
+        ["seek", "30"], ["seek", "--episode", U, "30"], ["seek", "--relative", "--", "-10"],
+        ["seek", "--episode", U, "--relative", "--", "10"],
+        ["play", U], ["play", U, "--podcast", P], ["play", U, "--podcast", P, "--from-start"],
+        ["queue", "next", U, "--podcast", P], ["queue", "last", U, "--podcast", P], ["queue", "remove", U, "--podcast", P],
+        ["up-next"], ["in-progress"], ["new-releases"], ["podcasts"], ["podcasts", "--force"], ["sleepguard"],
+    ]
+
+    def test_every_call_1_0_makes_parses(self):
+        parser = bridge.build_parser()
+        for argv in self.CALLS:
+            with self.subTest(argv=argv):
+                try:
+                    args = parser.parse_args(argv)
+                except SystemExit:
+                    self.fail("1.1's bridge refuses 1.0's %r" % argv)
+                self.assertTrue(callable(getattr(args, "fn", None)), argv)
+
+    def test_the_list_covers_1_0s_service(self):
+        # Each command 1.0's service names is in the list above (the file is
+        # frozen; this catches a list written from memory).
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "qml", "v1_0", "Service.qml"), encoding="utf-8") as f:
+            source = f.read()
+        named = set(re.findall(r'(?:call|action|loadList)\((?:"\w+", )?\[\s*"([a-z-]+)"', source))
+        named |= set(re.findall(r'var args = \[\s*"([a-z-]+)"', source))
+        named |= set(re.findall(r'args = \[\s*"([a-z-]+)"\]', source))
+        self.assertGreater(len(named), 20, named)
+        self.assertEqual(named - {argv[0] for argv in self.CALLS}, set())
+
+
 class Validation(unittest.TestCase):
     def test_status_says_the_files_version(self):
         # Strict review 14 (fit F1): the shell keeps the QML it compiled
@@ -422,6 +465,10 @@ class Validation(unittest.TestCase):
         self.assertFalse(result["ok"])  # the monitor ended without a sleep
         self.assertIn("sender='org.freedesktop.login1'", argvs[0][-1])
         self.assertIn("member='PrepareForSleep'", argvs[0][-1])
+        # It dies with the guard, however the guard ends (a SIGKILL, the OOM
+        # killer): an orphaned dbus-monitor would sit on the system bus for
+        # good (strict review 25, L4: untested).
+        self.assertEqual(argvs[0][:4], ["/usr/bin/setpriv", "--pdeathsig", "TERM", "/usr/bin/dbus-monitor"])
 
     def test_sleep_is_read_from_dbus_monitor(self):
         header = ("signal time=1 sender=:1.2 -> destination=(null destination) serial=9 path=/org/freedesktop/login1; "
@@ -822,7 +869,10 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
             # No record: a show you never followed (`recorded`: episodes of one
             # you listened to all the same, which have one).
             reply = (404, b'{"errorMessage": "not found"}')
-        if path == "/user/episode" and reply:
+        odd = s.get("oddReply", {}).get(path)
+        if path != "/user/episode" and odd:
+            reply = odd  # (`oddReply`: another path answered oddly, e.g. a 200 that isn't JSON)
+        if (path == "/user/episode" or odd) and reply:
             # Pocket Casts answers the episode lookup oddly (a 404, an empty
             # 200, a redirect): for every episode, or by uuid.
             status, blob = reply
@@ -3171,6 +3221,192 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         run_bridge("player")
         self.assertGreater(len(self.writes("/user/episode")), before)
         self.assertFalse(bridge.load_playback().get("unconfirmed"))
+
+    # --- Strict review 25 (safety F1-F5, its surviving mutants MB, MH, MM).
+    def test_a_player_that_outlives_finished_elsewhere_pushes_nothing(self):
+        # F1, path 1: the phone finished it (100, played), Up Next empty; a
+        # media key resumes here; the check says "finished", but the quit
+        # doesn't take (simulated). It set handledEnd, and the next poll read
+        # the phone's "played" as this machine's own end: 2, in progress.
+        self.fake["upnext"] = [EP_1]
+        self.play_then_pause()
+        self.other_device(EP_1, 100, bridge.STATUS_PLAYED)
+        self.fake["upnext"] = []
+        self.mpv_set_pause(False)
+        with mock.patch.object(bridge, "quit_mpv", lambda player: player.close()):  # (it never goes)
+            run_bridge("player")
+            self.assertNotEqual(bridge.load_playback().get("handledEnd"), EP_1)
+            time.sleep(1)
+            run_bridge("player")  # asks again (and quits again)
+            self.mpv_set_pause(True)
+            run_bridge("player")
+            self.assertTrue(self.mpv_running())
+        self.assertEqual((self.fake["progress"][EP_1], self.fake["status"][EP_1]), (100, bridge.STATUS_PLAYED))
+
+    def test_a_player_that_outlives_a_carried_retry_pushes_nothing(self):
+        # F1, path 2: an end handled here, its removal pending, dragged back
+        # to 1; the phone restarted it and played to 30; the poll's retry
+        # finds it carried on and quits, but the quit doesn't take: the
+        # player was an ordinary paused episode, and the next poll pushed 1.
+        self.fake["media"] = {EP_1: make_audio(4)}
+        self.fake["episodes"][EP_1]["duration"] = 4
+        self.fake["upnext"] = [EP_1]
+        self.login()
+        self.fake["fail"] = {"/up_next/remove": 1000}
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.mpv_get("eof-reached") is True, timeout=20)
+        run_bridge("player", "--no-autoplay")
+        self.assertEqual(bridge.load_playback().get("handledEnd"), EP_1)
+        self.wait_for(lambda: self.mpv_paused() is True, timeout=10)
+        run_bridge("seek", "1", "--episode", EP_1)
+        self.other_device(EP_1, 30)
+        state = bridge.load_playback()
+        for entry in state["pendingFinish"]:
+            entry["tried"] -= 120
+        bridge.save_playback(state)
+        with mock.patch.object(bridge, "quit_mpv", lambda player: player.close()):
+            run_bridge("player", "--no-autoplay")
+        run_bridge("player", "--no-autoplay")
+        self.assertEqual(self.fake["progress"][EP_1], 30)
+
+    def test_a_next_that_cant_tell_whats_next_leaves_up_next_alone(self):
+        # F2: Next took the loaded episode off Up Next before it knew what was
+        # next; an entry without an answer stopped it, and every resume check
+        # after read that entry as another device's move: nothing pushed.
+        self.fake["upnext"] = [EP_1, EP_2]
+        self.play_then_pause()
+        self.fake["episodeReply"] = {EP_2: (404, b'{"errorMessage": "not found"}')}
+        result = run_bridge("next")
+        self.assertEqual(result.get("code"), "no_record")
+        self.assertIn(self.fake["episodes"][EP_2]["title"][:20], result["error"])
+        self.assertEqual(self.fake["upnext"], [EP_1, EP_2])
+        self.assertEqual(bridge.load_playback()["episode"]["uuid"], EP_1)
+        before = len(self.pushes_of(EP_1))
+        run_bridge("toggle")
+        self.wait_for(lambda: (self.mpv_get("time-pos") or 0) > 4, timeout=20)
+        run_bridge("pause")
+        self.assertFalse(bridge.load_playback().get("unconfirmed"))
+        self.assertTrue(self.pushes_of(EP_1)[before:], "nothing pushed after the failed Next")
+
+    def test_play_with_nothing_loaded_passes_over_a_top_gone_from_its_feed(self):
+        # F3: Up Next [GONE, EP_1], EP_1 the last episode at the top: Play
+        # took GONE for another device's move and said Up Next was empty.
+        self.gone_on_up_next()
+        self.fake["upnext"] = [EP_1]
+        self.play_then_pause()
+        self.assertTrue(bridge.load_playback().get("atTop"))
+        run_bridge("stop")
+        self.fake["upnext"] = [GONE, EP_1]
+        result = run_bridge("toggle")
+        self.assertEqual(((result.get("data") or {}).get("item") or {}).get("uuid"), EP_1, result)
+
+    def test_an_odd_list_reply_isnt_listed_nowhere(self):
+        # F4 (b): an Up Next reply that isn't JSON read as {}: "listed
+        # nowhere", and an unfollowed episode the phone is in started from
+        # the public list at 0. Can't tell now: refused.
+        self.fake["unfollowed"] = {PODCAST_B}
+        self.fake["recorded"] = {EP_3}
+        self.other_device(EP_3, 25)
+        self.fake["notListed"] = {EP_3}
+        self.login()
+        self.fake["episodeReply"] = {EP_3: (404, b'{"errorMessage": "not found"}')}
+        self.fake["oddReply"] = {"/up_next/list": (200, b"<html>maintenance</html>")}
+        self.assertEqual(run_bridge("play", EP_3, "--podcast", PODCAST_B).get("code"), "no_record")
+        self.assertEqual((self.fake["progress"][EP_3], self.pushes_of(EP_3)), (25, []))
+        self.fake["oddReply"] = {"/user/in_progress": (200, b"")}
+        self.fake["noSync"] = {EP_3}
+        self.assertEqual(run_bridge("play", EP_3, "--podcast", PODCAST_B).get("code"), "no_record")
+        self.assertEqual(self.pushes_of(EP_3), [])
+
+    def test_a_reload_sends_the_place_of_an_episode_pocket_casts_has_no_record_of(self):
+        # F4 (c), README Known limits: a show you don't follow, never played
+        # anywhere, played here while every push failed: Play after the
+        # player closed starts there and sends it (Stop, Next, the idle
+        # unload don't).
+        self.fake["unfollowed"] = {PODCAST_B}
+        self.fake["upnext"] = []
+        self.login()
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        self.assertTrue(run_bridge("play", EP_3, "--podcast", PODCAST_B)["ok"])
+        self.wait_for(lambda: (self.mpv_get("time-pos") or 0) > 6, timeout=20)
+        run_bridge("pause")
+        place = bridge.load_playback()["unsentPush"]["position"]
+        run_bridge("stop")
+        self.assertIsNone(self.fake["progress"].get(EP_3))
+        self.fake["fail"] = {}
+        self.assertTrue(run_bridge("toggle")["ok"])
+        self.assertGreater(self.fake["progress"].get(EP_3) or 0, place - 2)
+
+    def test_an_unsent_place_left_at_0_in_progress_holds_the_record(self):
+        # The reviewer's surviving mutant MB (record_held's status leg): the
+        # load's push landed at 0 (a record, in progress), then every push
+        # failed, left by Next; the phone played on to 30; an empty lookup,
+        # listed nowhere: refused, not started from the public list at 0.
+        self.fake["unfollowed"] = {PODCAST_B}
+        self.fake["upnext"] = [EP_3, EP_1]
+        self.login()
+        self.assertTrue(run_bridge("play", EP_3, "--podcast", PODCAST_B)["ok"])
+        self.assertEqual(self.fake["progress"].get(EP_3), 0)
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        self.wait_for(lambda: (self.mpv_get("time-pos") or 0) > 6, timeout=20)
+        run_bridge("pause")
+        self.assertEqual(run_bridge("next")["data"]["item"]["uuid"], EP_1)
+        run_bridge("pause")
+        entry = [p for p in bridge.load_playback().get("unsentPlaces") or [] if p["uuid"] == EP_3]
+        self.assertTrue(entry and entry[0]["left"] == 0 and entry[0]["leftStatus"] == 2, entry)
+        self.other_device(EP_3, 30)
+        self.fake["episodeReply"] = {EP_3: (404, b'{"errorMessage": "not found"}')}
+        self.fake["notListed"] = self.fake["noSync"] = {EP_3}
+        self.fake["fail"] = {}
+        self.assertEqual(run_bridge("play", EP_3, "--podcast", PODCAST_B).get("code"), "no_record")
+        self.assertEqual(self.fake["progress"][EP_3], 30)
+
+    def test_a_load_from_the_record_is_a_record_seen(self):
+        # The reviewer's surviving mutant MM (play_item's recordSeen from
+        # `fromRecord`): a show you don't follow with a record at 0, unplayed
+        # (someone queued it); played here from the record while every push
+        # fails, then closed; the phone plays to 30; an empty lookup, listed
+        # nowhere: Play refuses, never the public list's 0.
+        self.fake["unfollowed"] = {PODCAST_B}
+        self.fake["recorded"] = {EP_3}
+        self.fake["notListed"] = self.fake["noSync"] = {EP_3}
+        self.login()
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        self.assertTrue(run_bridge("play", EP_3, "--podcast", PODCAST_B)["ok"])
+        self.assertTrue(bridge.load_playback().get("recordSeen"))
+        run_bridge("stop")
+        self.fake["fail"] = {}
+        self.other_device(EP_3, 30)
+        self.fake["episodeReply"] = {EP_3: (404, b'{"errorMessage": "not found"}')}
+        before = len(self.pushes_of(EP_3))
+        self.assertEqual(run_bridge("toggle").get("code"), "no_record")
+        self.assertEqual((self.fake["progress"][EP_3], self.pushes_of(EP_3)[before:]), (30, []))
+
+    def test_a_sign_in_after_a_half_done_sign_out_starts_clean(self):
+        # The reviewer's surviving mutant MH (same_account: no earlier session
+        # counts as another): a sign-out deletes the tokens first and can fail
+        # "busy" before dropping playback.json; another account signing in
+        # then inherited the first one's unsent place (round 22, H1).
+        self.fake["accountUuids"] = {"other@example.com": "u2"}
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: (self.mpv_get("time-pos") or 0) > 3, timeout=20)
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        run_bridge("pause")
+        self.assertIn("unsentPush", bridge.load_playback())
+        real_lock = bridge.StateLock
+
+        def busy_state_lock(timeout=10.0, name="lock"):
+            if name == "lock":
+                raise bridge.ApiError("busy", "Another Pocket Casts action is still running")
+            return real_lock(timeout=timeout, name=name)
+        with mock.patch.object(bridge, "StateLock", busy_state_lock):
+            self.assertFalse(run_bridge("logout")["ok"])
+        self.assertEqual(bridge.load_auth(), {})
+        self.assertIn("unsentPush", bridge.load_playback())  # left behind
+        self.fake["fail"] = {}
+        self.assertTrue(run_bridge("login", stdin=json.dumps({"email": "other@example.com", "password": PASSWORD}))["ok"])
+        self.assertEqual(bridge.load_playback(), {})
 
     # --- Strict review 15 (H1): an unsent place left behind by a switch.
     def unsent_paused(self):
@@ -6767,6 +7003,28 @@ ShellRoot {
         out = self.run_guard_block(shell, ["/usr/bin/setpriv", "--pdeathsig", "KILL", "/usr/bin/sleep", "30"])
         self.assertIn("RESULT failures=1 again=true", out, out[-2000:])
 
+    def test_legatos_own_stop_of_a_sleep_guard_isnt_a_failure(self):
+        # The owed-stop rule on the real Process (strict review 25: only the
+        # stand-in's hard-coded `exited(15, 1)` modelled it): the episode
+        # unloads (guardWanted falls, the guard is stopped), then the next
+        # loads; the stop's signal-15 exit is Legato's own, never counted.
+        shell = self.SHELL.replace("%s", "%BLOCK%").replace(
+            "    Component.onCompleted: guardRetryBaseMs = 50", """    Component.onCompleted: { guardRetryBaseMs = 50; startWatchdogMs = 3000 }
+    Connections {
+      target: sleepGuard
+      function onStarted() { console.warn("GUARD PID " + sleepGuard.processId) }
+      function onExited(code, status) { console.warn("GUARD EXIT " + code + " " + status) }
+    }
+    Timer { interval: 800; running: true; onTriggered: root.playerActive = false }
+    Timer { interval: 1500; running: true; onTriggered: root.playerActive = true }""").replace(
+            "interval: 6000; running: true", "interval: 2600; running: true").replace(
+            'console.warn("RESULT failures=" + root._guardFailures + " reports=" + root.reports)',
+            'console.warn("RESULT failures=" + root._guardFailures + " running=" + (sleepGuard.processId !== null))')
+        out = self.run_guard_block(shell, ["/usr/bin/setpriv", "--pdeathsig", "KILL", "/usr/bin/sleep", "30"])
+        self.assertIn("GUARD EXIT 15", out, out[-2000:])  # (it was stopped)
+        self.assertEqual(out.count("GUARD PID"), 2, out[-2000:])
+        self.assertIn("RESULT failures=0 running=true", out, out[-2000:])
+
     def test_a_sleep_guard_that_never_starts_is_counted_and_said(self):
         out = self.run_guard_block(self.SHELL.replace("%s", "%BLOCK%"), ["/nonexistent/legato-guard-probe"])
         result = re.search(r"RESULT failures=(\d+) reports=(\d+)", out)
@@ -6871,6 +7129,27 @@ class SettingsFile(TempHome):
         run_bridge("settings", "set", "--", "skipBack", "20")  # a script got there first
         run_bridge("settings", "import", "--", json.dumps({"skipBack": 30, "autoplay": False}))
         self.assertEqual(self.saved(), {"skipBack": 20})
+
+    def test_a_change_before_the_import_brings_the_entry_in_first(self):
+        # Strict review 25 (L1): the import failed (or hadn't landed), then a
+        # setting changed: settings.json was made with that key alone, and
+        # the 1.0 entry (autoplay off) was never brought in, a restart
+        # importing nothing. The change carries the entry now.
+        entry = json.dumps({"id": "io.github.cwilliams5.legato", "autoplay": "false", "skipBack": 30})
+        view = run_bridge("settings", "set", "--entry", entry, "--", "skipForward", "45")["data"]
+        self.assertEqual(self.saved(), {"autoplay": False, "skipBack": 30, "skipForward": 45})
+        self.assertIs(view["values"]["autoplay"], False)
+        self.assertIs(view["stored"], True)
+        # Once: a later import, or a change still carrying an entry, copies nothing.
+        run_bridge("settings", "import", "--", json.dumps({"skipBack": 60}))
+        run_bridge("settings", "set", "--entry", json.dumps({"skipBack": 90}), "--", "showTitle", "false")
+        self.assertEqual(self.saved(), {"autoplay": False, "skipBack": 30, "skipForward": 45, "showTitle": False})
+
+    def test_a_change_never_brings_an_entry_over_a_file_made_first(self):
+        run_bridge("settings", "set", "--", "skipBack", "20")
+        run_bridge("settings", "set", "--entry", json.dumps({"autoplay": False}), "--", "skipForward", "45")
+        self.assertEqual(self.saved(), {"skipBack": 20, "skipForward": 45})
+        self.assertFalse(run_bridge("settings", "import", "--entry", "{}", "--", "{}")["ok"])
 
     def test_1_0s_text_values_are_imported(self):
         # Strict review 11 (L1): `omarchy bar set` without --json stores text,
