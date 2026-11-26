@@ -10,17 +10,19 @@ If a `handoff.md` sits in the repo root, read it first: a local-only note
 This file becomes public with the repo: no personal details, nothing about
 Cody's work setup.
 
-## Status (2026-11-25)
+## Status (2026-11-26)
 
 Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
-(docs/PLAN.md phases H and SR: rounds 1-22 fixed; round 19 was the first
+(docs/PLAN.md phases H and SR: rounds 1-23 fixed; round 19 was the first
 with no critical or high, but round 20 found one in round 19's own fix
 (withdrawn), round 21 two more through older doors, round 22 two highs
 at boundaries the engine didn't model (another account's sign-in; the
-tests' own isolation), and round 23 a critical and a high (an unsent
+tests' own isolation), round 23 a critical and a high (an unsent
 place's episode restarted from the public list; autoplay past an entry
-gone from its feed stopping every push); round 24 next).
+gone from its feed stopping every push), and round 24 a critical (the
+resume check still judging an empty lookup by its own older rule, not
+`record_held`); round 24's fixes are in progress, round 25 next).
 Cody, 2026-11-25: commits carry his personal address as author, accepted
 (1.0.x's are public that way). Cody, 2026-11-24: SR86 (settings in Legato's own file)
 and SR63 (one live service on a replacement bar) were folded into 1.1.0
