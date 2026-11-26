@@ -1802,10 +1802,16 @@ Fit: one medium (a round 20 claim false on the real shell), lows.
   port. Nits: Service.qml's "no process" comment, tests/qml/v1_0's
   README, Omarchy's MIT credit on `wheelSteps`, install.sh reads the
   plugin list as JSON. README: the phone's late save (a known limit).
-- [ ] SR234 (left) The video window's named rules re-sent at each show and
-  load pile up on Hyprland 0.56 (re-made named rules append, Tracery's
-  finding); whether the newest `pin`, `size` and `move` still win was last
-  checked live on 2026-11-23. Check live with Cody before the release.
+- [x] SR234 The video window's named rules re-sent at each show and load
+  pile up on Hyprland 0.56 (re-made named rules append, Tracery's finding);
+  whether the newest `pin`, `size` and `move` still win was last checked
+  live on 2026-11-23. Checked live with Cody on 2026-11-26 (Hyprland
+  0.56.2, his own episode, its video window): six closes and reopens, each
+  re-sending the rules, came back pinned, floating, tagged skip-taskbar, at
+  the saved size and place; after he dragged and resized it, the close
+  learned the new place and both reopens used it, over five older copies
+  carrying the old one. The newest wins: the pile-up is untidy, not
+  harmful. (Sending once per Hyprland config load would tidy it: left.)
   i18n (SR186) stays left.
 
 ### SR, round 22 (2026-11-25)
@@ -2476,6 +2482,8 @@ mediums, three lows. The reviewers' reports are kept outside the repo.
   failing too). The loop stops here (Cody's rule: a
   round with no critical or high, and the author comfortable; three
   running). Next: SR234's live check with Cody, then H6.
+- 2026-11-26 (morning, with Cody): SR234 checked live (the newest of the
+  piled-up video rules wins: six re-sends and a drag). Next: H6.
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

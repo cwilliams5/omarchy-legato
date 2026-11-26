@@ -46,9 +46,9 @@ Cody's laptop runs it from GitHub.
 
 Next (docs/PLAN.md): the strict-review loop is done (rounds 25-27 with
 no critical or high; every planted mutation killed). Before shipping
-1.1.0 (H6): the video window's rules live check with Cody (SR234), the
-screenshots he re-checks, then push, release and the marketplace
-verification request, each on his go.
+1.1.0 (H6): the screenshots Cody re-checks (the video window's rules were
+checked live with him on 2026-11-26: SR234), then push, release and the
+marketplace verification request, each on his go.
 Upstream, Nine Point Labs' PRs #7-9 (the old fork
 `cwilliams5/omarchy-pocketcasts` carries them) stay offered as they are:
 their review of 2026-11-23 is answered (#8's default changed). Nothing
@@ -913,7 +913,10 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   rule otherwise (tested against Omarchy's real helpers.lua). Runtime
   rules last until Hyprland reloads its config, so the bridge sends them
   each time the video opens and before each episode load while the video
-  is on (mpv opens the next episode's video by itself). Size and position
+  is on (mpv opens the next episode's video by itself). Each re-send adds a
+  copy on Hyprland 0.56 (a named rule made again appends); the newest wins
+  (checked live 2026-11-26 on 0.56.2: six re-sends, then a drag and
+  resize: both reopens came back at the new place). Size and position
   are learned from the window (`videoGeometry`) only when it got the rule.
   Its transparency is not a rule: Omarchy's floating workspaces tag every
   window and a rule on that tag forces opacity `1.0 override`, beating a
