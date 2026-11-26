@@ -151,9 +151,10 @@ Legato sets the video window's rules on the running Hyprland as it opens
 (`hyprctl`), which also clears the list `hyprctl configerrors` shows.
 
 If you showed a video, the window rules Legato added to the running
-Hyprland (and its window-open hook and the three `legato_video_*` Lua
-functions behind them) stay until it reloads its config: `hyprctl reload`,
-or log out.
+Hyprland (and its window-open hook and the `legato_video_*` Lua globals
+behind them) stay until it reloads its config: `hyprctl reload`, or log
+out. Legato adds the rules again only when the window's size, place or
+"Always on top" changed, or after a reload.
 
 ## Resources
 

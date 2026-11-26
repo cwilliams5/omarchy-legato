@@ -296,27 +296,40 @@ class Validation(unittest.TestCase):
     @unittest.skipUnless(os.path.exists("/usr/bin/lua5.4") and os.path.exists(OMARCHY_HELPERS), "needs lua5.4 and Omarchy")
     def test_the_rule_registers_with_omarchy_once(self):
         # Omarchy's o.window adds the app to its floating-app list on every
-        # call, with no check for repeats. Run the rule's Lua three times
-        # against Omarchy's real helpers (a stand-in `hl` records the rules;
-        # nothing reaches Hyprland): one entry, and every call still sends
-        # the named rules (the size and place can change).
+        # call, with no check for repeats; and on Hyprland 0.56 a named rule
+        # made again appends (PLAN SR234). Run the rule's Lua against
+        # Omarchy's real helpers (a stand-in `hl` records the rules and gives
+        # out hooks; nothing reaches Hyprland): one floating-app entry, and
+        # the rules go out only when they change (the place, the pin) or
+        # after a config reload (its hooks die), never again for the same.
         with tempfile.TemporaryDirectory() as home:
-            rule = os.path.join(home, "rule.lua")
-            with open(rule, "w") as fh:
-                fh.write(bridge.video_rule_lua({"x": 10, "y": 20, "w": 300, "h": 170}, True, 0))
+            rules = {}
+            for name, args in (("A", ({"x": 10, "y": 20, "w": 300, "h": 170}, True)),
+                               ("B", ({"x": 40, "y": 20, "w": 300, "h": 170}, True)),
+                               ("C", ({"x": 40, "y": 20, "w": 300, "h": 170}, False))):
+                rules[name] = os.path.join(home, name + ".lua")
+                with open(rules[name], "w") as fh:
+                    fh.write(bridge.video_rule_lua(*args, 0))
             harness = (
                 'package.path = "/usr/share/omarchy/?.lua;" .. package.path '
-                'local sent = {} '
-                'hl = setmetatable({ window_rule = function(r) table.insert(sent, r.name) end }, '
+                'local sent, hooks = {}, {} '
+                'hl = setmetatable({ window_rule = function(r) table.insert(sent, r.name) end, '
+                'on = function() local h = { alive = true, is_active = function(self) return self.alive end } '
+                'table.insert(hooks, h) return h end, get_windows = function() return {} end }, '
                 '{ __index = function() return function() end end }) '
                 'require("default.hypr.helpers") '
-                'local chunk = assert(loadfile(os.getenv("RULE"))) '
-                'for i = 1, 3 do assert(chunk() == "ok") end '
-                'local names = {} for _, n in ipairs(sent) do if n == "legato-video" then names[#names + 1] = n end end '
-                'print(#o.floating_apps.class, #names)')
+                'local function run(name) assert(assert(loadfile(os.getenv(name)))() == "ok") end '
+                'local function count() local n = 0 for _, x in ipairs(sent) do if x == "legato-video" then n = n + 1 end end return n end '
+                'run("A") run("A") run("A") local same = count() '
+                'run("B") local moved = count() '
+                'run("C") local unpinned = count() '
+                'for _, h in ipairs(hooks) do h.alive = false end '  # a config reload: hooks and rules gone
+                'run("C") local reloaded = count() run("C") '
+                'print(#o.floating_apps.class, same, moved, unpinned, reloaded, count())')
             done = subprocess.run(["/usr/bin/lua5.4", "-e", harness], capture_output=True, text=True,
-                                  env={"HOME": home, "PATH": "/usr/bin", "RULE": rule}, cwd=home, timeout=10)
-        self.assertEqual(done.stdout.split(), ["1", "3"], done.stderr)
+                                  env={"HOME": home, "PATH": "/usr/bin", "A": rules["A"], "B": rules["B"],
+                                       "C": rules["C"]}, cwd=home, timeout=10)
+        self.assertEqual(done.stdout.split(), ["1", "1", "2", "3", "4", "4"], done.stderr)
 
     def test_video_window_rule_and_geometry(self):
         default = bridge.video_rule_lua(None)

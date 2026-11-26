@@ -1811,7 +1811,18 @@ Fit: one medium (a round 20 claim false on the real shell), lows.
   the saved size and place; after he dragged and resized it, the close
   learned the new place and both reopens used it, over five older copies
   carrying the old one. The newest wins: the pile-up is untidy, not
-  harmful. (Sending once per Hyprland config load would tidy it: left.)
+  harmful. Then (Cody, 2026-11-26, option C of the five weighed: every
+  send, once per reload, only when changed, changed plus switching the old
+  copy off, a hook placing the window, a rules file) the rules go out only
+  when their size, place or pin changed, or after a config reload (a
+  marker in Hyprland's Lua, valid while the opacity hook lives); tested
+  against Omarchy's real helpers (same rule: once; moved, unpinned: again;
+  a reload: again), and live with Cody the same day, counting the rules
+  each reopen added (Hyprland's `hl.window_rule` wrapped for the check,
+  then put back): the same spot 0, after his move 4 once, after
+  `hyprctl reload` (the marker and hook gone: a reload rebuilds Hyprland's
+  Lua) 6 once (Legato's 4, and Omarchy's own 2 floating-workspace rules,
+  re-registered by o.window's first call), then 0.
   i18n (SR186) stays left.
 
 ### SR, round 22 (2026-11-25)

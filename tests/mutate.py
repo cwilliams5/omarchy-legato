@@ -1876,6 +1876,18 @@ MUTATIONS = [
      "    if not where_left(state.get(\"lastSyncPos\"), server, status, state.get(\"lastSyncStatus\")):  # (its `left`: unsent_push)",
      "    if True:  # (its `left`: unsent_push)",
      [T + "ResumeAsksPocketCastsFirst.test_a_reload_sends_the_place_of_an_episode_pocket_casts_has_no_record_of"]),
+    # --- SR234 (Cody's option C): the video rules only when changed
+    ("video: the rules sent at every open again", B,
+     "    return ('if not (legato_video_rules == \"%(key)s\" and legato_video_hook and legato_video_hook:is_active()) then '",
+     "    return ('if true then '",
+     [T + "Validation.test_the_rule_registers_with_omarchy_once"]),
+    ("video: the marker trusted after a reload", B,
+     "    return ('if not (legato_video_rules == \"%(key)s\" and legato_video_hook and legato_video_hook:is_active()) then '",
+     "    return ('if not (legato_video_rules == \"%(key)s\") then '",
+     [T + "Validation.test_the_rule_registers_with_omarchy_once"]),
+    ("video: the pin left out of the marker", B,
+     "\"pin\" if pinned else \"nopin\",", "\"pin\",",
+     [T + "Validation.test_the_rule_registers_with_omarchy_once"]),
     # --- strict review 27, safety
     ("check: an expired session taken for not reached", B,
      "        if err.code in (\"reauth\", \"signed_out\"):\n            # The session, not the network",

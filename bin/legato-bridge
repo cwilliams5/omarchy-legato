@@ -2046,6 +2046,11 @@ def hyprctl(*args):
     return done.stdout if done.returncode == 0 else ""
 
 
+# Bumped whenever the rules' text changes: an update then sends its own
+# rules once, rather than trusting the marker an older Legato left.
+VIDEO_RULES_VERSION = "r1"
+
+
 def video_rule_lua(geometry, pinned=True, transparency=0):
     """The window rule, as Lua for `hyprctl repl`. Numbers and fixed words
     only: nothing from outside reaches the Lua text. Pinned: on every
@@ -2070,7 +2075,15 @@ def video_rule_lua(geometry, pinned=True, transparency=0):
     too: Hyprland re-checks rules when a window's pin changes, but only adds
     tags then, so a second rule takes the tag off an unpinned window (both
     tested live, Hyprland 0.56). Their own rules, not o.window's, which
-    records every tag it's given as a floating app."""
+    records every tag it's given as a floating app.
+
+    Sent only when something in them changed (the size, the place, the
+    pin) or Hyprland reloaded its config since: `legato_video_rules` holds
+    what was sent last, and counts only while the opacity hook added in the
+    same call is alive (a reload drops both, video_opacity_lua). Sent at
+    every open and every load, the copies piled up (a named rule made again
+    appends), four a time, until the next reload: harmless (the newest
+    wins, PLAN SR234) but unbounded."""
     if geometry:
         x, y, w, h = (int(geometry[k]) for k in ("x", "y", "w", "h"))
         size = '{ "%d", "%d" }' % (w, h)
@@ -2078,7 +2091,11 @@ def video_rule_lua(geometry, pinned=True, transparency=0):
     else:
         size = '{ "(monitor_w*7/25)", "(monitor_w*63/400)" }'
         move = '{ "(monitor_w-monitor_w*7/25-24)", "(monitor_h-monitor_w*63/400-60)" }'
-    return ('local r = { name = "%(id)s", float = true, pin = %(pin)s, no_initial_focus = true, '
+    # What the rules say, as fixed words and numbers (compared, not run).
+    key = "%s %s %s" % ("%d,%d,%d,%d" % (x, y, w, h) if geometry else "default", "pin" if pinned else "nopin",
+                        VIDEO_RULES_VERSION)
+    return ('if not (legato_video_rules == "%(key)s" and legato_video_hook and legato_video_hook:is_active()) then '
+            'local r = { name = "%(id)s", float = true, pin = %(pin)s, no_initial_focus = true, '
             'size = %(size)s, move = %(move)s } '
             'local known = false '
             'if o and o.floating_apps and o.floating_apps.class then '
@@ -2088,10 +2105,12 @@ def video_rule_lua(geometry, pinned=True, transparency=0):
             'pcall(hl.window_rule, { name = "%(id)s-nobar", match = { class = "^%(id)s$" }, ["hyprbars:no_bar"] = true }) '
             'pcall(hl.window_rule, { name = "%(id)s-tags", match = { class = "^%(id)s$", pin = true }, tag = "+%(skip)s" }) '
             'pcall(hl.window_rule, { name = "%(id)s-untag", match = { class = "^%(id)s$", pin = false }, tag = "-%(skip)s" }) '
+            'legato_video_rules = "%(key)s" '
+            'end '
             '%(opacity)s'
             'return "ok"' % {"id": VIDEO_APP_ID, "skip": SKIP_TASKBAR_TAG,
                              "pin": "true" if pinned else "false",
-                             "size": size, "move": move,
+                             "size": size, "move": move, "key": key,
                              "opacity": video_opacity_lua(transparency)})
 
 

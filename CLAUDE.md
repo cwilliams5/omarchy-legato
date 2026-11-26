@@ -913,10 +913,18 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   rule otherwise (tested against Omarchy's real helpers.lua). Runtime
   rules last until Hyprland reloads its config, so the bridge sends them
   each time the video opens and before each episode load while the video
-  is on (mpv opens the next episode's video by itself). Each re-send adds a
-  copy on Hyprland 0.56 (a named rule made again appends); the newest wins
-  (checked live 2026-11-26 on 0.56.2: six re-sends, then a drag and
-  resize: both reopens came back at the new place). Size and position
+  is on (mpv opens the next episode's video by itself). On Hyprland 0.56 a
+  named rule made again appends a copy (the newest wins: checked live
+  2026-11-26 on 0.56.2, six re-sends, then a drag and resize), so the Lua
+  adds the rules only when they changed (size, place, pin) or after a
+  config reload: `legato_video_rules` holds what was sent last, and counts
+  only while the opacity hook from the same call is alive (a reload kills
+  it); `VIDEO_RULES_VERSION` makes an update send its own once. They used
+  to go at every open and load, four rules a time (Cody, 2026-11-26:
+  option C of SR234's table, "only when changed"; checked live: the same
+  spot adds none, a move four once, and after `hyprctl reload` the marker
+  is gone, since a reload rebuilds Hyprland's Lua state, and the first
+  reopen sends them again). Size and position
   are learned from the window (`videoGeometry`) only when it got the rule.
   Its transparency is not a rule: Omarchy's floating workspaces tag every
   window and a rule on that tag forces opacity `1.0 override`, beating a
