@@ -1698,7 +1698,9 @@ fixed before release.
 - [x] SR217 (medium, rare, loses a place) A push whose reply was lost,
   then failures while it played on: the next Play took the lost push's
   place for another device's and went back to it. The unsent place
-  remembers the pushes tried since its base (`triedPushes`).
+  remembers the pushes tried since its base (`triedPushes`). Withdrawn in
+  round 20 (SR221): it let a phone that stopped near a tried place be
+  overwritten.
 - [x] SR218 (low) A Play in flight longer than the guard's 6 s wait played
   on behind the lock screen: the guard marks the sleep first thing, and
   Play and play again don't unpause under it.
@@ -1712,6 +1714,42 @@ fixed before release.
 - Cody's call before pushing: every commit carries his personal address
   as author (1.0.x's are already public); `media/preview.png` and
   `media/pages.png` show his own Up Next and subscriptions.
+
+### SR, round 20 (2026-11-25)
+
+The verification round of round 19's fixes. Safety: one critical, from
+round 19's own `triedPushes`.
+
+- [x] SR221 (critical, F1) `triedPushes` took Pocket Casts showing any of
+  up to 30 places this machine had tried to push for its own (a lost
+  reply), with no age limit and for pushes that couldn't have landed: a
+  phone that stopped within 3 s of one was overwritten at Play, and by the
+  retry after Next (verified). Withdrawn: a lost reply's place is taken
+  for another device's (a known limit, README: what played here since is
+  lost, never another device's place); old state files drop the field.
+- [x] SR222 (medium, F2) A played episode replayed here, played to its end
+  here, kept its old unsent place (`told_played` made it valid again):
+  Play reopened it at 104 in progress. An end handled here drops it.
+- [-] SR223 (medium, F3) The load's own push whose reply was lost: the same
+  known limit as SR221 (withdrawn with it).
+- [x] SR224 (lows F4-F5) The adoption's status and a malformed tried list:
+  gone with SR221.
+- [x] SR226 (fit, lows) After a failed save, its re-read ran beside the
+  next write (it could land first and show the old value): queued now
+  (`rereadSettings`), and a later save that lands clears the message; the
+  sleep guard has a start watchdog (one that never started went
+  unnoticed: `processId`); a guard killed by another signal tested; a HOME
+  with a control character refused, not left out; the stats switch's
+  error with a Clear waiting tested; a README note on `hyprctl
+  configerrors`; dead code; `mutate.py` refuses an unknown name (it ran
+  nothing and passed); Omarchy's MIT notice on the copied
+  `PanelKeyCatcher.qml`.
+- [ ] SR227 (left) The stand-in drags by function call (no press reaches
+  the real pointer path); `isOpen` across several screens; the stepper's
+  clamp; `tests/qml/panel.qml` has no per-step deadline.
+- [ ] SR225 (nits, left) `load_into_mpv`'s `pause=` ignores the guard's mark
+  (a moment of audio as the lid closes; it's paused right after the load);
+  `refuse_loaded` runs outside the state lock in `cmd_mark` and `cmd_queue`.
 
 ## Testing
 
@@ -1902,6 +1940,15 @@ fixed before release.
   for a stop. 427 Python + 47 node tests; 541 mutations, round 19's 35 new
   or changed all killed. Round 20 to verify these (four rounds of fixes in
   the sync engine each opened a door the next round found).
+- 2026-11-25 (night): round 20 (SR221-SR227), the verification round: it
+  found a critical in round 19's own `triedPushes` (a phone that stopped
+  near a place tried here was overwritten): withdrawn, the lost reply a
+  documented limit (README); a replay played to its end drops its old
+  unsent place. Fit no crit/high: the guard's start watchdog, the queued
+  re-read, a control-character HOME refused, Omarchy's MIT notice on the
+  copied key catcher. 431 Python + 47 node tests; 546 mutations, round
+  20's 17 new or changed all killed. Round 21 next (round 20 had a
+  critical).
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

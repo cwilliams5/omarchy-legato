@@ -14,9 +14,9 @@ Cody's work setup.
 
 Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
-(docs/PLAN.md phases H and SR: rounds 1-19 fixed; round 19 was the first
-with no critical or high from either reviewer, its mediums fixed before
-release; round 20 verifies those fixes). Cody, 2026-11-24: SR86 (settings in Legato's own file)
+(docs/PLAN.md phases H and SR: rounds 1-20 fixed; round 19 was the first
+with no critical or high, but round 20 found one in round 19's own fix
+(withdrawn); round 21 next). Cody, 2026-11-24: SR86 (settings in Legato's own file)
 and SR63 (one live service on a replacement bar) were folded into 1.1.0
 before round 10, and the review loop runs for as long as rounds keep
 finding critical or high issues (stop: a round with none, and every
@@ -198,13 +198,16 @@ docs/PLAN.md         what's left to build
    0, where an episode started here also was: "unplayed", or "played",
    counts as a mark only if Pocket Casts had it otherwise from here,
    `leftStatus`, so a place played from the top, or in a played episode
-   replayed here, while every push failed is kept; round 19). A place
-   this machine tried to push whose reply was lost may have landed: the
-   unsent place remembers the pushes tried since its base
-   (`triedPushes`), and Pocket Casts showing one of them is this
-   machine's own, not another device's (the resume check doesn't seek
-   back to it). A "played" mark that lands is where Pocket Casts has the
-   loaded episode (`told_played`). It holds only while
+   replayed here, while every push failed is kept; round 19). A push
+   whose reply was lost may have landed: Pocket Casts then shows a place
+   this machine tried, and that can't be told from another device's write
+   near it, so it's taken as one (the resume check seeks back to it,
+   losing what played here since: a known limit, rare; round 19's
+   `triedPushes`, which took such a place for this machine's own, let a
+   phone that stopped near one be overwritten, and round 20 withdrew it).
+   A "played" mark that lands is where Pocket Casts has the loaded
+   episode (`told_played`), and an end handled here drops any unsent
+   place from before it (round 20). It holds only while
    `lastSyncPos` is still its `left` (`unsent_push`): a resume check that
    takes another device's place makes it history at once (round 16, C1: a
    reload or a switch after one pushed the old place over the phone).
@@ -741,8 +744,12 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   (probed in round 19). A paste cancelled drops its callback first, and
   the guard's `onExited` takes a signal-15 exit for a stop, never a
   failure (a stale one arriving after the next guard was asked for once
-  counted against it). The test stand-in models it (`alive`; `finish()`
-  never writes `running`; a stop sends `exited`, later).
+  counted against it). The test stand-in models the stop (`alive`;
+  `finish()` never writes `running`; a stop sends `exited`, later; a
+  start that never comes up sends nothing and has no `processId`), not a
+  real Process starting again when its binding re-evaluates after an
+  exit. A guard that never starts sends no `exited` at all: its start
+  watchdog (`processId` still null) counts it as a failure (round 20).
 - **Omarchy's `ShellIpc`** (`qs.Commons`) is an IpcHandler the shell also
   answers over its own socket (`IpcRegistry`): `omarchy-shell <target>
   <fn>` and an `{ ipc = ... }` binding start no `qs ipc` client (about 5 ms

@@ -3159,26 +3159,86 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         self.assertEqual(view["item"]["uuid"], EP_1)
         self.assertGreater(view["position"], 4)
 
-    def test_a_push_whose_reply_was_lost_isnt_another_devices_write(self):
-        # It landed, its reply lost; later pushes failed while it played on:
-        # Play took the lost push's place for another device's and went back.
+    # Strict review 20 (F1, critical): round 19 took Pocket Casts showing any
+    # place this machine had tried to push for its own (a reply lost), and a
+    # phone that stopped near one was overwritten. Withdrawn: another
+    # device's place always wins over a place left unsent.
+    def failed_then_dragged_back(self):
+        """Pushes fail at 24 and 31 while it plays on, then a drag back to 5
+        (its push fails too): unsent at 5, Pocket Casts at 20."""
         self.other_device(EP_1, 20)
         self.login()
         self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
-        self.wait_for(lambda: self.position() > 26, timeout=20)
-        self.fake["lostReply"] = {"/sync/update_episode": 1}
-        self.age_last_push(31)
-        run_bridge("player")
-        lost_at = self.fake["progress"][EP_1]
-        self.assertGreater(lost_at, 25)
         self.fake["fail"] = {"/sync/update_episode": 1000}
-        self.wait_for(lambda: self.position() > lost_at + 12, timeout=30)
+        self.wait_for(lambda: self.position() > 24, timeout=20)
         self.age_last_push(31)
         run_bridge("player")
+        self.wait_for(lambda: self.position() > 31, timeout=20)
+        self.age_last_push(31)
+        run_bridge("player")
+        self.assertTrue(run_bridge("seek", "--episode", EP_1, "5")["ok"])
         run_bridge("pause")
         run_bridge("player")
+        self.assertLess(bridge.load_playback()["unsentPush"]["position"], 9)
+
+    def test_a_phone_that_stopped_near_a_place_tried_here_wins_at_play(self):
+        self.failed_then_dragged_back()
+        self.other_device(EP_1, 33)  # within the slack of the 31 tried here
         self.fake["fail"] = {}
-        self.assertGreater(run_bridge("toggle")["data"]["position"], lost_at + 8)
+        run_bridge("toggle")
+        time.sleep(1)
+        self.age_last_push(31)
+        run_bridge("player")
+        self.assertGreaterEqual(self.fake["progress"][EP_1], 30)
+
+    def test_a_phone_that_stopped_near_a_place_tried_here_wins_after_next(self):
+        self.failed_then_dragged_back()
+        self.assertTrue(run_bridge("next")["ok"])
+        self.other_device(EP_1, 33)
+        self.fake["fail"] = {}
+        self.age_unsent_tries()
+        run_bridge("player")
+        self.assertEqual(self.fake["progress"][EP_1], 33)
+
+    def replayed_to_its_end(self, mark_fails):
+        """A played episode replayed here, its pushes failing, played to its
+        end here again (strict review 20, F2)."""
+        bridge.save_prefs({"volume": 0, "speed": 2.0})
+        self.other_device(EP_1, 120, bridge.STATUS_PLAYED)
+        self.fake["upnext"] = [EP_1, EP_2]
+        self.login()
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.position() > 2, timeout=20)
+        self.assertTrue(run_bridge("seek", "--episode", EP_1, "100")["ok"])
+        self.wait_for(lambda: self.position() > 104, timeout=20)
+        self.age_last_push(31)
+        run_bridge("player", "--no-autoplay")
+        self.assertTrue(bridge.load_playback().get("unsentPush"))
+        if not mark_fails:
+            self.fake["fail"] = {}
+        self.wait_for(lambda: self.mpv_get("eof-reached") is True, timeout=20)
+        run_bridge("player", "--no-autoplay")
+        self.fake["fail"] = {}
+        run_bridge("stop")
+
+    def test_a_replay_played_to_its_end_isnt_reopened_by_its_old_unsent_place(self):
+        self.replayed_to_its_end(mark_fails=False)
+        view = run_bridge("toggle")["data"]
+        self.assertEqual(view["item"]["uuid"], EP_2)
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
+
+    def test_a_replay_played_to_its_end_whose_mark_failed_isnt_reopened_either(self):
+        self.replayed_to_its_end(mark_fails=True)
+        view = run_bridge("toggle")["data"]
+        self.assertEqual(view["item"]["uuid"], EP_2)
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
+
+    def test_an_old_state_files_tried_pushes_are_dropped(self):
+        state = {"episode": {"uuid": EP_1}, "unsentPush": {"uuid": EP_1, "position": 5.0, "at": 1.0, "left": 0.0,
+                                                           "triedPushes": 3}}
+        bridge.clean_playback(state)
+        self.assertNotIn("triedPushes", state["unsentPush"])
 
     def test_next_reads_the_record_of_an_up_next_entry_without_a_status(self):
         # Up Next's entry had a place but no status (the fake's default

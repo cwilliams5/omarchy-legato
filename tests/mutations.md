@@ -12,13 +12,13 @@ python3 -B tests/mutate.py .       # all of them, about 2 hours
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (541 x 5 minutes is
+Each mutation runs its own tests, not the whole suite (546 x 5 minutes is
 too long); when a mutation survives, run `tests/run` on it before believing
 it. A mutation whose pattern no longer matches the code is reported STALE
 and fails the run (fix its pattern), as does one whose tests fail
 unmutated (SKIP).
 
-## The set (541; strict review rounds 1 to 19, 2026-11-25)
+## The set (546; strict review rounds 1 to 20, 2026-11-25)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
@@ -137,7 +137,13 @@ caught each mutant. By area:
   again's failed push not kept, or the landed mark not Pocket Casts'
   place; an Up Next entry without a status taken for in progress; a lost
   reply's place taken for another device's, or the pushes tried
-  forgotten; Play or play again unpausing under the guard's mark.
+  forgotten; Play or play again unpausing under the guard's mark. (The two
+  for the pushes tried withdrawn in round 20, with the rule.)
+- **Round 20**: an end here keeping an unsent place from before it; an
+  old state file's tried pushes kept; a HOME with a control character left
+  out (node); and the QML ones (a guard that never starts, or killed by
+  another signal, uncounted; the re-read after a failed save beside the
+  next write; an earlier failure's message kept after a later save).
 
 ## Results
 
@@ -322,6 +328,11 @@ caught each mutant. By area:
   reached only after the request it makes had already refused the sleep
   (a sleep after the answer now); a play again's failed push was recorded
   again by the pause after it (checked at once now). All killed after.
+- Round 20 (the reviewers' own): safety 4 of 5 survived, all in round
+  19's `triedPushes` (withdrawn) or its tests; fit 8 of 48 (the guard's
+  start and other signals, the re-read's order, the cleared message:
+  planted with tests; the stand-in's pointer path left, SR227). Round
+  20's set, its 17 new or changed: all killed at first.
 - Equivalent and left out (round 14): `keep_local` and its rules (the
   loaded player's keep is gone: its check seeks only on another device's
   write); the Stats/About keys while typing (the field takes printable

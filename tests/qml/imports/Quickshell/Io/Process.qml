@@ -18,6 +18,8 @@ QtObject {
   signal started()
   signal exited(int exitCode, int exitStatus)
   function write(text) { written += text }
+  // As Quickshell's: the process id while one runs, null otherwise.
+  readonly property var processId: alive ? 4242 : null
   // A user of Process that declares its own `started` property hides the
   // signal from this file (Service's interpreter probe does): skip it then.
   // As Quickshell's (probed): a process stopped (`running = false`) still
@@ -29,7 +31,9 @@ QtObject {
       return
     }
     Processes.add(p)
-    if (Processes.failStarts) { running = false; return }
+    // A process that never comes up: no `started`, no `exited`, no process
+    // id (and `running` left alone, so a binding on it stays a binding).
+    if (Processes.failStarts) return
     alive = true
     if (typeof started === "function") started()
   }

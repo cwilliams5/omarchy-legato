@@ -146,6 +146,9 @@ omarchy plugin remove io.github.cwilliams5.legato
 rm -rf ~/.local/state/omarchy-legato ~/.cache/omarchy-legato   # sign-in tokens, playback state, stats, cover art
 ```
 
+Legato sets the video window's rules on the running Hyprland as it opens
+(`hyprctl`), which also clears the list `hyprctl configerrors` shows.
+
 If you showed a video, the window rules Legato added to the running
 Hyprland (and its window-open hook and the three `legato_video_*` Lua
 functions behind them) stay until it reloads its config: `hyprctl reload`,
@@ -261,6 +264,12 @@ devices.
   asks Pocket Casts, and its answer wins over what played meanwhile. The
   same goes for the chip left in the tray's drawer after the tray itself
   is taken off the bar (Omarchy unloads it there).
+- **A send whose reply was lost** (it reached Pocket Casts, the network
+  dropped before the answer came back), followed by more failed sends
+  while the episode played on: the next Play goes back to the place that
+  got through, as it would to your phone's, since the two can't be told
+  apart. Rare; what played here since that send is lost, never your
+  phone's place.
 - **After an update, restart the shell** (`omarchy restart shell`, or log
   out and in). The shell keeps running the panel and background part it
   already loaded until it restarts, beside Legato's new helper. From 1.0,

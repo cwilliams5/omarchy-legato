@@ -2239,6 +2239,9 @@ def clean_playback(state):
                 and all(entry.get(k) is None or number(entry[k]) for k in ENTRY_NUMBERS))
     if "unsentPush" in state and not well_formed(state["unsentPush"]):
         del state["unsentPush"]
+    for entry in [state.get("unsentPush")] + list(state.get("unsentPlaces") or [] if isinstance(state.get("unsentPlaces"), list) else []):
+        if isinstance(entry, dict):
+            entry.pop("triedPushes", None)  # (round 19's, withdrawn in round 20)
     for key in ("pendingFinish", "unsentPlaces"):
         if key in state:
             entries = state[key]
@@ -2301,22 +2304,13 @@ def push_failed(state, position):
     Casts' answer (kept_place). Not from a call that slept: its place is
     from before the suspend."""
     if not slept_since_start():
-        uuid = (state.get("episode") or {}).get("uuid") or ""
-        left = float(state.get("lastSyncPos") or 0)
-        # The places tried before this one from the same base: a push whose
-        # reply was lost may have landed (strict review 19).
-        prev = state.get("unsentPush")
-        tried = []
-        if (isinstance(prev, dict) and prev.get("uuid") == uuid and number(prev.get("left"))
-                and abs(prev["left"] - left) < 0.001 and number(prev.get("position"))):
-            tried = [t for t in (prev.get("triedPushes") if isinstance(prev.get("triedPushes"), list) else []) if number(t)][-29:]
-            tried.append(float(prev["position"]))
-        state["unsentPush"] = {"uuid": uuid, "position": float(position), "at": time.time(),
+        state["unsentPush"] = {"uuid": (state.get("episode") or {}).get("uuid") or "",
+                               "position": float(position), "at": time.time(),
                                # Where Pocket Casts had it from here when this
                                # failed, and as what (unplayed, if no push of
                                # this load ever landed).
-                               "left": left, "leftStatus": as_int(state.get("lastSyncStatus")),
-                               "triedPushes": tried}
+                               "left": float(state.get("lastSyncPos") or 0),
+                               "leftStatus": as_int(state.get("lastSyncStatus"))}
 
 
 def unsent_push(state):
@@ -2334,17 +2328,17 @@ def unsent_push(state):
     return None
 
 
-def where_left(left, place, status, left_status, tried=()):
+def where_left(left, place, status, left_status):
     """Whether Pocket Casts still has an episode where this machine left it
-    (`left`, its place when a push failed, with `left_status`, or one of the
-    places this machine tried to push since, `tried`, whose reply was lost:
-    strict review 19): about the same place, and not marked played or
-    unplayed since, unless it already was (a played episode replayed here
-    whose pushes all failed: round 19; one started from the top that
-    Pocket Casts never had a place for: round 17). Otherwise another
-    device spoke, and its say stands over a place left unsent."""
-    places = [left or 0] + [t for t in (tried if isinstance(tried, list) else []) if number(t)]
-    if not any(abs(place - p) <= DRIFT_SLACK for p in places):
+    (`left`, its place when a push failed, with `left_status`): about the
+    same place, and not marked played or unplayed since, unless it already
+    was (a played episode replayed here whose pushes all failed: round 19;
+    one started from the top that Pocket Casts never had a place for: round
+    17). Otherwise another device spoke, and its say stands over a place
+    left unsent. (Only `left`: places this machine tried to push and whose
+    reply was lost can't be told from another device's write near them,
+    strict review 20.)"""
+    if abs(place - (left or 0)) > DRIFT_SLACK:
         return False
     s = as_int(status)
     return s not in (STATUS_PLAYED, STATUS_UNPLAYED) or as_int(left_status) == s
@@ -2365,7 +2359,7 @@ def kept_place(state, server, status=None):
     unsent = unsent_push(state)
     if unsent is None or time.time() - unsent["at"] >= UNSENT_KEPT:
         return None
-    if not where_left(state.get("lastSyncPos"), server, status, state.get("lastSyncStatus"), unsent.get("triedPushes")):  # (its `left`: unsent_push)
+    if not where_left(state.get("lastSyncPos"), server, status, state.get("lastSyncStatus")):  # (its `left`: unsent_push)
         return None
     return unsent["position"]
 
@@ -2384,7 +2378,7 @@ def kept_elsewhere(state, uuid, server, status=None):
     (where to start it, its unsent record) or (None, None)."""
     for entry in state.get("unsentPlaces") or []:
         if (entry.get("uuid") == uuid and time.time() - entry["at"] < UNSENT_KEPT
-                and where_left(entry.get("left"), server, status, entry.get("leftStatus"), entry.get("triedPushes"))):
+                and where_left(entry.get("left"), server, status, entry.get("leftStatus"))):
             return entry["position"], {"uuid": uuid, "position": entry["position"], "at": entry["at"]}
     return None, None
 
@@ -2408,7 +2402,7 @@ def stash_unsent(previous, incoming):
         places.append({"uuid": outgoing["uuid"], "podcast": outgoing.get("podcast") or "",
                        "duration": outgoing.get("duration"), "position": float(unsent["position"]),
                        "at": unsent["at"], "left": unsent["left"], "leftStatus": unsent.get("leftStatus"),
-                       "tried": 0.0, "triedPushes": unsent.get("triedPushes") or []})
+                       "tried": 0.0})
     return places
 
 
@@ -2437,8 +2431,7 @@ def retry_unsent(state, force=False):
         if not record or not a_place(record.get("playedUpTo")):
             keep.append(entry)  # no answer: ask again later
             continue
-        if not where_left(entry.get("left"), record["playedUpTo"], record.get("playingStatus"), entry.get("leftStatus"),
-                          entry.get("triedPushes")):
+        if not where_left(entry.get("left"), record["playedUpTo"], record.get("playingStatus"), entry.get("leftStatus")):
             continue  # moved, finished or marked on another device since: its say stands
         try:
             push_position(entry, entry["position"])
@@ -2749,7 +2742,7 @@ def play_item(item, prefs, from_start=False, queue=True, save_previous=True, at_
     if kept is not None:
         # Until a push of it goes through; measured from Pocket Casts' place
         # now (lastSyncPos), which nobody has moved since (where_left).
-        state["unsentPush"] = dict(unsent, left=server_place, leftStatus=state["lastSyncStatus"], triedPushes=[])
+        state["unsentPush"] = dict(unsent, left=server_place, leftStatus=state["lastSyncStatus"])
     strike = previous.get("breakStrike")
     if isinstance(strike, dict) and strike.get("uuid") == item.get("uuid"):
         state["breakStrike"] = strike  # a reload of the episode that just broke (stream_stopped)
@@ -2879,6 +2872,9 @@ def finish_current(state, prefs, autoplay):
     unwatched = bool(state.get("unconfirmed") or state.get("checkServer")) or sync_age(state) >= RECHECK_AFTER
     add_stats(finished=1)
     state["handledEnd"] = uuid
+    # Its end is the place now: an unsent place from before it (a replay's,
+    # whose pushes failed) would bring it back in progress (strict review 20).
+    state.pop("unsentPush", None)
     state["endedAutoplay"] = bool(autoplay)
     synced(state)
     entry = {"uuid": uuid, "podcast": episode.get("podcast", ""), "duration": episode.get("duration"),
@@ -3598,24 +3594,15 @@ def check_server(state, prefs, player=None, quick=False):
         last_pushed = state.get("lastSyncPos") or 0
         local = state.get("position") or 0
         # Pocket Casts' place differs from this machine's last push: another
-        # device wrote since (or this machine's push landed and its reply was
-        # lost: the seek then goes to about where it is). Its answer wins,
+        # device wrote since (or a push of this machine's landed and its reply
+        # was lost: the seek goes back to that place, losing what played
+        # here since, a known limit: it can't be told from another device's
+        # write near it, strict review 20). Its answer wins,
         # over anything that moved here unpushed: what played during a gap,
         # after a resume nobody confirmed, where a stall left it, a place
         # whose push failed. The same place: nobody moved it, and playing on
         # from here keeps any place a failed push couldn't send.
-        unsent = unsent_push(state)
-        if unsent and abs(server - last_pushed) > DRIFT_SLACK and where_left(
-                last_pushed, server, record.get("playingStatus"), state.get("lastSyncStatus"),
-                list(unsent.get("triedPushes") or []) + [unsent["position"]]):
-            # A push this machine tried whose reply was lost: it landed, and
-            # nobody else wrote. Not another device: no seek back to it
-            # (strict review 19: the place played since was lost); Pocket
-            # Casts has it, and the place left unsent is measured from it.
-            state["lastSyncPos"] = float(server)
-            unsent["left"] = float(server)
-            unsent["triedPushes"] = []
-        elif abs(server - last_pushed) > DRIFT_SLACK:
+        if abs(server - last_pushed) > DRIFT_SLACK:
             own = player is None
             player = player or Mpv.connect()
             refused = sent = False

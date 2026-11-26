@@ -388,7 +388,11 @@ Item {
     fail("stats off", "Another Pocket Casts action is still running")
     check("a failed switch shows on the page", named("statsError").visible && statsView.error.indexOf("still running") >= 0
           && named("statsCounting").text === "On", statsView.error + " " + named("statsCounting").text)
+    // A switch that fails with a Clear waiting is said all the same (round 19).
+    service.setStatsCounting(true)
     service.clearStats()
+    fail("stats on", "Couldn't save that")
+    check("a failed switch with a Clear waiting is said", statsView.error.indexOf("Couldn't save") >= 0, statsView.error)
     fail("stats clear", "Couldn't delete the stats")
     check("a failed Clear shows on the page", named("statsError").visible && statsView.error.indexOf("Couldn't delete") >= 0
           && statsView.stats.listened === 5, statsView.error + " " + statsView.stats.listened)

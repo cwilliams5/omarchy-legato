@@ -825,6 +825,9 @@ Item {
     environment: root.bridgeEnvironment
     running: root.wantSleepGuard && !sleepGuardRestart.running && root._guardFailures < root.guardMaxFailures
     stdout: StdioCollector { id: sleepGuardOut; waitForEnd: true }
+    // One that never starts (a fork refused) sends no `exited`: the watchdog
+    // counts it as a failure, as a crash would be (strict review 20).
+    onRunningChanged: if (running) guardStartWatchdog.restart()
     onExited: function(exitCode, exitStatus) {
       // Stopped (no episode loaded, pause before sleep off): Quickshell still
       // sends `exited`, signal 15, a moment after the stop, even after a new
@@ -855,6 +858,19 @@ Item {
     id: sleepGuardRestart
     interval: root.guardRetryMs
     repeat: false
+  }
+
+  Timer {
+    id: guardStartWatchdog
+    interval: root.startWatchdogMs
+    repeat: false
+    onTriggered: {
+      // (Started: it has a process id. Stopped meanwhile: nothing to count.)
+      if (sleepGuard.processId || !sleepGuard.running || !root.wantSleepGuard) return
+      sleepGuardRestart.restart()
+      root._guardFailures++
+      if (root._guardFailures === root.guardMaxFailures) root.reportError("Couldn't set up pause-before-sleep")
+    }
   }
 
   function unloadPlayer() {
@@ -1158,6 +1174,15 @@ Item {
       if (result.ok && change === root._settingsChanges) root.applySettings(result.data)
     })
   }
+  // After a failed save: in the write queue, so it reads the file after any
+  // write already waiting, never beside it (strict review 20: run beside the
+  // next write, it could land first and show the old value).
+  function rereadSettings() {
+    var change = _settingsChanges
+    write("settings read", ["settings"], function(result) {
+      if (result.ok && change === root._settingsChanges) root.applySettings(result.data)
+    })
+  }
   // Shown at once; the bridge's answer confirms it. A change that fails
   // reads the file again, so the page shows what's really saved.
   function changeSetting(key, value) {
@@ -1172,10 +1197,13 @@ Item {
         // Said even with a later change on its way (strict review 19: the
         // page flipped back, silently, while the file kept the old value).
         root.settingsError = result.error || "Not saved"
-        root.readSettings()
+        root.rereadSettings()
         return
       }
-      if (change === root._settingsChanges) root.applySettings(result.data)  // (a later change answers)
+      if (change === root._settingsChanges) {  // (a later change answers)
+        root.settingsError = ""  // (an earlier failure's message goes once this one saved)
+        root.applySettings(result.data)
+      }
     })
   }
 

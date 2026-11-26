@@ -354,6 +354,8 @@ test("closedEnvironment keeps only listed single-line values and pins PATH", () 
   // left out, the bridge fell back to the account's own home).
   const empty = plain(Model.closedEnvironment({ HOME: "", USER: "" }, ["HOME", "USER"], Model.trustedPathEnvironment))
   assert.deepEqual(empty, { HOME: "", PATH: Model.trustedPathEnvironment })
+  const odd = plain(Model.closedEnvironment({ HOME: "/home/x\nBASH_ENV=/tmp/x" }, ["HOME"], Model.trustedPathEnvironment))
+  assert.deepEqual(odd, { HOME: "", PATH: Model.trustedPathEnvironment })  // (a control character: refused too)
 })
 
 test("no environment allow-list carries a code-loading or command variable", () => {

@@ -109,7 +109,8 @@ Item {
                    top.pauseEventRead, top.seekEventPoll,
                    top.toggles, top.idleUnload, top.volumeDebounce, top.volumeDebounceCheck, top.importFromBar,
                    top.ipcStopAndSpeed, top.ipcStopAndSpeedCheck, top.signOutLists,
-                   top.guardStopped, top.guardStoppedLater, top.noScreens, top.noScreensCheck]
+                   top.guardStopped, top.guardStoppedLater, top.guardKilled, top.guardNeverStarts, top.guardNeverStartsCheck,
+                   top.noScreens, top.noScreensCheck]
       if (top.step >= steps.length) { stop(); Qt.exit(top.failures); return }
       if (top.waits === 0) top.stepStarted = Date.now()
       // A step returns false to wait for a debounced call (up to 2 s).
@@ -555,6 +556,38 @@ Item {
     if (Date.now() - top.stepStarted < 150) return false
     check("the stopped guard's late exit isn't the new one failing", guards().length === 1 && shared._guardFailures === 0,
           guards().length + " " + shared._guardFailures)
+  }
+  // A guard killed by another signal than a stop is a failure (strict review
+  // 20); one that never starts is too (its watchdog: no `exited` comes).
+  function guardKilled() {
+    answerAll(top.answers)
+    shared.guardRetryBaseMs = 50  // (its retry wait over before the next step)
+    var g = guards()
+    if (g.length === 0) return false
+    var before = shared._guardFailures
+    g[0].alive = false
+    if (g[0].stdout) g[0].stdout.text = ""  // (killed: nothing on stdout, not an earlier run's answer)
+    g[0].exited(9, 1)
+    check("a guard killed by another signal counts as a failure", shared._guardFailures === before + 1,
+          before + " to " + shared._guardFailures)
+    shared._guardFailures = 0
+    shared.applyPlayer({ active: false, playing: false, item: null })
+  }
+  function guardNeverStarts() {
+    if (Date.now() - top.stepStarted < 300) return false  // (the stopped guard's late exit)
+    shared.startWatchdogMs = 150
+    Processes.failStarts = true
+    shared.applyPlayer(top.playing)
+  }
+  function guardNeverStartsCheck() {
+    if (Date.now() - top.stepStarted < 400) return false
+    Processes.failStarts = false
+    // (counted, then tried again after the backoff: still not starting, counted again)
+    check("a guard that never starts is counted as a failure", shared._guardFailures >= 1, shared._guardFailures)
+    shared._guardFailures = 0
+    shared.startWatchdogMs = 10000
+    shared.guardRetryBaseMs = 3000
+    shared.applyPlayer({ active: false, playing: false, item: null })
   }
   // With no screen at all, the service stays awake (it would otherwise go
   // dormant with every bar gone: no syncing, no pause before sleep).

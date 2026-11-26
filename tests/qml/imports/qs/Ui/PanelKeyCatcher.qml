@@ -1,7 +1,28 @@
-// Omarchy 4.5's Ui/PanelKeyCatcher.qml, copied as it is (MIT, Basecamp):
-// it depends on nothing but QtQuick, and the panel's keys are tested with
-// real key events through it (tests/qml only). tests/model.test.cjs checks
-// it still matches the installed one, when there is one.
+// Omarchy 4.5's Ui/PanelKeyCatcher.qml, copied as it is: it depends on
+// nothing but QtQuick, and the panel's keys are tested with real key events
+// through it (tests/qml only). tests/model.test.cjs checks it still matches
+// the installed one, when there is one. Omarchy's license:
+//
+// Copyright (c) David Heinemeier Hansson
+//
+// Permission is hereby granted, free of charge, to any person obtaining
+// a copy of this software and associated documentation files (the
+// "Software"), to deal in the Software without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to
+// permit persons to whom the Software is furnished to do so, subject to
+// the following conditions:
+//
+// The above copyright notice and this permission notice shall be
+// included in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 import QtQuick
 
 // Drop-in key dispatcher for keyboard-driven panels. Wraps panel content

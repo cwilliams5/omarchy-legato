@@ -289,6 +289,13 @@ Item {
     bridgeCalls("settings set").forEach(function(p) { top.refuse(p, "settings.json is read-only: not saved") })
     check("a failed save with another waiting is said", shellService.settingsError === "settings.json is read-only: not saved",
           shellService.settingsError)
+    // Its re-read waits behind the write that was waiting (strict review 20:
+    // beside it, it could land first and show the old value).
+    check("the re-read waits its turn", reads().length === 0 && bridgeCalls("settings set").length === 1,
+          reads().length + " " + bridgeCalls("settings set").length)
+    bridgeCalls("settings set").forEach(function(p) { answer(p, view({ autoplay: false, defaultTab: "podcasts", unloadAfterMinutes: 0, skipForward: 45, skipBack: 20 })) })
+    check("a later save that lands clears the message", shellService.settingsError === "", shellService.settingsError)
+    check("then the re-read goes", reads().length === 1, reads().length)
     running().forEach(function(p) { var a = argsOf(p); if (a !== null && a[0] === "settings") answer(p, view({ autoplay: false, defaultTab: "podcasts", unloadAfterMinutes: 0, skipForward: 45, skipBack: 20 })) })
     running().forEach(function(p) { var a = argsOf(p); if (a !== null && a[0] === "settings") answer(p, view({ autoplay: false, defaultTab: "podcasts", unloadAfterMinutes: 0, skipForward: 45, skipBack: 20 })) })
   }

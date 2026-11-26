@@ -453,8 +453,7 @@ Panel {
     anchors.fill: parent
     acceptedButtons: Qt.NoButton
     onWheel: function(wheel) {
-      wheel.accepted = true  // (a sideways swipe adds nothing up or down)
-      if (!parent.enabled) return
+      wheel.accepted = true  // (a sideways swipe adds nothing up or down; a disabled slider's overlay gets no wheel)
       var step = Model.wheelSteps(remainder, wheel.angleDelta.y)
       remainder = step.remainder
       if (step.steps !== 0) notch(step.steps)

@@ -365,7 +365,10 @@ function closedEnvironment(inherited, names, path) {
   var list = Array.isArray(names) ? names : []
   for (var i = 0; i < list.length; i++) {
     var value = source[list[i]]
-    if (value === "" && list[i] === "HOME") { environment.HOME = ""; continue }
+    // (A HOME that isn't one, empty or with a control character, goes on as
+    // empty: refused by the bridge, never its account's own home.)
+    if (list[i] === "HOME" && typeof value === "string"
+        && (value === "" || value.length > 4096 || /[\x00-\x1f\x7f]/.test(value))) { environment.HOME = ""; continue }
     if (typeof value !== "string" || value === "" || value.length > 4096) continue
     if (/[\x00-\x1f\x7f]/.test(value)) continue
     environment[list[i]] = value
