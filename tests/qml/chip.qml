@@ -100,9 +100,9 @@ Item {
     running: true
     onTriggered: {
       var steps = [top.handOver, top.awake, top.label, top.clicks, top.wheel, top.afterWheel,
-                   top.sleepGuardSwitch, top.guardBackOff, top.socketRetries, top.staleStatus,
+                   top.sleepGuardSwitch, top.guardBackOff, top.socketRetries, top.socketRetry2, top.socketRetry3, top.socketRetry4, top.staleStatus,
                    top.noticesOnce, top.quietReloads, top.chipShapes, top.idleWheel, top.idleWheelCheck, top.marquee,
-                   top.touchpad, top.touchpadCheck, top.wheelDown, top.wheelDownCheck, top.volumeClamp, top.volumeClampCheck,
+                   top.touchpad, top.touchpadCheck, top.wheelDown, top.wheelDownCheck, top.volumeClamp, top.volumeClampCheck, top.noAutoplayPoll,
                    top.seekStale, top.seekStaleCheck, top.liveStatus, top.liveStatusCheck, top.guardBack,
                    top.guardRestart, top.guardRestartCheck, top.mpvEvents, top.pauseEvent, top.pauseEventPoll, top.pauseEventRetry,
                    top.retryTwoEarly, top.retryTwo, top.retryThreeEarly, top.retryThree, top.noFourthRetry,
@@ -110,7 +110,7 @@ Item {
                    top.pauseEventRead, top.seekEventPoll,
                    top.toggles, top.idleUnload, top.volumeDebounce, top.volumeDebounceCheck, top.importFromBar,
                    top.ipcStopAndSpeed, top.ipcStopAndSpeedCheck, top.signOutLists,
-                   top.guardStopped, top.guardStoppedLater, top.guardKilled, top.guardNeverStarts, top.guardNeverStartsCheck,
+                   top.guardStopped, top.guardStoppedLater, top.guardKilled, top.guardTermed, top.guardTermedCheck, top.guardNeverStarts, top.guardNeverStartsCheck,
                    top.noScreens, top.noScreensCheck]
       if (top.step >= steps.length) { stop(); Qt.exit(top.failures); return }
       if (top.waits === 0) top.stepStarted = Date.now()
@@ -211,11 +211,32 @@ Item {
     check("the event socket is there", socket !== null, socket)
     shared._eventAttempts = 0
     for (var i = 0; i < 6; i++) {
-      socket.connected = false  // it refused, or hung up
+      socket.connected = false  // it hung up
       shared.syncPlayerEvents()
     }
-    check("a socket that keeps refusing gets three tries, not a loop", shared._eventAttempts === 3, shared._eventAttempts)
+    check("a socket that keeps hanging up gets three tries, not a loop", shared._eventAttempts === 3, shared._eventAttempts)
     socket.connected = false
+    // Refused, as the real Socket refuses (strict review 22, fit F3: only
+    // `error` says so, and its retry, a second later, went untested).
+    shared._eventAttempts = 0
+    socket.refuse = true
+    shared.syncPlayerEvents()
+    check("(refused: not connected)", shared._eventAttempts === 1 && socket.connected === false,
+          shared._eventAttempts + " " + socket.connected)
+  }
+  function socketRetry2() {
+    if (Date.now() - top.stepStarted < 1200) return false
+    check("a refused connect is tried again a second later", shared._eventAttempts === 2, shared._eventAttempts)
+  }
+  function socketRetry3() {
+    if (Date.now() - top.stepStarted < 1200) return false
+    check("and once more", shared._eventAttempts === 3, shared._eventAttempts)
+  }
+  function socketRetry4() {
+    if (Date.now() - top.stepStarted < 1200) return false
+    var socket = find(shared, function(i) { return i.objectName === "playerEvents" })
+    check("then no more: three tries, not a loop", shared._eventAttempts === 3, shared._eventAttempts)
+    socket.refuse = false
   }
 
   function staleStatus() {
@@ -347,6 +368,24 @@ Item {
     check("and 100 is what's sent", vol.length === 1 && argsOf(vol[0])[1] === "100",
           vol.map(function(p) { return argsOf(p).join(" ") }).join("; "))
     answerAll(top.answers)
+  }
+  // With autoplay off the poll says so (how autoplay stays off before the
+  // import too), and a video-window key Legato doesn't know does nothing
+  // (strict review 22, fit F4: neither was checked).
+  function noAutoplayPoll() {
+    answerAll(top.answers)
+    var off = JSON.parse(JSON.stringify(top.settingsView))
+    off.values.autoplay = false
+    shared.applySettings(off)
+    shared.refreshPlayer()
+    check("with autoplay off, the poll says --no-autoplay", calls("player --no-autoplay").length === 1,
+          running().map(function(p) { return (argsOf(p) || []).join(" ") }).join("; "))
+    answerAll(top.answers)
+    shared.applySettings(top.settingsView)
+    var before = running().length
+    shared.videoKey("rm")
+    shared.videoKey("")
+    check("an unknown video-window key does nothing", running().length === before, before + " -> " + running().length)
   }
   // A poll begun before a seek is sent doesn't put the old place back: one
   // that starts in the 300 ms between the step and its send (an mpv event)
@@ -615,6 +654,26 @@ Item {
     if (g[0].stdout) g[0].stdout.text = ""  // (killed: nothing on stdout, not an earlier run's answer)
     g[0].exited(9, 1)
     check("a guard killed by another signal counts as a failure", shared._guardFailures === before + 1,
+          before + " to " + shared._guardFailures)
+    shared._guardFailures = 0
+    shared.applyPlayer({ active: false, playing: false, item: null })
+  }
+  // A SIGTERM from anyone else (a kill of systemd-inhibit) isn't Legato's
+  // own stop: counted and retried (strict review 22, fit F2: taken for a
+  // stop, it left pause before sleep off for the rest of the episode).
+  function guardTermed() {
+    if (Date.now() - top.stepStarted < 300) return false  // (the stopped guard's late exit)
+    shared.guardRetryBaseMs = 50
+    shared.applyPlayer(top.playing)
+    check("(a guard runs)", guards().length === 1 && shared._guardStops === 0, guards().length + " " + shared._guardStops)
+  }
+  function guardTermedCheck() {
+    var g = guards()
+    var before = shared._guardFailures
+    g[0].alive = false
+    if (g[0].stdout) g[0].stdout.text = ""
+    g[0].exited(15, 1)
+    check("a guard sent SIGTERM by someone else counts as a failure", shared._guardFailures === before + 1,
           before + " to " + shared._guardFailures)
     shared._guardFailures = 0
     shared.applyPlayer({ active: false, playing: false, item: null })

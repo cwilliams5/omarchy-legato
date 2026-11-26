@@ -2,7 +2,11 @@
 run the tests meant to catch each. A mutation the tests miss is a survivor:
 behaviour the suite doesn't really check. See tests/mutations.md.
 
-usage: python3 -B tests/mutate.py . [name ...]      (from the repo root; about an hour)
+usage: python3 -B tests/mutate.py . [--confirm] [name ...]      (from the repo root; about an hour)
+
+--confirm re-runs the tests of each kill on the unmutated copy: a kill whose
+tests fail there too (a timing flake under load) is reported FLAKY, not
+counted as a kill.
 
 The working copy is never changed: the repo is copied to a temporary folder
 first, and each mutation is undone before the next.
@@ -302,7 +306,7 @@ MUTATIONS = [
      "        if number(cut):", [T + "BrokenStream.test_how_a_break_is_told_from_the_end",
                                   T + "HttpsStreams.test_a_reconnect_that_works_plays_on_to_a_real_end"]),
     ("broke: sized without a cut judged by durations", B,
-     "        if ffmpeg_lines_trusted(\"%s / %s\" % (snap.get(\"mpv-version\"), snap.get(\"ffmpeg-version\"))):\n            return False",
+     "        if ffmpeg_lines_trusted(player_versions(snap)):\n            return False",
      "        if False:\n            return False",
      [T + "BrokenStream.test_how_a_break_is_told_from_the_end"]),
     ("broke: a reconnect near the end still a break", B,
@@ -642,7 +646,7 @@ MUTATIONS = [
      [T + "ResumeAsksPocketCastsFirst.test_play_from_a_list_with_an_empty_lookup_pushes_nothing",
       T + "ResumeAsksPocketCastsFirst.test_following_the_phone_with_an_empty_lookup_pushes_nothing"]),
     ("lookup: every show treated as followed", B,
-     "        return any(show.get(\"uuid\") == podcast_uuid for show in subscriptions())", "        return True",
+     "    return any(show.get(\"uuid\") == podcast_uuid for show in shows)", "    return True",
      [T + "ResumeAsksPocketCastsFirst.test_a_show_you_dont_follow_still_plays_from_its_public_list"]),
     ("lookup: the reload falls to Up Next", B,
      "            if err.code not in (\"gone\", \"not_found\"):", "            if False:",
@@ -1106,8 +1110,8 @@ MUTATIONS = [
      '                               if True],\n             "unsentPlaces"',
      [T + 'EndToEnd.test_playing_a_half_told_end_again_drops_its_retry']),
     ("lookup: a followed show taken as unfollowed when its list fails", B,
-     "        return any(show.get(\"uuid\") == podcast_uuid for show in subscriptions())\n    except ApiError:\n        return True",
-     "        return any(show.get(\"uuid\") == podcast_uuid for show in subscriptions())\n    except ApiError:\n        return False",
+     "        shows = subscriptions()\n    except ApiError:\n        return True",
+     "        shows = subscriptions()\n    except ApiError:\n        return False",
      [T + "EndToEnd.test_an_empty_lookup_is_no_answer_when_your_shows_wont_load"]),
     ("verdict: an unsafe file trusted", B,
      "        return False  # a verdict file that can't be trusted: judge by length", "        return True",
@@ -1620,7 +1624,7 @@ MUTATIONS = [
      "      if (!result.ok) {\n        // Said even with a later change on its way",
      "      if (change !== root._settingsChanges) return\n      if (!result.ok) {\n        // Said even with a later change on its way", [T + "QmlPages"]),
     ("service: a stopped guard's late exit counted as a failure", "Service.qml",
-     "      if (exitStatus !== 0 && exitCode === 15) return\n",
+     "      if (exitStatus !== 0 && exitCode === 15 && root._guardStops > 0) {\n        root._guardStops--\n        return\n      }",
      "", [T + "QmlPages"]),
     ("service: transparency's superseded answer shows", "Service.qml",
      "      if (!latest) return\n      root.optimistic({ videoTransparency", "      root.optimistic({ videoTransparency", [T + "QmlPages"]),
@@ -1673,7 +1677,8 @@ MUTATIONS = [
      "      if (sleepGuard.processId || !root.guardWanted) return",
      "      return", [T + "QmlPages", T + "RealQuickshell"]),
     ("service: a guard killed by another signal goes uncounted", "Service.qml",
-     "      if (exitStatus !== 0 && exitCode === 15) return", "      if (exitStatus !== 0) return", [T + "QmlPages"]),
+     "      if (exitStatus !== 0 && exitCode === 15 && root._guardStops > 0) {",
+     "      if (exitStatus !== 0) {", [T + "QmlPages"]),
     ("service: the re-read after a failed save runs beside the next write", "Service.qml",
      "        root.rereadSettings()", "        root.readSettings()", [T + "QmlPages"]),
     ("service: a failed setting's message stays after it saves", "Service.qml",
@@ -1732,7 +1737,7 @@ MUTATIONS = [
      "      if (sleepGuard.processId || !sleepGuard.running || !root.guardWanted) return",
      [T + "RealQuickshell", "node"]),
     ("service: the guard watchdog never armed", "Service.qml",
-     "  onGuardWantedChanged: if (guardWanted) guardStartWatchdog.restart()", "  onGuardWantedChanged: {}",
+     "    if (guardWanted) guardStartWatchdog.restart()", "    if (false) guardStartWatchdog.restart()",
      [T + "QmlPages", T + "RealQuickshell"]),
     ("service: another setting's save takes a message down", "Service.qml",
      "      if (name !== key) { failed[name] = _settingsFailed[name]; said = failed[name] }",
@@ -1747,6 +1752,52 @@ MUTATIONS = [
     ("chip: the wheel down raises the volume", "BarWidget.qml",
      "      else if (step.steps < 0) root.service.nudgeVolume(-5)", "      else if (step.steps < 0) root.service.nudgeVolume(5)",
      [T + "QmlPages"]),
+    # --- strict review 22
+    ("login: another account keeps the last one's playback", B,
+     "        if not same_account(previous, auth):", "        if False:",
+     [T + "ResumeAsksPocketCastsFirst.test_another_account_signing_in_gets_none_of_the_last_ones_places"]),
+    ("login: the same account loses its places", B,
+     "        if not same_account(previous, auth):", "        if True:",
+     [T + "ResumeAsksPocketCastsFirst.test_the_same_account_signing_in_again_keeps_its_places"]),
+    ("login: any uuid the same account", B,
+     "        return previous[\"uuid\"] == current[\"uuid\"]", "        return True",
+     [T + "ResumeAsksPocketCastsFirst.test_another_account_signing_in_gets_none_of_the_last_ones_places"]),
+    ("shows: an empty list read as following nothing", B,
+     "        shows = cached_subscriptions()", "        shows = []",
+     [T + "EndToEnd.test_an_empty_lookup_is_no_answer_when_your_shows_come_back_empty"]),
+    ("shows: an empty list read as following everything", B,
+     "        shows = cached_subscriptions()", "        return True",
+     [T + "EndToEnd.test_an_empty_lookup_is_no_answer_when_your_shows_come_back_empty"]),
+    ("tell finished: nothing sent counted as told", B,
+     "            if push_position(entry, entry.get(\"position\") or 0, STATUS_PLAYED):",
+     "            if push_position(entry, entry.get(\"position\") or 0, STATUS_PLAYED) or True:",
+     [T + "ToldEnds.test_an_end_whose_mark_sent_nothing_isnt_told"]),
+    ("service: someone else's SIGTERM taken for a stop", "Service.qml",
+     "      if (exitStatus !== 0 && exitCode === 15 && root._guardStops > 0) {",
+     "      if (exitStatus !== 0 && exitCode === 15) {", [T + "QmlPages", T + "RealQuickshell"]),
+    ("service: a stop while a guard runs not owed", "Service.qml",
+     "    else if (_guardsRunning > 0) _guardStops++", "", [T + "QmlPages"]),
+    ("socket: a refused connect never retried", "Service.qml",
+     "    onError: eventRetry.restart()", "    onError: {}", [T + "QmlPages"]),
+    ("panel: Enter behind a page acts", "Panel.qml",
+     "      onReturnRequested: { if (root.pageOpen || root.menuItem) return;", "      onReturnRequested: { if (root.menuItem) return;",
+     [T + "QmlPages"]),
+    ("panel: Ctrl or Super plus a letter acts", "Panel.qml",
+     "        if (modifiers & (Qt.AltModifier | Qt.ControlModifier | Qt.MetaModifier)) return",
+     "        if (modifiers & Qt.AltModifier) return", [T + "QmlPages"]),
+    ("settings: a stepper past its top", SV,
+     "    if (entry.max !== undefined) v = Math.min(Number(entry.max), v)\n", "", [T + "QmlPages"]),
+    ("settings: the choice doesn't wrap", SV,
+     "    return options.length ? options[(i + 1) % options.length] : current(entry)",
+     "    return options.length ? options[Math.min(i + 1, options.length - 1)] : current(entry)", [T + "QmlPages"]),
+    ("service: the poll drops --no-autoplay", "Service.qml",
+     "    if (!autoplay) args.push(\"--no-autoplay\")", "", [T + "QmlPages"]),
+    ("tests: the bridge run with the real home", "tests/test_bridge.py",
+     "    assert_sandboxed()\n    out = io.StringIO()", "    out = io.StringIO()",
+     [T + "Validation.test_no_bridge_call_runs_with_the_real_accounts_folders"]),
+    ("self-check: unread versions trusted", B,
+     "    if not version:\n        # mpv's or FFmpeg's version unread", "    if False:\n        # mpv's or FFmpeg's version unread",
+     [T + "BrokenStream.test_how_a_break_is_told_from_the_end"]),
 ]
 
 
@@ -1768,14 +1819,15 @@ def run_tests(repo, tests):
 
 def main():
     src = os.path.abspath(sys.argv[1])
-    only = set(sys.argv[2:])
+    confirm = "--confirm" in sys.argv[2:]
+    only = set(a for a in sys.argv[2:] if a != "--confirm")
     unknown = only - {m[0] for m in MUTATIONS}
     if unknown:  # (a misspelt name used to run nothing and pass)
         sys.exit("no such mutation: " + "; ".join(sorted(unknown)))
-    work = tempfile.mkdtemp(prefix="legato-mut-")
+    work = tempfile.mkdtemp(prefix="legato-mut-", dir=None if len(tempfile.gettempdir()) <= 40 else "/tmp")
     repo = os.path.join(work, "repo")
     shutil.copytree(src, repo, ignore=shutil.ignore_patterns(".git", "__pycache__", "media", "branding"))
-    killed = survived = stale = skipped = 0
+    killed = survived = stale = skipped = flaky = 0
     baseline = {}
     for name, path, old, new, tests in MUTATIONS:
         if only and name not in only:
@@ -1798,14 +1850,19 @@ def main():
             passed, failing = run_tests(repo, tests)
         finally:
             open(full, "w", encoding="utf-8").write(original)
-        if not passed:
+        if not passed and confirm and not run_tests(repo, tests)[0]:
+            # (Strict review 22, fit F5: under parallel load a timing failure
+            # "killed" two mutants that survive alone.)
+            flaky += 1; print("FLAKY  %s  (its tests fail unmutated too: %s)" % (name, ", ".join(failing)))
+        elif not passed:
             killed += 1; print("kill  %s  (%s)" % (name, ", ".join(failing)))
         else:
             survived += 1; print("SURVIVED  %s" % name)
         sys.stdout.flush()
-    print("\n%d killed, %d survived, %d stale, %d skipped" % (killed, survived, stale, skipped))
+    print("\n%d killed, %d survived, %d stale, %d skipped%s" % (killed, survived, stale, skipped,
+                                                            ", %d flaky" % flaky if confirm else ""))
     shutil.rmtree(work)
-    sys.exit(1 if survived or stale or skipped else 0)
+    sys.exit(1 if survived or stale or skipped or flaky else 0)
 
 
 main()

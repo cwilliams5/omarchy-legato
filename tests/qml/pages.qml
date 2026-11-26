@@ -68,6 +68,18 @@ Item {
   function run() {
     manifest = readManifest()
     check("the manifest's settings reach the page", settings.schema.length > 5, settings.schema.length)
+    // The steppers stop at the schema's ends, and the choice wraps round
+    // (strict review 22, fit F4: neither was checked).
+    var entry = function(key) { return settings.schema.filter(function(e) { return e.key === key })[0] }
+    var saved = settings.values
+    settings.values = { skipBack: 120, defaultTab: "podcasts" }
+    check("a stepper stops at its top", settings.stepped(entry("skipBack"), 1) === 120, settings.stepped(entry("skipBack"), 1))
+    settings.values = { skipBack: 5 }
+    check("and at its bottom", settings.stepped(entry("skipBack"), -1) === 5, settings.stepped(entry("skipBack"), -1))
+    settings.values = { defaultTab: "podcasts" }
+    check("the last choice wraps to the first", settings.nextOption(entry("defaultTab")) === "upnext",
+          settings.nextOption(entry("defaultTab")))
+    settings.values = saved
 
     // The Settings page fits the panel (it once didn't: a section added
     // last hung below the card). A Column lays out on the next frame unless

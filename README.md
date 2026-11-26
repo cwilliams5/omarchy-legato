@@ -24,7 +24,7 @@ by Nine Point Labs (MIT). What's new compared to the original:
 
 - **Resuming never rewinds another device.** The original sent its own,
   older position when you pressed play, rewinding the phone.
-- **Nothing runs while paused or idle.** The original started a Python
+- **Nothing polls while paused or idle.** The original started a Python
   process every 5 seconds while playing and every minute while idle.
 - **A failed load says so,** instead of showing an episode playing in
   silence, and **a dropped stream isn't finished:** the original marked

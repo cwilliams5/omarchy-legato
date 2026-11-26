@@ -1348,9 +1348,28 @@ def record_expected(podcast_uuid):
     if not podcast_uuid:
         return False
     try:
-        return any(show.get("uuid") == podcast_uuid for show in subscriptions())
+        shows = subscriptions()
     except ApiError:
         return True
+    if not shows:
+        # An empty list (an odd reply, never kept) for a show the last list
+        # that loaded had: can't tell, so it does (strict review 22, M1: an
+        # empty lookup then started it at 0 over the phone's place). Never
+        # listed, or nothing ever listed: you follow nothing, as before (so
+        # someone who follows no show isn't told "try again" for good).
+        shows = cached_subscriptions()
+    return any(show.get("uuid") == podcast_uuid for show in shows)
+
+
+def cached_subscriptions():
+    """The last list of your shows that loaded, however old (podcasts-cache.json,
+    dropped at sign-in and sign-out); [] if none or unreadable."""
+    try:
+        cached = load_state("podcasts-cache.json", 4 * 1024 * 1024)
+    except ApiError:
+        return []
+    items = cached.get("items") if isinstance(cached, dict) else None
+    return [p for p in items if isinstance(p, dict)] if isinstance(items, list) else []
 
 
 def position_known_elsewhere(uuid):
@@ -2987,8 +3006,9 @@ def tell_finished(entry):
     `entry` records which went through."""
     if not entry.get("played"):
         try:
-            push_position(entry, entry.get("position") or 0, STATUS_PLAYED)
-            entry["played"] = True
+            # (Nothing sent, no show id: not told; strict review 22, L1.)
+            if push_position(entry, entry.get("position") or 0, STATUS_PLAYED):
+                entry["played"] = True
         except ApiError:
             pass
     if not entry.get("removed"):
@@ -3229,7 +3249,7 @@ def stream_broke(snap, state):
             skip = skip_last_of(snap.get("file-local-options/end"))
             outro_stop = skip > 0 and number(duration) and position >= duration - skip - BROKE_SLACK / 5
             return not (to_end or outro_stop)
-        if ffmpeg_lines_trusted("%s / %s" % (snap.get("mpv-version"), snap.get("ffmpeg-version"))):
+        if ffmpeg_lines_trusted(player_versions(snap)):
             return False
         # This FFmpeg failed the self-check: its silence proves nothing, so
         # the length rule judges (below).
@@ -3259,6 +3279,10 @@ def ffmpeg_lines_trusted(version):
     have reworded them), nor while that check is under way. Never checked
     (no verdict for this version): trusted (the check starts with the first
     player on a new version, and is under way from then)."""
+    if not version:
+        # mpv's or FFmpeg's version unread: no verdict can be matched, so a
+        # failed check's would be missed (strict review 22, L2): by length.
+        return False
     try:
         check = load_state(WATCH_CHECK)
     except ApiError:
@@ -4135,22 +4159,50 @@ def read_credentials():
     return email, password
 
 
+def same_account(previous, current):
+    """Whether a sign-in is to the account the last session was (the same
+    uuid; without one on either side, the same address). No earlier session,
+    or nothing to tell by: not known to be, so no."""
+    if not previous:
+        return False
+    if previous.get("uuid") and current.get("uuid"):
+        return previous["uuid"] == current["uuid"]
+    email = str(previous.get("email") or "").strip().lower()
+    return bool(email) and email == str(current.get("email") or "").strip().lower()
+
+
 def cmd_login(args):
     email, password = read_credentials()
-    status, payload = post_json("/user/login_pocket_casts", {"email": email, "password": password})
-    password = None
-    if status != 200 or not payload.get("accessToken"):
-        message = error_text(payload, status)
-        if status in (400, 401, 403):
-            if str(payload.get("errorMessageId") or "").startswith("login_"):
-                message = message + ". Signed in with Apple or Google? Set a password on your Pocket Casts account first."
-            raise ApiError("login_failed", message, status)
-        raise ApiError("network", message, status)
-    auth = {}
-    with auth_lock():
-        store_tokens(auth, payload)  # a new session: replaces whatever was there
-    for name in ("podcasts-cache.json",):
-        drop_state(name)
+    # The state lock first (outermost, as everywhere): a poll can't start
+    # between the new session's tokens and dropping another account's
+    # playback, and a busy lock fails before Pocket Casts issues tokens.
+    with StateLock():
+        status, payload = post_json("/user/login_pocket_casts", {"email": email, "password": password})
+        password = None
+        if status != 200 or not payload.get("accessToken"):
+            message = error_text(payload, status)
+            if status in (400, 401, 403):
+                if str(payload.get("errorMessageId") or "").startswith("login_"):
+                    message = message + ". Signed in with Apple or Google? Set a password on your Pocket Casts account first."
+                raise ApiError("login_failed", message, status)
+            raise ApiError("network", message, status)
+        auth = {}
+        with auth_lock():
+            previous = load_auth()
+            store_tokens(auth, payload)  # a new session: replaces whatever was there
+        if not same_account(previous, auth):
+            # Another account (the sign-in page shows when a session expires,
+            # so nobody signs out first), or one this machine can't tell is
+            # the same: the player and everything playback.json holds (its
+            # place, unsent places, pending finishes) are the other's, and the
+            # next poll and retries pushed them into this one (strict review
+            # 22, H1). As a sign-out does. The same account keeps them: its
+            # unsent places go out with the new session.
+            player = Mpv.connect()
+            if player:
+                quit_mpv(player)
+            drop_state("playback.json")
+        drop_state("podcasts-cache.json")
     out({"email": auth.get("email", email)})
 
 

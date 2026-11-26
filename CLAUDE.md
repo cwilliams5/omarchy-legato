@@ -14,9 +14,11 @@ Cody's work setup.
 
 Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
-(docs/PLAN.md phases H and SR: rounds 1-21 fixed; round 19 was the first
+(docs/PLAN.md phases H and SR: rounds 1-22 fixed; round 19 was the first
 with no critical or high, but round 20 found one in round 19's own fix
-(withdrawn) and round 21 two more through older doors; round 22 next).
+(withdrawn), round 21 two more through older doors, and round 22 two
+highs at boundaries the engine didn't model (another account's sign-in;
+the tests' own isolation); round 23 next).
 Cody, 2026-11-25: commits carry his personal address as author, accepted
 (1.0.x's are public that way). Cody, 2026-11-24: SR86 (settings in Legato's own file)
 and SR63 (one live service on a replacement bar) were folded into 1.1.0
@@ -179,8 +181,8 @@ docs/PLAN.md         what's left to build
    An episode that ended here is never pushed as in progress (only
    `play_again` reopens it; a drag back while paused, and the poll it
    brings, push nothing). A push that sent nothing (`push_position`
-   False: no show id) and a redirect from the API are never a push that
-   landed (round 21). Only the file playback.json names is ever pushed,
+   False: no show id), a "played" mark that sent nothing (round 22), and a
+   redirect from the API are never a push that landed (round 21). Only the file playback.json names is ever pushed,
    reopened or judged at its end (`sync_now`, `cmd_seek` and `resume_loaded`
    check mpv's `path`; Play on another file starts over through
    `resume_last`): another program opening a file through mpv-mpris, or a
@@ -292,7 +294,13 @@ docs/PLAN.md         what's left to build
    connection showing one address at both ends: `same_address`, round 15)
    and to the local network only with `localFeeds`; sign-in, sign-out and every token write hold the auth lock
    (`auth_lock`, innermost of the three locks) and re-read auth.json before
-   writing to a session, so nothing writes back a signed-out session; no QML
+   writing to a session, so nothing writes back a signed-out session; a
+   sign-in to another account than the last session's (`same_account`: its
+   uuid, else its address; no earlier session counts as another) ends the
+   player and drops playback.json under the state lock, as a sign-out
+   does, since the sign-in page shows whenever a session expires and the
+   old account's places, unsent places and pending finishes were pushed
+   into the new one (round 22, H1); the same account keeps them; no QML
    file has a native text input (`TextField`,
    `TextInput`, `TextEdit`, `TextArea`: Qt 6.12 reads the clipboard into
    them by itself), the sign-in fields paste only through `bridge paste`
@@ -441,7 +449,10 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   was. An empty episode lookup (a 404, an
   empty answer, a redirect) for a show you follow (`record_expected`:
   every episode of one has a record, played or not; checked live
-  2026-11-24, down to the oldest of 1906) or for an episode a record came
+  2026-11-24, down to the oldest of 1906; a list of your shows that comes
+  back empty falls back to the last one that loaded, so a show on it still
+  counts, while someone who never had one follows nothing: round 22, M1)
+  or for an episode a record came
   back for, or a push or mark of it landed (`recordSeen`), or one Pocket Casts lists a place in elsewhere
   (`position_known_elsewhere`: Up Next's sync data or In Progress; an
   episode of a show you don't follow has a record once anyone played it,
@@ -530,7 +541,8 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   plays it in a private muted mpv with the watcher: a line on any of the
   three channels must show within 12 s (`seen`: reconnect, short, error). If none,
   `ffmpeg_lines_trusted` is false for that pair of versions (mpv's and
-  FFmpeg's, `player_versions`): ranged hosts go by the length rule, and a
+  FFmpeg's, `player_versions`; and while either can't be read, as no
+  verdict can be matched then: round 22, L2): ranged hosts go by the length rule, and a
   notification says so once. A check that never finished counts as failed
   after ten minutes; a failure is tried again a day later. Its player gets
   the main one's hardening (`--no-config --ytdl=no
@@ -763,9 +775,14 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   inside the stop: set running again in the same tick and the old one's
   `exited` comes first (with `running` false), then the new one starts
   (probed in round 19). A paste cancelled drops its callback first, and
-  the guard's `onExited` takes a signal-15 exit for a stop, never a
-  failure (a stale one arriving after the next guard was asked for once
-  counted against it). The test stand-in models the stop (`alive`;
+  the guard's `onExited` takes a signal-15 exit for Legato's own stop,
+  never a failure (a stale one arriving after the next guard was asked
+  for once counted against it), but only one it's owed: each fall of
+  `guardWanted` while a guard runs (`_guardsRunning`, from its own
+  `started`/`exited`, since a stop and a start in one tick may arrive in
+  either order) owes one (`_guardStops`); a signal 15 from anyone else is
+  a failure, counted and retried (round 22, fit F2: a kill of
+  systemd-inhibit left pause before sleep off for the episode). The test stand-in models the stop (`alive`;
   `finish()` never writes `running`; a stop sends `exited`, later; a
   start that never comes up sends nothing and has no `processId`, but
   its `running` stays true: a QML write would drop the binding), not a
@@ -963,7 +980,8 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   real Panel.qml and Service.qml with stand-ins for Quickshell's processes,
   answering the bridge calls the service starts (and `RealQuickshell`:
   Service.qml's sleep-guard block on the real Quickshell, offscreen, in a
-  private runtime folder, for what the stand-ins can't model); `tests/qml/service.qml`:
+  private runtime folder, for what the stand-ins can't model: a guard
+  that never starts, one killed by someone else); `tests/qml/service.qml`:
   the shell's service dormant until claimed (the bar handed over after
   loading, as Omarchy does), dormant again when its panel goes, a
   replacement bar's panel running its own, settings from settings.json,
@@ -976,7 +994,12 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   (`events.mouseWheel` in panel.qml; force the Columns' layout first, a
   stale one hides an item from the hit test). About 23 minutes; nothing
   appears on screen, and the test players load no mpv-mpris (they'd be
-  media players on the desktop). `tests/mutations.md` lists the planted
+  media players on the desktop). The whole of `tests/test_bridge.py` runs
+  in a throwaway home set before the bridge loads (HOME and every XDG
+  folder, the runtime one too; no display, compositor or session bus), and
+  `run_bridge` refuses one of the real account's, whatever a test sets
+  (round 22, fit F1: `Validation`, a plain TestCase, ran the sleep guard
+  with the real HOME, safe only while the guard stopped at "no sleep"). `tests/mutations.md` lists the planted
   regressions the suite must catch.
   Run before every commit. The fake server can drop requests the way a
   network does: `self.fake["fail"] = {"/sync/update_episode": 1}`.

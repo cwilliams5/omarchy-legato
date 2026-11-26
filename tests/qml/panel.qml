@@ -246,6 +246,13 @@ Item {
     check("n, m and Delete do nothing behind the Stats page",
           calls("next").length === 0 && calls("queue").length === 0 && calls("mark").length === 0,
           calls("next").length + " " + calls("queue").length + " " + calls("mark").length)
+    // Nor Enter and Space (strict review 22, fit F4: untested).
+    var acted = calls("play").length + calls("resume").length + calls("pause").length
+    keys.returnRequested()
+    keys.activateRequested()
+    check("Enter and Space do nothing behind the Stats page",
+          calls("play").length + calls("resume").length + calls("pause").length === acted,
+          acted + " -> " + (calls("play").length + calls("resume").length + calls("pause").length))
 
     // While the page is open, each poll's answer brings a fresh read.
     service.applyPlayer({ active: true, playing: true, position: 10, duration: 100, item: null })
@@ -681,6 +688,9 @@ Item {
     settle()
     keys.textKey("n", Qt.AltModifier)
     check("Alt+n is not the panel's n", calls("next").length === 0, calls("next").length)
+    keys.textKey("n", Qt.ControlModifier)
+    keys.textKey("n", Qt.MetaModifier)
+    check("nor Ctrl+n or Super+n (strict review 22)", calls("next").length === 0, calls("next").length)
     service.openDetail({ type: "podcast", uuid: "bbbbbbbb-0000-0000-0000-00000000000d", name: "Show D" })
     keys.moveRequested(-1, 0)
     check("left goes back from a show's page", service.detail === null, JSON.stringify(service.detail))

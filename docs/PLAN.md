@@ -1532,7 +1532,8 @@ second doors into outcomes earlier rounds closed at one door.
 - [x] SR182 (low, fit L2) Two quick Settings or Stats changes raced for the
   file's lock: the page could show one value and the file hold the other
   (the bridge acts on the file). Writes now go one at a time, in order
-  (`write`, with a watchdog), and an answer a later change supersedes
+  (`write`; its watchdog went in round 17, so a write waits at most on
+  the bridge's own deadline), and an answer a later change supersedes
   never shows.
 - [x] SR183 (low, fit L3) Other ways to "no screen, nothing syncs": a shell
   started with no screen, a replacement bar's panels gone with the screens
@@ -1807,6 +1808,68 @@ Fit: one medium (a round 20 claim false on the real shell), lows.
   checked live on 2026-11-23. Check live with Cody before the release.
   i18n (SR186) stays left.
 
+### SR, round 22 (2026-11-25)
+
+Safety: one high, one medium; round 21's changes opened no new door the
+reviewer found. Fit: one high (test safety), lows.
+Reports: kept outside the repo.
+
+- [x] SR235 (high, safety H1) Signing in to another account (the sign-in
+  page shows whenever a session expires, so nobody signs out first) kept
+  the first account's playback.json and player: the next poll and the
+  retries pushed its places into the new account (verified). A sign-in
+  that isn't to the same account (`same_account`: uuid, else address; no
+  earlier session counts as another) ends the player and drops
+  playback.json under the state lock, as a sign-out does; the same
+  account keeps everything.
+- [x] SR236 (medium, safety M1) A list of your shows that came back empty
+  (an odd reply) made a followed show's empty lookup an answer: Play
+  pushed 0 over the phone's 25 (verified; round 19's SR219 had left it).
+  An empty list falls back to the last one that loaded
+  (`cached_subscriptions`): a show on it still counts as followed, while
+  someone who never had one follows nothing, so nobody is told "try
+  again" for good.
+- [x] SR237 (lows, safety L1-L2) A "played" mark that sent nothing (no
+  show id) was recorded as told; FFmpeg's lines were trusted while mpv's
+  version couldn't be read (no verdict can match: by length now).
+  `retry_unsent` dropping a place it can't ever send (no show id) is
+  right as it is. Nit left: Next takes the episode off Up Next before it
+  knows there's a next one.
+- [x] SR238 (high, fit F1, test safety) `Validation` ran the sleep guard
+  in-process with the real HOME and XDG folders, safe only while the
+  guard stopped at "no sleep": one broken line and a run would pause the
+  real player and push to the real account (round 14's class). The whole
+  test file now runs in a throwaway home set before the bridge loads,
+  with no display or session bus, and `run_bridge` refuses the real
+  account's folders (tested). Temp homes use /tmp when TMPDIR is long
+  (mpv's socket path limit).
+- [x] SR239 (low, fit F2) A guard sent SIGTERM by anyone else was taken
+  for Legato's own stop: never counted or restarted. Each stop Legato
+  makes while a guard runs is owed one signal-15 exit (`_guardStops`,
+  `_guardsRunning`); any other is a failure. RealQuickshell kills a
+  running guard and expects it counted and back.
+- [x] SR240 (lows, fit F3-F5) The Socket stand-in refuses as the real one
+  does (`error` inside the write, `connected` left false; the retry a
+  second later now tested); tests for the Settings steppers' ends and the
+  choice wrapping, Enter and Space behind a page, Ctrl/Super+letter, the
+  poll's `--no-autoplay`, an unknown video-window key; `mutate.py
+  --confirm` re-runs each kill's tests unmutated (a flake is FLAKY, not a
+  kill). README: "Nothing polls while paused or idle" (four helpers stay
+  resident: Resources says so); SR182's watchdog note; Panel.qml's
+  header comment.
+- [ ] SR241 (left, fit F4/F6) Untested still: the Python probe accepting a
+  candidate that exited non-zero, a status read in flight started again,
+  the paused cover's dimming, `x` on an episode not queued, Next's
+  availability and Up Next's reload after Next; six behaviours only
+  source regexes check. Stacked guards (F6): where one side is the panel
+  and the other the bridge (the steppers and the schema check, the
+  transparency clamp and its range check, `next()`'s cancelled seek and
+  the bridge refusing another episode's seek), each defends its own
+  input and stays; the panel's halves are now tested where cheap. The
+  dormant pairs (`pollTimer`'s `active` and `refreshPlayer`'s, the unload
+  timer's and `call()`'s dormant answer) and the menu's loaded filter
+  over `isLoaded` stay as they are.
+
 ## Testing
 
 - `tests/run` before every commit: all suites, about 23 minutes, nothing on
@@ -2018,6 +2081,15 @@ Fit: one medium (a round 20 claim false on the real shell), lows.
   reviewer's surviving mutants. Cody: the commit author's address is
   accepted. 444 Python + 47 node tests; 565 mutations, round 21's 24 new
   or changed all killed. Round 22 next (round 21 had criticals).
+- 2026-11-25 (late night): round 22 (SR235-SR241): safety: another
+  account's sign-in inherited the last one's places (dropped now unless
+  it's the same account), an empty show list read as "follows nothing"
+  (the last list that loaded decides); fit: the bridge tests ran with the
+  real HOME (the whole file is sandboxed now), a guard killed by someone
+  else never came back, the Socket stand-in, test gaps, `mutate.py
+  --confirm`. 450 Python + 47 node tests; 581 mutations, round 22's 22
+  new or changed all killed (with --confirm; one re-anchored after it
+  survived in a harmless form). Round 23 next (round 22 had highs).
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

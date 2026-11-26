@@ -17,8 +17,8 @@ import "About.js" as About
 // its episode list.
 //
 // The plugin id's IPC target is the chip's (BarWidget.qml), the `legato`
-// one the service's; this component only needs moduleName so the shell can
-// inject bar/settings/anchorItem/hostWidget into it.
+// one the service's; BarWidget.qml makes this panel and hands it its bar,
+// settings, anchorItem and hostWidget (moduleName names the plugin).
 Panel {
   id: root
   moduleName: "io.github.cwilliams5.legato"

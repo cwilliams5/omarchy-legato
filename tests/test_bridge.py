@@ -9,6 +9,7 @@ Run with tests/run, or directly:
 """
 
 import argparse
+import atexit
 import base64
 import contextlib
 import functools
@@ -20,6 +21,7 @@ import io
 import json
 import os
 import pathlib
+import pwd
 import re
 import shutil
 import signal
@@ -41,6 +43,48 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 BRIDGE = ROOT / "bin" / "legato-bridge"
 
 sys.dont_write_bytecode = True
+
+
+def short_temp_dir():
+    """Where the throwaway homes go: mpv's socket path inside one must stay
+    under the 107-byte limit, so a long TMPDIR (a sandbox's) gives way to
+    /tmp (a test failed there with "False is not true": strict review 22)."""
+    default = tempfile.gettempdir()
+    return default if len(default) <= 40 else "/tmp"
+
+
+# Every test in this file runs against a throwaway home, set before the
+# bridge loads: nothing reaches the real account's state, player, Pocket
+# Casts sign-in or desktop, even from a test outside TempHome whose code
+# under test breaks (strict review 22, fit F1: Validation's sleep-guard
+# tests ran the guard with the real HOME, safe only while it stopped at
+# "no sleep"; round 14's reviewer once acted on the real account that way).
+REAL_HOME = os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir)
+REAL_RUNTIME = "/run/user/%d" % os.getuid()
+_SANDBOX = os.path.realpath(tempfile.mkdtemp(prefix="pc-bridge-module-", dir=short_temp_dir()))
+os.chmod(_SANDBOX, 0o700)
+os.mkdir(os.path.join(_SANDBOX, "run"), 0o700)
+atexit.register(shutil.rmtree, _SANDBOX, True)
+os.environ.update({
+    "HOME": _SANDBOX,
+    "XDG_STATE_HOME": _SANDBOX + "/.local/state",
+    "XDG_CACHE_HOME": _SANDBOX + "/.cache",
+    "XDG_CONFIG_HOME": _SANDBOX + "/.config",
+    "XDG_DATA_HOME": _SANDBOX + "/.local/share",
+    "XDG_RUNTIME_DIR": _SANDBOX + "/run",
+})
+for _name in ("WAYLAND_DISPLAY", "DISPLAY", "HYPRLAND_INSTANCE_SIGNATURE", "DBUS_SESSION_BUS_ADDRESS"):
+    os.environ.pop(_name, None)
+
+
+def assert_sandboxed():
+    """No bridge call runs with a folder of the real account's."""
+    for name in ("HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"):
+        value = os.path.realpath(os.environ.get(name) or "/")
+        if value == REAL_HOME or value.startswith(REAL_HOME + "/") or value.startswith(REAL_RUNTIME) or value == "/":
+            raise AssertionError("refusing to run the bridge with %s=%s (the real account's)" % (name, value))
+
+
 _loader = importlib.machinery.SourceFileLoader("legato_bridge", str(BRIDGE))
 _spec = importlib.util.spec_from_loader("legato_bridge", _loader)
 bridge = importlib.util.module_from_spec(_spec)
@@ -63,7 +107,7 @@ class TempHome(unittest.TestCase):
     """A private throwaway $HOME with every XDG directory pointed inside it."""
 
     def setUp(self):
-        self.home = os.path.realpath(tempfile.mkdtemp(prefix="pc-bridge-"))
+        self.home = os.path.realpath(tempfile.mkdtemp(prefix="pc-bridge-", dir=short_temp_dir()))
         os.chmod(self.home, 0o700)
         self.addCleanup(shutil.rmtree, self.home, True)
         runtime = os.path.join(self.home, "run")
@@ -100,6 +144,7 @@ class TempHome(unittest.TestCase):
 
 def run_bridge(*argv, stdin=""):
     """Run one subcommand in-process and return its JSON envelope."""
+    assert_sandboxed()
     out = io.StringIO()
     fake_stdin = io.TextIOWrapper(io.BytesIO(stdin.encode("utf-8")), encoding="utf-8")
     with mock.patch.object(sys, "stdout", out), mock.patch.object(sys, "stdin", fake_stdin), \
@@ -310,6 +355,16 @@ class Validation(unittest.TestCase):
         chain = bridge.audio_filters({"trim": "mild", "boost": True})
         self.assertTrue(chain.startswith("@trim:") and ",@boost:" in chain)
         self.assertEqual(bridge.audio_filters({"boost": True}), "@boost:" + bridge.BOOST_FILTER)
+
+    def test_no_bridge_call_runs_with_the_real_accounts_folders(self):
+        # Strict review 22 (fit F1): the whole file runs in a throwaway home,
+        # and run_bridge refuses the real one, whatever a test sets.
+        self.assertNotEqual(os.path.realpath(os.environ["HOME"]), REAL_HOME)
+        for name, value in (("HOME", REAL_HOME), ("XDG_STATE_HOME", REAL_HOME + "/.local/state"),
+                            ("XDG_RUNTIME_DIR", REAL_RUNTIME)):
+            with mock.patch.dict(os.environ, {name: value}):
+                with self.assertRaises(AssertionError):
+                    run_bridge("status")
 
     def test_a_sleep_guard_whose_monitor_dies_reports_a_failure(self):
         real = bridge.trusted_tool
@@ -760,7 +815,8 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
         token = (self.headers.get("Authorization") or "").replace("Bearer ", "")
         if path == "/user/login_pocket_casts":
             if body.get("password") == PASSWORD:
-                self.reply(200, {"email": body["email"], "uuid": "u", "accessToken": "t1", "tokenType": "Bearer",
+                self.reply(200, {"email": body["email"], "uuid": s.get("accountUuids", {}).get(body["email"], "u"),
+                                 "accessToken": "t1", "tokenType": "Bearer",
                                  "expiresIn": 3600, "refreshToken": "r1"})
             else:
                 self.reply(401, {"errorMessage": "Wrong password", "errorMessageId": "login_password_incorrect"})
@@ -780,7 +836,8 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
                     entry.update(skips)
                     entry["settings"] = {k: {"value": n, "changed": True} for k, n in skips.items()}
                 return entry
-            self.reply(200, {"podcasts": [show(u, v) for u, v in s["shows"].items() if u not in s.get("unfollowed", ())]})
+            self.reply(200, {"podcasts": [] if s.get("showsEmpty") else  # (an odd reply: an empty list)
+                             [show(u, v) for u, v in s["shows"].items() if u not in s.get("unfollowed", ())]})
         elif path == "/up_next/list":
             # `noSync`: episodes whose sync data the reply leaves out. As the
             # real reply does (checked live 2026-11-24), an episode not started
@@ -1699,6 +1756,28 @@ class EndToEnd(PlayerTestCase):
         self.assertEqual(run_bridge("play", EP_1, "--podcast", PODCAST_A).get("code"), "no_record")
         self.assertEqual(self.fake["progress"][EP_1], 30)
 
+    def test_an_empty_lookup_is_no_answer_when_your_shows_come_back_empty(self):
+        # Strict review 22 (M1): the list loads, but empty (an odd reply),
+        # its ten-minute copy old: a followed show read as unfollowed, and an
+        # empty lookup started it at 0 over the phone's 30.
+        self.login()
+        self.assertTrue(run_bridge("podcasts")["ok"])  # a list that loaded, kept
+        cached = bridge.load_state("podcasts-cache.json")
+        cached["at"] -= 3600
+        bridge.save_state("podcasts-cache.json", cached)
+        self.fake["showsEmpty"] = True
+        self.fake["progress"][EP_1] = 30
+        self.fake["status"][EP_1] = bridge.STATUS_IN_PROGRESS
+        self.fake["notListed"] = self.fake["noSync"] = {EP_1}
+        self.fake["episodeReply"] = {EP_1: (404, b'{"errorMessage": "not found"}'),
+                                     EP_2: (404, b'{"errorMessage": "not found"}')}
+        self.assertEqual(run_bridge("play", EP_1, "--podcast", PODCAST_A).get("code"), "no_record")
+        self.assertEqual(self.fake["progress"][EP_1], 30)
+        # Never listed (someone who follows no show): an episode nobody
+        # played still plays, from the show's list, as before.
+        bridge.drop_state("podcasts-cache.json")
+        self.assertTrue(run_bridge("play", EP_2, "--podcast", PODCAST_A)["ok"])
+
     def test_a_call_that_spans_a_suspend_sends_nothing(self):
         # Strict review 12 (M4): a push decided before a suspend and sent after
         # it landed the pre-sleep place over the phone's newer one.
@@ -2130,6 +2209,22 @@ class ToldEnds(PlayerTestCase):
         self.assertNotEqual(((result.get("data") or {}).get("item") or {}).get("uuid"), EP_3)
         self.assertEqual(self.fake["status"].get(EP_3), bridge.STATUS_PLAYED)
         self.assertEqual(len(self.pushes_of(EP_3)), before)
+
+
+    def test_an_end_whose_mark_sent_nothing_isnt_told(self):
+        # Strict review 22 (L1): with no show id, push_position sends
+        # nothing, but the end's mark was recorded as told.
+        self.login()
+        bridge.save_state("settings.json", {"autoplay": False})
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        state = bridge.load_playback()
+        state["episode"]["podcast"] = ""
+        bridge.save_playback(state)
+        self.wait_for(lambda: run_bridge("player", "--no-autoplay")["data"].get("ended"), timeout=20)
+        run_bridge("player", "--no-autoplay")
+        pending = bridge.load_playback().get("pendingFinish") or []
+        self.assertTrue(any(p.get("uuid") == EP_1 and not p.get("played") for p in pending), pending)
+        self.assertNotEqual(self.fake["status"].get(EP_1), bridge.STATUS_PLAYED)
 
 
 class ResumeAsksPocketCastsFirst(PlayerTestCase):
@@ -2661,6 +2756,47 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
         state = bridge.load_playback()
         self.assertIn("unsentPush", state)
         self.assertLess(state["lastSyncPos"], 1)
+
+    # --- Strict review 22 (H1): another account signing in.
+    def sign_in_as(self, email):
+        result = run_bridge("login", stdin=json.dumps({"email": email, "password": PASSWORD}))
+        self.assertTrue(result["ok"], result)
+
+    def unsent_in_two_episodes(self):
+        """EP_1 played here, its place stashed unsent by Next; EP_2 played and
+        paused, its place unsent too (every push failing: a session expiring
+        does that)."""
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.position() > 4, timeout=20)
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        run_bridge("next")
+        self.wait_for(lambda: (run_bridge("player")["data"].get("item") or {}).get("uuid") == EP_2 and self.position() > 2,
+                      timeout=20)
+        run_bridge("pause")
+        state = bridge.load_playback()
+        self.assertTrue(state.get("unsentPlaces") and state.get("unsentPush"), state)
+        self.fake["fail"] = {}
+
+    def test_another_account_signing_in_gets_none_of_the_last_ones_places(self):
+        # The sign-in page (a session expired) took another account: the
+        # next poll and the retries pushed the first account's places into it.
+        self.fake["accountUuids"] = {"other@example.com": "u2"}
+        self.unsent_in_two_episodes()
+        before = len(self.writes("/sync/update_episode"))
+        self.sign_in_as("other@example.com")
+        self.assertFalse(self.mpv_running())
+        self.assertEqual(bridge.load_playback(), {})
+        run_bridge("player")
+        self.assertEqual(self.writes("/sync/update_episode")[before:], [])
+
+    def test_the_same_account_signing_in_again_keeps_its_places(self):
+        self.unsent_in_two_episodes()
+        self.sign_in_as("me@example.com")
+        self.assertTrue(self.mpv_running())
+        state = bridge.load_playback()
+        self.assertIn("unsentPush", state)
+        self.assertTrue(state.get("unsentPlaces"))
 
     def test_a_failed_pause_place_without_an_answer_waits_for_the_next_play(self):
         # Pocket Casts can't be asked: nothing is sent, and the place is
@@ -5597,7 +5733,8 @@ class BrokenStream(PlayerTestCase):
         def snap(**kw):
             base = {"eof-reached": True, "path": url, "time-pos": 1800.0, "duration": 3600.0,
                     "stream-pos": None, "stream-end": None, "file-local-options/end": "none",
-                    "user-data/legato": watching, "seekable": True}
+                    "user-data/legato": watching, "seekable": True,
+                    "mpv-version": "mpv 0.41.0", "ffmpeg-version": "n9.0"}
             base.update(kw)
             return base
         def state(size=None, duration=None, listed=None):
@@ -5622,6 +5759,10 @@ class BrokenStream(PlayerTestCase):
         # 2. No such line and the host gave a size: the end, whatever mpv's
         #    estimates say (an M4A's index left unread, a misread MP3, an outro).
         self.assertFalse(bridge.stream_broke(snap(**{"stream-end": 100_000_000, "stream-pos": 40_000_000}), {}))
+        #    Unless mpv's version can't be read: no self-check verdict can be
+        #    matched then, so the length judges (strict review 22, L2).
+        self.assertTrue(bridge.stream_broke(snap(**{"stream-end": 100_000_000, "stream-pos": 40_000_000,
+                                                    "mpv-version": None}), {}))
         self.assertFalse(bridge.stream_broke(snap(**{"time-pos": 23.0, "duration": 18.4}), state(size=1_000_000, listed=60)))
         self.assertFalse(bridge.stream_broke(snap(**{"stream-end": 5000, "time-pos": 0.0, "file-local-options/end": "-20"}),
                                              state(listed=60)))
@@ -6217,25 +6358,57 @@ ShellRoot {
 }
 """
 
-    def test_a_sleep_guard_that_never_starts_is_counted_and_said(self):
+    def run_guard_block(self, shell_text, command):
+        """Service.qml's guard block, `command` its guard, in `shell_text`'s
+        shell on the real Quickshell: what it printed."""
         quickshell = shutil.which("quickshell")
         if not quickshell:
             self.skipTest("no quickshell")
         here = pathlib.Path(__file__).resolve().parent
         service = (here.parent / "Service.qml").read_text()
         block = service[service.index("  // ---- Before sleep."):service.index("  function unloadPlayer()")]
-        command = 'readonly property var sleepGuardCommand: python === "" ? [] : Model.sleepGuardCommand(python, bridge)'
-        self.assertEqual(block.count(command), 1)
-        block = block.replace(command, 'readonly property var sleepGuardCommand: ["/nonexistent/legato-guard-probe"]')
-        with tempfile.TemporaryDirectory(prefix="legato-qs-") as tmp:
+        line = 'readonly property var sleepGuardCommand: python === "" ? [] : Model.sleepGuardCommand(python, bridge)'
+        self.assertEqual(block.count(line), 1)
+        block = block.replace(line, "readonly property var sleepGuardCommand: " + json.dumps(command))
+        with tempfile.TemporaryDirectory(prefix="legato-qs-", dir=short_temp_dir()) as tmp:
             shell = pathlib.Path(tmp) / "shell"
             shell.mkdir()
-            (shell / "shell.qml").write_text(self.SHELL % block)
+            (shell / "shell.qml").write_text(shell_text.replace("%BLOCK%", block))
             env = {"PATH": "/usr/bin", "HOME": tmp, "XDG_RUNTIME_DIR": tmp, "XDG_CACHE_HOME": tmp + "/cache",
                    "XDG_STATE_HOME": tmp + "/state", "XDG_DATA_HOME": tmp + "/data", "XDG_CONFIG_HOME": tmp + "/config",
                    "QT_QPA_PLATFORM": "offscreen", "QT_QPA_PLATFORMTHEME": ""}
             done = subprocess.run([quickshell, "-p", str(shell)], env=env, capture_output=True, text=True, timeout=30)
         out = done.stdout + done.stderr
+        for pid in re.findall(r"GUARD PID (\d+)", out):  # (none should outlive the shell: setpriv --pdeathsig)
+            try:
+                os.kill(int(pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        return out
+
+    def test_a_sleep_guard_killed_by_someone_else_is_counted_and_comes_back(self):
+        # Strict review 22 (fit F2): a SIGTERM from outside (a kill of
+        # systemd-inhibit) was taken for Legato's own stop: not counted, no
+        # restart, pause before sleep off for the rest of the episode.
+        shell = self.SHELL.replace("%s", "%BLOCK%").replace(
+            "    Component.onCompleted: guardRetryBaseMs = 50", """    Component.onCompleted: { guardRetryBaseMs = 50; startWatchdogMs = 3000 }
+    property var firstPid: null
+    Process { id: killer; command: ["/usr/bin/kill", "-TERM", String(root.firstPid)] }
+    Connections {
+      target: sleepGuard
+      function onStarted() { console.warn("GUARD PID " + sleepGuard.processId) }
+    }
+    Timer {
+      interval: 800; running: true
+      onTriggered: { root.firstPid = sleepGuard.processId; killer.running = true }
+    }""").replace("interval: 6000; running: true", "interval: 2500; running: true").replace(
+            'console.warn("RESULT failures=" + root._guardFailures + " reports=" + root.reports)',
+            'console.warn("RESULT failures=" + root._guardFailures + " again=" + (sleepGuard.processId !== null && sleepGuard.processId !== root.firstPid))')
+        out = self.run_guard_block(shell, ["/usr/bin/setpriv", "--pdeathsig", "KILL", "/usr/bin/sleep", "30"])
+        self.assertIn("RESULT failures=1 again=true", out, out[-2000:])
+
+    def test_a_sleep_guard_that_never_starts_is_counted_and_said(self):
+        out = self.run_guard_block(self.SHELL.replace("%s", "%BLOCK%"), ["/nonexistent/legato-guard-probe"])
         result = re.search(r"RESULT failures=(\d+) reports=(\d+)", out)
         self.assertIsNotNone(result, out[-2000:])
         # Five tries (waits of 50 ms doubling, 400 ms each to be judged), then

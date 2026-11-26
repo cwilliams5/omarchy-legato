@@ -158,6 +158,16 @@ caught each mutant. By area:
   message down; Play at an end staying ended meanwhile; a seek leaving
   older polls fresh; the volume unclamped; the chip's wheel down raising
   it).
+- **Round 22**: another account's sign-in keeping the last one's playback,
+  or the same account's losing its places, or any uuid taken for the same
+  account; an empty show list read as following nothing, or everything; a
+  mark that sent nothing counted as told; unread versions trusted by the
+  self-check; the test file's bridge run with the real home; and the QML
+  ones (someone else's SIGTERM taken for a stop, or a stop while a guard
+  runs not owed; a refused socket never retried; Enter behind a page, or
+  Ctrl/Super plus a letter, acting; a stepper past its top; the choice not
+  wrapping; the poll dropping `--no-autoplay`). Run with `--confirm` from
+  this round on (a kill whose tests also fail unmutated is FLAKY).
 
 ## Results
 

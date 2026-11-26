@@ -828,7 +828,19 @@ Item {
   // false (one change, to false; its binding kept) and never true, so a
   // watchdog armed on `running` true never ran (strict review 21, fit F1).
   readonly property bool guardWanted: wantSleepGuard && !sleepGuardRestart.running && _guardFailures < guardMaxFailures
-  onGuardWantedChanged: if (guardWanted) guardStartWatchdog.restart()
+  // Legato's own stops: each fall of guardWanted while a guard runs (one
+  // started and not yet exited, `_guardsRunning`, counted from its own
+  // signals: a stop and a start in one tick may arrive in either order)
+  // is owed one signal-15 `exited`. A signal-15 exit with none owed is
+  // someone else's (a kill of systemd-inhibit): a failure, counted and
+  // retried, or pause before sleep stayed off for the rest of the episode
+  // (strict review 22, fit F2).
+  property int _guardsRunning: 0
+  property int _guardStops: 0
+  onGuardWantedChanged: {
+    if (guardWanted) guardStartWatchdog.restart()
+    else if (_guardsRunning > 0) _guardStops++
+  }
 
   Process {
     id: sleepGuard
@@ -837,13 +849,19 @@ Item {
     environment: root.bridgeEnvironment
     running: root.guardWanted
     stdout: StdioCollector { id: sleepGuardOut; waitForEnd: true }
+    onStarted: root._guardsRunning++
     onExited: function(exitCode, exitStatus) {
-      // Stopped (no episode loaded, pause before sleep off): Quickshell still
-      // sends `exited`, signal 15, a moment after the stop, even after a new
-      // guard was asked for in the meantime (probed: it starts that one
-      // once the old has gone). Nothing to count or restart: the next
-      // episode's guard starts at once, not after the retry wait.
-      if (exitStatus !== 0 && exitCode === 15) return
+      root._guardsRunning = Math.max(0, root._guardsRunning - 1)
+      // Stopped by Legato (no episode loaded, pause before sleep off):
+      // Quickshell still sends `exited`, signal 15, a moment after the stop,
+      // even after a new guard was asked for in the meantime (probed: it
+      // starts that one once the old has gone). Nothing to count or
+      // restart: the next episode's guard starts at once, not after the
+      // retry wait. Signal 15 from anyone else falls through: a failure.
+      if (exitStatus !== 0 && exitCode === 15 && root._guardStops > 0) {
+        root._guardStops--
+        return
+      }
       // It exits once it has handled a sleep: read the player again, and
       // start a fresh guard a moment later. The restart timer first:
       // Quickshell keeps `running`'s binding through an exit, and a change
