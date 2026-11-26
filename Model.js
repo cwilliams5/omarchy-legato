@@ -163,7 +163,9 @@ function fileUrl(path) {
   return "file://" + String(path).split("/").map(encodeURIComponent).join("/")
 }
 
-// Wheel deltas to steps, as Omarchy's Util.wheelSteps: one event at most one
+// Wheel deltas to steps, as Omarchy's Util.wheelSteps (copied from it: MIT,
+// Copyright (c) David Heinemeier Hansson; the license in full is in
+// tests/qml/imports/qs/Ui/PanelKeyCatcher.qml): one event at most one
 // notch (some mice report far more than 120 a notch), a touchpad's small
 // deltas added up, a change of direction starting over.
 function wheelSteps(accumulator, delta) {

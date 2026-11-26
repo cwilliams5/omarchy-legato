@@ -556,6 +556,13 @@ Item {
     check("loaded at its end, its row plays it again (a play you chose)",
           exactly("play " + lastItem.uuid + " --podcast " + lastItem.podcast).length === 1 && calls("resume").length === 0,
           calls("play").length + " " + calls("resume").length)
+    // Not ended while that Play is on its way (strict review 21, fit F3: a
+    // second press loaded it again, "Finished" showing under a pause glyph).
+    check("and not ended meanwhile", service.ended === false && service.isPlaying === true, service.ended + " " + service.isPlaying)
+    panel.activateRow(lastRow)
+    check("a second press meanwhile pauses, not a second load",
+          calls("play").length === 1 && calls("pause").length === 1, calls("play").length + " " + calls("pause").length)
+    answer("pause", { active: true, playing: false, position: 1, duration: 100, item: lastItem })
     answer("play", { active: false, playing: false, item: null })
     service.applyPlayer({ active: true, playing: false, ended: true, position: 100, duration: 100, item: lastItem })
     panel.openMenu(lastItem, 0, 0)

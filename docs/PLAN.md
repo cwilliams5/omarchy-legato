@@ -1751,6 +1751,62 @@ round 19's own `triedPushes`.
   (a moment of audio as the lid closes; it's paused right after the load);
   `refuse_loaded` runs outside the state lock in `cmd_mark` and `cmd_queue`.
 
+### SR, round 21 (2026-11-25)
+
+Safety: two criticals and a medium, each a second door into an older rule.
+Fit: one medium (a round 20 claim false on the real shell), lows.
+
+- [x] SR228 (critical, F2) A pause whose push failed was sent again blind,
+  within the 90 s, by Stop, Next, a switch, Pause again, a seek while
+  paused or the poll any mpv event brings, over a phone that had carried
+  on from Pocket Casts' older place (verified: 40 to 6). After a failed
+  push, a paused push reads the episode's record first and goes only
+  while Pocket Casts still has it where this machine left it
+  (`paused_push_stands`, `where_left`), the keeps' own check; no answer
+  or moved, nothing is sent, and the keeps carry the place. The test that
+  pinned the blind resend now asserts the ask before it. Considered and
+  left out (Cody had agreed to both halves): a failed push no longer
+  refreshing the "recent" clock. With the record check, it would be a
+  second guard on the same rule (its mutant equivalent), and it would
+  only hold back a place that's safe to send.
+- [x] SR229 (critical, F1) Play from a list ignored `recordSeen`: a show
+  you don't follow, an empty lookup, listed nowhere, started at 0 over the
+  phone's 25. `record_lost`, asked by both ways to play the last episode
+  again (`cmd_play`, `resume_last`).
+- [x] SR230 (medium, F3) A landed "played" mark didn't note a record, so
+  one empty lookup replayed a told end from 0, in progress, over "played";
+  Mark played or unplayed on the closed last episode the same. Both note
+  `recordSeen` now (`told_played`, `cmd_mark`). Assumed, as the fake
+  does: a mark (the same `/sync/update_episode` as a push) creates a
+  record for a show you don't follow, as a push was checked live to.
+- [x] SR231 (lows, L1-L3) A push that sent nothing (no show id) recorded
+  as landed by four callers; a 3xx from the API taken for success (a push
+  "landed", Up Next read as empty; the episode lookup still reads it as
+  empty); a wall clock stepped back read as fresh (a time in the future
+  is a gap now). The watcher's own stall clock (`os.time()`) is left.
+- [x] SR232 (medium, fit F1) Round 20's guard start watchdog never ran on
+  Quickshell 0.3.2: a Process that can't start reads `running` false
+  (one change, binding kept) and never true, and the watchdog was armed
+  on true. Armed and judged from `guardWanted` now; `RealQuickshell`
+  runs the guard block, sliced from Service.qml, on the real Quickshell
+  offscreen (0 failures counted on the old code, 5 and one notice on the
+  new); the stand-in's note says what it can't model, and a node check
+  keeps `running` out of the guard's judgment.
+- [x] SR233 (lows, fit F2-F4) A failed save's message wiped by another
+  setting's save (each setting's failure is kept until it saves:
+  `settingFailed`); Play at an end kept `ended` until the answer (a
+  second press loaded it twice); tests for what only mutants had shown:
+  the chip's wheel down, the volume clamp, a poll begun between a seek's
+  step and its send, a hybrid laptop whose NVIDIA GPU wires an empty
+  port. Nits: Service.qml's "no process" comment, tests/qml/v1_0's
+  README, Omarchy's MIT credit on `wheelSteps`, install.sh reads the
+  plugin list as JSON. README: the phone's late save (a known limit).
+- [ ] SR234 (left) The video window's named rules re-sent at each show and
+  load pile up on Hyprland 0.56 (re-made named rules append, Tracery's
+  finding); whether the newest `pin`, `size` and `move` still win was last
+  checked live on 2026-11-23. Check live with Cody before the release.
+  i18n (SR186) stays left.
+
 ## Testing
 
 - `tests/run` before every commit: all suites, about 23 minutes, nothing on
@@ -1949,6 +2005,19 @@ round 19's own `triedPushes`.
   copied key catcher. 431 Python + 47 node tests; 546 mutations, round
   20's 17 new or changed all killed. Round 21 next (round 20 had a
   critical).
+- 2026-11-25 (late night): round 21 (SR228-SR234): two safety criticals,
+  both second doors: a failed pause's place re-sent blind by Stop, Next,
+  a switch, Pause again, a seek or any event's poll (now only after the
+  record says Pocket Casts still has it where this machine left it), and
+  Play from a list ignoring `recordSeen` (`record_lost`, on both ways
+  back in); a landed mark notes a record; a push that sent nothing, a
+  redirect and a clock stepped back no longer read as landed or fresh.
+  Fit: round 20's guard watchdog never ran on the real Quickshell (keyed
+  on `guardWanted` now; `RealQuickshell` runs the block there); per-setting
+  save errors; Play at an end not ended meanwhile; tests for the
+  reviewer's surviving mutants. Cody: the commit author's address is
+  accepted. 444 Python + 47 node tests; 565 mutations, round 21's 24 new
+  or changed all killed. Round 22 next (round 21 had criticals).
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

@@ -270,6 +270,11 @@ devices.
   got through, as it would to your phone's, since the two can't be told
   apart. Rare; what played here since that send is lost, never your
   phone's place.
+- **Playing here within seconds of pausing the phone:** the Pocket Casts
+  apps sometimes send a pause's place a few seconds late (they keep a
+  minimum gap between saves), so Play here in those seconds can find the
+  older place, play on from it, and send over what the phone played. Give
+  it a few seconds.
 - **After an update, restart the shell** (`omarchy restart shell`, or log
   out and in). The shell keeps running the panel and background part it
   already loaded until it restarts, beside Legato's new helper. From 1.0,
@@ -463,8 +468,10 @@ which stay off; a key that isn't a setting is kept and named.
   phone. A place this computer couldn't send (the network was down) is
   sent once Pocket Casts can be reached, and is where the episode starts
   again meanwhile, even after the player closed or you moved on to another
-  episode, as long as nobody else has moved it since (within the hour);
-  anything your phone sent since wins. An episode that ends on a resume nobody checked yet (a
+  episode, as long as nobody else has moved it since (within the hour;
+  Legato reads Pocket Casts' place for it first, even for a pause, stop or
+  skip a moment after the send failed); anything your phone sent since
+  wins. An episode that ends on a resume nobody checked yet (a
   media key) asks Pocket Casts before it's marked played.
 - **Before sleep,** a small guard holds a logind sleep delay while an
   episode is loaded. When the computer is about to sleep it pauses the

@@ -32,7 +32,11 @@ QtObject {
     }
     Processes.add(p)
     // A process that never comes up: no `started`, no `exited`, no process
-    // id (and `running` left alone, so a binding on it stays a binding).
+    // id. Quickshell's also reads `running` false then (one change, to
+    // false, its binding kept); this stand-in can't (a QML write would drop
+    // the binding), so it leaves `running` alone: nothing in Legato may judge
+    // a start from `running` (strict review 21, fit F1). tests/test_bridge.py
+    // RealQuickshell runs Service.qml's guard on the real one.
     if (Processes.failStarts) return
     alive = true
     if (typeof started === "function") started()

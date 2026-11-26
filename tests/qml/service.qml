@@ -294,10 +294,27 @@ Item {
     check("the re-read waits its turn", reads().length === 0 && bridgeCalls("settings set").length === 1,
           reads().length + " " + bridgeCalls("settings set").length)
     bridgeCalls("settings set").forEach(function(p) { answer(p, view({ autoplay: false, defaultTab: "podcasts", unloadAfterMinutes: 0, skipForward: 45, skipBack: 20 })) })
-    check("a later save that lands clears the message", shellService.settingsError === "", shellService.settingsError)
+    // Another setting's save landing leaves it said (strict review 21, fit
+    // F2: it wiped the message, the page flipping back silently).
+    check("another setting's save leaves the message", shellService.settingsError === "settings.json is read-only: not saved",
+          shellService.settingsError)
     check("then the re-read goes", reads().length === 1, reads().length)
     running().forEach(function(p) { var a = argsOf(p); if (a !== null && a[0] === "settings") answer(p, view({ autoplay: false, defaultTab: "podcasts", unloadAfterMinutes: 0, skipForward: 45, skipBack: 20 })) })
     running().forEach(function(p) { var a = argsOf(p); if (a !== null && a[0] === "settings") answer(p, view({ autoplay: false, defaultTab: "podcasts", unloadAfterMinutes: 0, skipForward: 45, skipBack: 20 })) })
+    shellService.changeSetting("skipBack", 30)
+    check("trying that setting again takes its message down", shellService.settingsError === "", shellService.settingsError)
+    bridgeCalls("settings set").forEach(function(p) { answer(p, view({ autoplay: false, defaultTab: "podcasts", unloadAfterMinutes: 0, skipForward: 45, skipBack: 30 })) })
+    check("and its save lands quietly", shellService.settingsError === "" && shellService.settings.skipBack === 30,
+          shellService.settingsError + " " + shellService.settings.skipBack)
+    // Its own save landing takes its message down: a second change of it
+    // waiting while the first failed.
+    shellService.changeSetting("skipBack", 31)
+    shellService.changeSetting("skipBack", 32)
+    bridgeCalls("settings set").forEach(function(p) { top.refuse(p, "settings.json is read-only: not saved") })
+    check("(the first failed)", shellService.settingsError === "settings.json is read-only: not saved", shellService.settingsError)
+    bridgeCalls("settings set").forEach(function(p) { answer(p, view({ autoplay: false, defaultTab: "podcasts", unloadAfterMinutes: 0, skipForward: 45, skipBack: 32 })) })
+    check("the same setting saved since takes its message down", shellService.settingsError === "", shellService.settingsError)
+    running().forEach(function(p) { var a = argsOf(p); if (a !== null && a[0] === "settings") answer(p, view({ autoplay: false, defaultTab: "podcasts", unloadAfterMinutes: 0, skipForward: 45, skipBack: 32 })) })
   }
 
   // Strict review 16 (L7, L3): what a copy starts, and when it wakes.

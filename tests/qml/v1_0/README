@@ -1,4 +1,6 @@
 Legato 1.0.2's Service.qml and Model.js, exactly as released (git show ce22e65:...),
 for tests/qml/service.qml: Omarchy keeps this service running through the update to 1.1
-(its manifest said keepLoaded), under the 1.1 panel, until the shell restarts.
+(its manifest said keepLoaded) until the shell restarts. On Quickshell 0.3.2 it runs under
+1.0's own panel (compiled QML is kept through a reload); tests/qml/service.qml runs it under
+the 1.1 panel, as a shell that cleared its component cache on a reload would.
 Never edit these: they stand for what users have installed.

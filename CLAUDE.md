@@ -14,9 +14,11 @@ Cody's work setup.
 
 Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
-(docs/PLAN.md phases H and SR: rounds 1-20 fixed; round 19 was the first
+(docs/PLAN.md phases H and SR: rounds 1-21 fixed; round 19 was the first
 with no critical or high, but round 20 found one in round 19's own fix
-(withdrawn); round 21 next). Cody, 2026-11-24: SR86 (settings in Legato's own file)
+(withdrawn) and round 21 two more through older doors; round 22 next).
+Cody, 2026-11-25: commits carry his personal address as author, accepted
+(1.0.x's are public that way). Cody, 2026-11-24: SR86 (settings in Legato's own file)
 and SR63 (one live service on a replacement bar) were folded into 1.1.0
 before round 10, and the review loop runs for as long as rounds keep
 finding critical or high issues (stop: a round with none, and every
@@ -151,9 +153,15 @@ docs/PLAN.md         what's left to build
 
 1. **Never push a position this machine didn't just produce.** A paused
    episode is pushed (stop, next, switching episodes, idle unload, a seek
-   or skip while paused: `sync_now` without `force`, `save_outgoing`) only
-   if it moved since its last push *and* that push was under
-   `RECHECK_AFTER` (90 s) ago; later, the next resume asks first. Nothing
+   or skip while paused: `sync_now` without `force`, `save_outgoing`; the
+   poll an mpv event brings) only if it moved since its last push *and*
+   that push was under `RECHECK_AFTER` (90 s) ago; later, the next resume
+   asks first. After a push that failed (`unsentPush`), not even then
+   without asking: the episode's record is read, and the push goes only
+   while Pocket Casts still has it where this machine left it
+   (`paused_push_stands`, `where_left`, as the keeps below; round 21, F2: a
+   failed pause's place went out blind with Stop, Next, a switch, Pause
+   again, a seek or any event's poll, over a phone that carried on). Nothing
    is pushed while a resume is unconfirmed (Pocket Casts couldn't be
    asked: `checkServer` set while playing), not even on pause. A forced
    push (a pause or a skip while playing, the sleep guard: `sync_now` with
@@ -163,13 +171,16 @@ docs/PLAN.md         what's left to build
    last push under `RECHECK_AFTER` ago (not after an unguarded sleep). "Ago"
    is `sync_age`: any suspend since the last push or answer, or during the
    call that recorded it (`lastSyncSleep`, the call's own suspend clock at
-   its start), counts as a gap of `RECHECK_AFTER` however short the sleep;
+   its start), counts as a gap of `RECHECK_AFTER` however short the sleep,
+   and so does a time in the future (the wall clock stepped back; round 21);
    a play whose call slept loads paused (`load_into_mpv`), and Play's
    resume doesn't unpause after one. After
    a long stall the position is `unconfirmed` until Pocket Casts answers.
    An episode that ended here is never pushed as in progress (only
    `play_again` reopens it; a drag back while paused, and the poll it
-   brings, push nothing). Only the file playback.json names is ever pushed,
+   brings, push nothing). A push that sent nothing (`push_position`
+   False: no show id) and a redirect from the API are never a push that
+   landed (round 21). Only the file playback.json names is ever pushed,
    reopened or judged at its end (`sync_now`, `cmd_seek` and `resume_loaded`
    check mpv's `path`; Play on another file starts over through
    `resume_last`): another program opening a file through mpv-mpris, or a
@@ -206,8 +217,10 @@ docs/PLAN.md         what's left to build
    `triedPushes`, which took such a place for this machine's own, let a
    phone that stopped near one be overwritten, and round 20 withdrew it).
    A "played" mark that lands is where Pocket Casts has the loaded
-   episode (`told_played`), and an end handled here drops any unsent
-   place from before it (round 20). It holds only while
+   episode (`told_played`), and a record of it (`recordSeen`, as a push
+   that lands; Mark played or unplayed on the closed last episode too:
+   round 21, F3), and an end handled here drops any unsent place from
+   before it (round 20). It holds only while
    `lastSyncPos` is still its `left` (`unsent_push`): a resume check that
    takes another device's place makes it history at once (round 16, C1: a
    reload or a switch after one pushed the old place over the phone).
@@ -409,7 +422,7 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   it: Play follows it there, a media key's resume is asked like any (the
   next check takes the phone's place); no answer: "try again", nothing
   pushed (round 17, F2; round 18, F1-F2: a skip back then Play, or a
-  watched end whose mark failed, pushed over the phone). Play with nothing loaded lets the record decide
+  watched end whose mark failed, pushed over the phone). Play with nothing loaded lets the record decide (a landed mark makes one, `recordSeen`)
   for an end told here (played: the next; reopened: from there). The
   resume check's switch never follows Up Next to an episode whose record
   says played (round 17, F1), and an end handled here isn't judged again
@@ -429,14 +442,19 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   empty answer, a redirect) for a show you follow (`record_expected`:
   every episode of one has a record, played or not; checked live
   2026-11-24, down to the oldest of 1906) or for an episode a record came
-  back for (`recordSeen`), or one Pocket Casts lists a place in elsewhere
+  back for, or a push or mark of it landed (`recordSeen`), or one Pocket Casts lists a place in elsewhere
   (`position_known_elsewhere`: Up Next's sync data or In Progress; an
   episode of a show you don't follow has a record once anyone played it,
   Legato's own push included) is no answer: the resume check says unverified,
   and `resolve_episode` refuses (`no_record`, "Pocket Casts didn't answer:
   try again") rather than start it from the show's public list at 0 and
   push that, on every path (Play from a list, a reload, following the
-  phone to another episode). Next and autoplay start from Up Next's sync
+  phone to another episode). `recordSeen` is the playing episode's
+  state, which `resolve_episode` doesn't see: the two ways to play it
+  again, Play with nothing loaded and Play from a list (`resume_last`,
+  `cmd_play`), each ask `record_lost` (a public-list item for it after a
+  record was seen is no answer; round 21, F1: Play from a list didn't).
+  Next and autoplay start from Up Next's sync
   data, or from the record when the reply leaves an episode's out
   (`next_in_up_next`). Episodes of shows you never followed, played by
   nobody, have no record and play from the public list as before. An
@@ -729,9 +747,12 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   `resolve_episode`); Up Next's sync data leaves `playedUpTo` out for
   episodes not started, so where Next and autoplay start comes from the
   record whenever the entry has no position (`next_in_up_next`).
-- **A Process that fails to start sends no `exited`** (Quickshell): each
-  bridge call has a start watchdog (`startWatchdogMs`, 10 s) that answers
-  it as failed, or the poll it was (`playerLoading`) stayed stuck for good.
+- **A Process that fails to start sends no `exited`** (Quickshell): no
+  `started` either, `processId` stays null, and `running` changes once, to
+  false (never true), its binding kept (probed in round 21, a command that
+  doesn't exist). Each bridge call has a start watchdog (`startWatchdogMs`,
+  10 s, keyed on `started`) that answers it as failed, or the poll it was
+  (`playerLoading`) stayed stuck for good.
 - **A Process's exit keeps its `running:` binding** (Quickshell writes
   `running` from C++; checked by the round 13 fit reviewer with a throwaway
   instance): the binding starts it again only when it re-evaluates. The
@@ -746,10 +767,17 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   failure (a stale one arriving after the next guard was asked for once
   counted against it). The test stand-in models the stop (`alive`;
   `finish()` never writes `running`; a stop sends `exited`, later; a
-  start that never comes up sends nothing and has no `processId`), not a
+  start that never comes up sends nothing and has no `processId`, but
+  its `running` stays true: a QML write would drop the binding), not a
   real Process starting again when its binding re-evaluates after an
-  exit. A guard that never starts sends no `exited` at all: its start
-  watchdog (`processId` still null) counts it as a failure (round 20).
+  exit. So nothing may judge a start from `running` (tests/model.test.cjs
+  checks the guard). A guard that never starts sends no `exited` at all:
+  its start watchdog, armed each time a guard is asked for
+  (`guardWanted`), counts it as a failure while `processId` is null
+  (round 20; round 21's fit reviewer found round 20's, armed on `running`
+  true, never ran on the real shell, and `tests/test_bridge.py`
+  RealQuickshell now runs the guard block, sliced from Service.qml, on
+  the real Quickshell offscreen).
 - **Omarchy's `ShellIpc`** (`qs.Commons`) is an IpcHandler the shell also
   answers over its own socket (`IpcRegistry`): `omarchy-shell <target>
   <fn>` and an `{ ipc = ... }` binding start no `qs ipc` client (about 5 ms
@@ -933,7 +961,9 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   pages laid out offscreen with stand-ins for Omarchy's Commons and Ui (they
   read about 20 px short of the real pages), and `tests/qml/panel.qml`: the
   real Panel.qml and Service.qml with stand-ins for Quickshell's processes,
-  answering the bridge calls the service starts; `tests/qml/service.qml`:
+  answering the bridge calls the service starts (and `RealQuickshell`:
+  Service.qml's sleep-guard block on the real Quickshell, offscreen, in a
+  private runtime folder, for what the stand-ins can't model); `tests/qml/service.qml`:
   the shell's service dormant until claimed (the bar handed over after
   loading, as Omarchy does), dormant again when its panel goes, a
   replacement bar's panel running its own, settings from settings.json,

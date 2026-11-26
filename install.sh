@@ -30,7 +30,8 @@ fi
 
 if command -v omarchy-shell >/dev/null 2>&1 && omarchy-shell shell ping >/dev/null 2>&1; then
   omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
-  if ! omarchy plugin list --json 2>/dev/null | grep -q "\"$id\"[^}]*\"enabled\": *true"; then
+  if ! omarchy plugin list --json 2>/dev/null | /usr/bin/python3 -I -c 'import json, sys
+sys.exit(0 if any(p.get("id") == sys.argv[1] and p.get("enabled") is True for p in json.load(sys.stdin)) else 1)' "$id" 2>/dev/null; then
     omarchy plugin enable "$id" --section "${1:-right}" || true
   fi
 fi

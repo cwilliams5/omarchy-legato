@@ -214,7 +214,13 @@ test("errors from keybinds go out as notifications; the sleep guard backs off; t
   const bar = fs.readFileSync(path.join(ROOT, "BarWidget.qml"), "utf8")
   assert.match(service, /function cycleSpeed\(\) \{\s*call\(\["speed", "cycle"\], function\(result\) \{\s*if \(!result\.ok\) \{ root\.reportError/)
   assert.match(service, /root\.call\(\["volume", String\(pending\)\], function\(result\)[\s\S]{0,200}root\.reportError\(result\.error\)/)
-  assert.match(service, /running: root\.wantSleepGuard && !sleepGuardRestart\.running && root\._guardFailures < root\.guardMaxFailures/)
+  assert.match(service, /readonly property bool guardWanted: wantSleepGuard && !sleepGuardRestart\.running && _guardFailures < guardMaxFailures/)
+  assert.match(service, /running: root\.guardWanted\n/)
+  // Nothing judges a guard's start from its Process's `running`: on Quickshell
+  // one that can't start reads false and never true (strict review 21, fit
+  // F1), which the Process stand-in can't model.
+  const guard = service.slice(service.indexOf("// ---- Before sleep."), service.indexOf("function unloadPlayer()"))
+  assert.doesNotMatch(guard, /sleepGuard\.running|onRunningChanged/)
   assert.match(service, /if \(result && result\.ok === true && result\.data && result\.data\.sleeping === true\) \{\s*root\._guardFailures = 0[\s\S]{0,80}root\.settle\(\)/)
   assert.match(bar, /onScrollingChanged: if \(!scrolling\) x = 0/)
   assert.match(bar, /running: labelItem\.scrolling/)

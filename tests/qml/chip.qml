@@ -102,7 +102,8 @@ Item {
       var steps = [top.handOver, top.awake, top.label, top.clicks, top.wheel, top.afterWheel,
                    top.sleepGuardSwitch, top.guardBackOff, top.socketRetries, top.staleStatus,
                    top.noticesOnce, top.quietReloads, top.chipShapes, top.idleWheel, top.idleWheelCheck, top.marquee,
-                   top.touchpad, top.touchpadCheck, top.liveStatus, top.liveStatusCheck, top.guardBack,
+                   top.touchpad, top.touchpadCheck, top.wheelDown, top.wheelDownCheck, top.volumeClamp, top.volumeClampCheck,
+                   top.seekStale, top.seekStaleCheck, top.liveStatus, top.liveStatusCheck, top.guardBack,
                    top.guardRestart, top.guardRestartCheck, top.mpvEvents, top.pauseEvent, top.pauseEventPoll, top.pauseEventRetry,
                    top.retryTwoEarly, top.retryTwo, top.retryThreeEarly, top.retryThree, top.noFourthRetry,
                    top.dormantNotRetried, top.dormantNotRetriedCheck,
@@ -317,6 +318,51 @@ Item {
     var vol = volumes()
     check("a touchpad swipe of one notch: one step", vol.length === 1 && argsOf(vol[0])[1] === "55",
           vol.map(function(p) { return argsOf(p).join(" ") }).join("; "))
+    answerAll(top.answers)
+  }
+
+  // Strict review 21 (fit F4): what only mutants had shown untested.
+  // The wheel down lowers the volume (every wheel test scrolled up).
+  function wheelDown() {
+    answerAll(top.answers)
+    shared.applyPlayer(top.playing)
+    button.wheelMoved(-120)  // (a change of direction starts the count over)
+  }
+  function wheelDownCheck() {
+    if (Date.now() - top.stepStarted < 300) return false
+    var vol = volumes()
+    check("the wheel down: one step down", vol.length === 1 && argsOf(vol[0])[1] === "45",
+          vol.map(function(p) { return argsOf(p).join(" ") }).join("; "))
+    answerAll(top.answers)
+  }
+  // The panel shows no volume past 100 (the bridge clamps too).
+  function volumeClamp() {
+    shared.applyPlayer(top.playing)
+    shared.setVolume(130)
+    check("the volume shown stops at 100", shared.volume === 100, shared.volume)
+  }
+  function volumeClampCheck() {
+    if (Date.now() - top.stepStarted < 300) return false
+    var vol = volumes()
+    check("and 100 is what's sent", vol.length === 1 && argsOf(vol[0])[1] === "100",
+          vol.map(function(p) { return argsOf(p).join(" ") }).join("; "))
+    answerAll(top.answers)
+  }
+  // A poll begun before a seek is sent doesn't put the old place back: one
+  // that starts in the 300 ms between the step and its send (an mpv event)
+  // reads mpv still at the old place.
+  function seekStale() {
+    answerAll(top.answers)
+    shared.applyPlayer(top.playing)  // at 100
+    shared.seek(500)
+    shared.refreshPlayer()           // a poll on its way, with the old place
+  }
+  function seekStaleCheck() {
+    if (Date.now() - top.stepStarted < 500) return false
+    check("(the seek went)", calls("seek --episode " + top.episode.uuid + " 500").length === 1,
+          running().map(function(p) { return (argsOf(p) || []).join(" ") }).join("; "))
+    calls("player").forEach(function(p) { p.finish(0, JSON.stringify({ ok: true, data: top.playing }), "") })
+    check("a poll begun before a seek doesn't jump back", Math.round(shared.player.position) === 500, shared.player.position)
     answerAll(top.answers)
   }
 

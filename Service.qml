@@ -690,7 +690,10 @@ Item {
   //      due). Everything else the panel needs to know (a pause or resume,
   //      from here or a media key; a seek; the end of an episode; the player
   //      quitting) arrives as an mpv event on `playerEvents` and triggers one
-  //      poll. Paused or idle, no process is started at all.
+  //      poll. Paused or idle, no timer repeats: the idle unload waits once
+  //      (its stop and the poll after it are its two processes), and while
+  //      an episode is loaded the sleep guard waits on D-Bus (a fresh one 3 s
+  //      after each wake).
   Timer {
     id: pollTimer
     objectName: "pollTimer"
@@ -817,17 +820,23 @@ Item {
   property int guardRetryBaseMs: 3000
   readonly property int guardRetryMs: guardRetryBaseMs * Math.pow(2, _guardFailures)
   onWantSleepGuardChanged: _guardFailures = 0
+  // A guard is asked for now: wanted, not waiting out a retry, not given up.
+  // One that never starts (a fork refused) sends no `exited`: the watchdog,
+  // armed each time one is asked for, counts it as a failure, as a crash
+  // would be. Armed and judged from this, never from the Process's
+  // `running`: on Quickshell a Process that can't start reads `running`
+  // false (one change, to false; its binding kept) and never true, so a
+  // watchdog armed on `running` true never ran (strict review 21, fit F1).
+  readonly property bool guardWanted: wantSleepGuard && !sleepGuardRestart.running && _guardFailures < guardMaxFailures
+  onGuardWantedChanged: if (guardWanted) guardStartWatchdog.restart()
 
   Process {
     id: sleepGuard
     command: root.sleepGuardCommand
     clearEnvironment: true
     environment: root.bridgeEnvironment
-    running: root.wantSleepGuard && !sleepGuardRestart.running && root._guardFailures < root.guardMaxFailures
+    running: root.guardWanted
     stdout: StdioCollector { id: sleepGuardOut; waitForEnd: true }
-    // One that never starts (a fork refused) sends no `exited`: the watchdog
-    // counts it as a failure, as a crash would be (strict review 20).
-    onRunningChanged: if (running) guardStartWatchdog.restart()
     onExited: function(exitCode, exitStatus) {
       // Stopped (no episode loaded, pause before sleep off): Quickshell still
       // sends `exited`, signal 15, a moment after the stop, even after a new
@@ -865,8 +874,9 @@ Item {
     interval: root.startWatchdogMs
     repeat: false
     onTriggered: {
-      // (Started: it has a process id. Stopped meanwhile: nothing to count.)
-      if (sleepGuard.processId || !sleepGuard.running || !root.wantSleepGuard) return
+      // (Started: it has a process id. No longer asked for meanwhile, stopped
+      // or waiting out a retry after an exit counted there: nothing to count.)
+      if (sleepGuard.processId || !root.guardWanted) return
       sleepGuardRestart.restart()
       root._guardFailures++
       if (root._guardFailures === root.guardMaxFailures) root.reportError("Couldn't set up pause-before-sleep")
@@ -1190,22 +1200,38 @@ Item {
     for (var name in settings) next[name] = settings[name]
     next[key] = value
     settings = next
-    settingsError = ""
+    settingFailed(key, "")  // (tried again)
     var change = ++_settingsChanges
     write("setting " + key, ["settings", "set", "--", String(key), JSON.stringify(value)], function(result) {
       if (!result.ok) {
         // Said even with a later change on its way (strict review 19: the
         // page flipped back, silently, while the file kept the old value).
-        root.settingsError = result.error || "Not saved"
+        root.settingFailed(key, result.error || "Not saved")
         root.rereadSettings()
         return
       }
-      if (change === root._settingsChanges) {  // (a later change answers)
-        root.settingsError = ""  // (an earlier failure's message goes once this one saved)
+      root.settingFailed(key, "")  // (saved now)
+      if (change === root._settingsChanges)  // (a later change answers)
         root.applySettings(result.data)
-      }
     })
   }
+
+  // Each setting whose last save failed, with what was said: the message
+  // stays until that setting saves (or the page opens again), not until
+  // any other does (strict review 21, fit F2: another setting's save wiped
+  // it, and the page flipped back, silently).
+  property var _settingsFailed: ({})
+  function settingFailed(key, text) {
+    var failed = {}
+    var said = ""
+    for (var name in _settingsFailed) {
+      if (name !== key) { failed[name] = _settingsFailed[name]; said = failed[name] }
+    }
+    if (text) { failed[key] = text; said = text }
+    _settingsFailed = failed
+    settingsError = said
+  }
+  onSettingsErrorChanged: if (settingsError === "") _settingsFailed = ({})  // (the page cleared it)
 
   function setLocalFeeds(on) {
     optimistic({ localFeeds: !!on })
@@ -1248,7 +1274,10 @@ Item {
     var args = ["play", item.uuid]
     if (item.podcast) args.push("--podcast", item.podcast)
     if (fromStart) args.push("--from-start")
-    optimistic({ active: true, playing: true, item: item, position: fromStart ? 0 : (item.playedUpTo || 0), duration: item.duration || 0 })
+    // (Not ended any more: a second press meanwhile pauses rather than load
+    // it again, and the line doesn't say "Finished" under a pause glyph:
+    // strict review 21, fit F3.)
+    optimistic({ active: true, playing: true, ended: false, item: item, position: fromStart ? 0 : (item.playedUpTo || 0), duration: item.duration || 0 })
     localPosition = Number(player.position) || 0
     action(args, "", function() {
       root.upNextLoadedAt = 0

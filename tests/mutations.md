@@ -143,7 +143,21 @@ caught each mutant. By area:
   old state file's tried pushes kept; a HOME with a control character left
   out (node); and the QML ones (a guard that never starts, or killed by
   another signal, uncounted; the re-read after a failed save beside the
-  next write; an earlier failure's message kept after a later save).
+  next write; an earlier failure's message kept after a later save, since
+  turned round in round 21: a failed setting's message kept after it
+  saves).
+- **Round 21**: a failed pause's place sent blind (the check skipped, no
+  answer taken for yes, a move elsewhere ignored, or the poll's or
+  `sync_now`'s call to it dropped); Play from a list taking the public
+  list's 0 for a known episode; a landed mark, at an end or on the closed
+  last episode, noting no record; a push that sent nothing taken for one
+  that landed; a redirect taken for success; a clock stepped back read as
+  fresh; any connector status counted as driving a display; and the QML
+  ones (the guard's watchdog judged from `running`, or never armed: on
+  the real Quickshell, `RealQuickshell`; another setting's save taking a
+  message down; Play at an end staying ended meanwhile; a seek leaving
+  older polls fresh; the volume unclamped; the chip's wheel down raising
+  it).
 
 ## Results
 
