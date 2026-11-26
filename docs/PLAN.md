@@ -2209,6 +2209,35 @@ mediums, three lows. The reviewers' reports are kept outside the repo.
   (Omarchy's own sender takes a glyph); README's How it works and Known
   limits read as review notes (a rewrite for users before the release).
 
+### Before 1.1.0's verification: predicting the marketplace reviewer (2026-11-26)
+
+An agent read the marketplace's rules, its reviewer's recent comments and
+the delta since the verified 1.0.2, and predicted one Medium and five
+Lows. Cody: fix the Medium and three of the Lows first.
+
+- [x] PR1 (likely Medium, reproduced) A sign-in refresh holds the call's
+  deadline, and only a per-read timeout bounded it: a server answering a
+  byte at a time held a poll, and its locks, for as long as it dripped
+  (31.5 s for a 30 s drip in the test; unbounded in general; the reviewer
+  blocked this pattern twice that day). Every request now has a hard
+  end-to-end limit (`RequestLimit`: its sockets, handed over as they
+  connect, before TLS, are shut down at 2 x its timeout). Tests: a
+  dripping refresh and a dripping plain request, each cut in about 2 s.
+- [x] PR2 (Low) The self-check's 127.0.0.1 test host gave its one good
+  reply to whoever asked first (any local account could make the check
+  fail): it serves only a random path its private player is told over
+  IPC; anything else is a 404 that changes nothing.
+- [x] PR3 (Low) Error notifications put their text, which can name an
+  episode, on command lines other accounts can read: the service sends it
+  on stdin, and the bridge gives notify-send (arguments only) "that
+  episode" for a title in curly quotes.
+- [x] PR4 (Low) README: the local-network IPv6 check doesn't cover a
+  DHCPv6-only network (/128 addresses) or other subnets behind the router.
+- [ ] PR5 (Lows, left) The video rules match the window's class, not mpv's
+  pid (any app claiming `legato-video` gets them; the pin rule was accepted
+  at 1.0.2); the feed proxy's per-connection threads and idle relays (as
+  in 1.0.2).
+
 ## Testing
 
 - `tests/run` before every commit: all suites, about 23 minutes, nothing on

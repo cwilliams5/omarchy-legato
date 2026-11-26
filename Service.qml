@@ -418,7 +418,10 @@ Item {
   // the panel's status line.
   function reportError(text) {
     flash(text, true)
-    if (!panelOpen || pagesOpen > 0) call(["notify", "--", String(text)], function(result) {})
+    // The text on stdin, not the command line (other accounts can read a
+    // process's arguments; a message can name an episode: the reviewer
+    // prediction before 1.1.0's verification).
+    if ((!panelOpen || pagesOpen > 0) && String(text) !== "") call(["notify"], function(result) {}, String(text))
   }
 
   // An episode whose audio never arrives (its server is down, say) must not

@@ -208,8 +208,10 @@ devices.
   that a feed can't point Legato at other machines on your network (by
   their private addresses, or by global IPv6 addresses in this computer's
   own network). Your router's own public IPv4 address can still be
-  reached, as from any web page. Episodes served from this computer itself
-  never play.
+  reached, as from any web page, and the IPv6 check knows your network only
+  from this computer's own address and its prefix: a network that hands out
+  single addresses (DHCPv6 only), or other subnets behind your router, isn't
+  covered. Episodes served from this computer itself never play.
 - **A cover isn't a video:** some feeds pack the episode's cover into the
   file as a video stream. Legato treats those episodes as audio.
 - **A feed that keeps only its newest episodes** drops older ones, and

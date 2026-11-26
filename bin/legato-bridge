@@ -652,10 +652,69 @@ def check_not_slept():
         raise ApiError("slept", "The computer slept during this call: nothing was sent")
 
 
+class RequestLimit:
+    """A request's hard end-to-end limit (http_raw): once it passes, every
+    socket the request opened is shut down, wherever the request waits
+    (connecting, the TLS handshake, the status line, the headers, the body),
+    so no server can hold a call open by answering a byte at a time inside
+    each read's own timeout. The one thing that bounds a sign-in refresh,
+    which holds the call's own deadline (refresh_tokens; strict review 27's
+    reviewer prediction: a dripping /user/token held a poll, and its locks,
+    for as long as it dripped)."""
+
+    _current = threading.local()
+
+    def __init__(self, seconds):
+        self.sockets = []
+        self.expired = False
+        self.lock = threading.Lock()
+        self.timer = threading.Timer(seconds, self.expire)
+        self.timer.daemon = True
+
+    def __enter__(self):
+        RequestLimit._current.limit = self
+        self.timer.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.timer.cancel()
+        RequestLimit._current.limit = None
+        return False
+
+    def expire(self):
+        with self.lock:
+            self.expired = True
+            for sock in self.sockets:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+    @classmethod
+    def track(cls, sock):
+        limit = getattr(cls._current, "limit", None)
+        if limit is not None:
+            with limit.lock:
+                limit.sockets.append(sock)
+                if limit.expired:
+                    sock.shutdown(socket.SHUT_RDWR)
+        return sock
+
+
+def limited_connection(*args, **kwargs):
+    """socket.create_connection, the socket handed to the request's limit as
+    soon as it connects (before any TLS handshake)."""
+    return RequestLimit.track(socket.create_connection(*args, **kwargs))
+
+
 class SleepAwareHTTPSConnection(http_client.HTTPSConnection):
     """Connected (and, for https, through the TLS handshake: where a suspend
     is most likely to catch a request), a call that slept meanwhile sends
     nothing."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = limited_connection
 
     def connect(self):
         super().connect()
@@ -663,6 +722,10 @@ class SleepAwareHTTPSConnection(http_client.HTTPSConnection):
 
 
 class SleepAwareHTTPConnection(http_client.HTTPConnection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = limited_connection
+
     def connect(self):
         super().connect()
         check_not_slept()
@@ -759,21 +822,28 @@ def http_raw(method, url, headers=None, data=None, timeout=None, limit=API_MAX_B
     for key, value in (headers or {}).items():
         req.add_header(key, value)
     deadline = time.monotonic() + 2 * timeout
-    try:
-        with opener().open(req, timeout=timeout) as resp:
-            return resp.status, read_bounded(resp, limit, resp.headers, deadline), dict(resp.headers)
-    except urllib.error.HTTPError as err:
+    with RequestLimit(2 * timeout) as hard:
         try:
-            body = read_bounded(err, min(limit, ERROR_MAX_BYTES), err.headers, deadline)
-        except (OSError, http_client.HTTPException):
-            body = b""
-        finally:
-            err.close()
-        return err.code, body, dict(err.headers or {})
-    except urllib.error.URLError as err:
-        raise ApiError("network", "Pocket Casts is unreachable: %s" % getattr(err, "reason", err))
-    except (TimeoutError, OSError, http_client.HTTPException) as err:
-        raise ApiError("network", "Pocket Casts request failed (%s)" % err)
+            with opener().open(req, timeout=timeout) as resp:
+                return resp.status, read_bounded(resp, limit, resp.headers, deadline), dict(resp.headers)
+        except urllib.error.HTTPError as err:
+            try:
+                body = read_bounded(err, min(limit, ERROR_MAX_BYTES), err.headers, deadline)
+            except (OSError, http_client.HTTPException):
+                body = b""
+            finally:
+                err.close()
+            if hard.expired:
+                raise ApiError("network", "Pocket Casts took too long to answer")
+            return err.code, body, dict(err.headers or {})
+        except urllib.error.URLError as err:
+            if hard.expired:
+                raise ApiError("network", "Pocket Casts took too long to answer")
+            raise ApiError("network", "Pocket Casts is unreachable: %s" % getattr(err, "reason", err))
+        except (TimeoutError, OSError, http_client.HTTPException) as err:
+            if hard.expired:
+                raise ApiError("network", "Pocket Casts took too long to answer")
+            raise ApiError("network", "Pocket Casts request failed (%s)" % err)
 
 
 @contextlib.contextmanager
@@ -1015,7 +1085,10 @@ def refresh_tokens(auth):
         auth.update(current)  # refresh the session as it is on disk now
         # The call's deadline waits until the answer is stored: one landing
         # between Pocket Casts' answer and the write would lose a rotated
-        # refresh token. TOKEN_TIMEOUT bounds the wait.
+        # refresh token. What bounds the wait is http_raw's hard limit: the
+        # request's sockets are shut down 2 x TOKEN_TIMEOUT after it began,
+        # however slowly the server answers (a per-read timeout alone let a
+        # server dripping a byte at a time hold it, and the locks, for good).
         with deadline_held():
             status, payload = post_json("/user/token", {"grantType": "refresh_token",
                                                         "refreshToken": auth.get("refresh_token", "")},
@@ -3409,6 +3482,47 @@ def make_check_wav(seconds=10, rate=16000):
     return header + b"\0" * (frames * 2)
 
 
+def check_host(blob, secret):
+    """The self-check's test host: the WAV, cut a third of the way in, to
+    the first request for `/<secret>.wav` (the path reaches only its private
+    player, over that player's IPC socket); an error page to any request
+    after (a reconnect gets one, as a seek's does from a host that's gone:
+    the watcher's third channel). Any other path gets a 404 and changes
+    nothing: on 127.0.0.1 any local account can connect, and one that took
+    the one good reply made the check fail (the reviewer prediction before
+    1.1.0's verification)."""
+    served = {"first": True}
+
+    class Host(http_server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            if self.path != "/%s.wav" % secret:
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                self.close_connection = True
+                return
+            if not served["first"]:
+                self.send_response(403)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                self.close_connection = True
+                return
+            served["first"] = False
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(len(blob)))
+            self.end_headers()
+            self.wfile.write(blob[:len(blob) // 3])
+            self.close_connection = True
+
+    Host.served = served
+    return Host
+
+
 def cmd_watchcheck(args):
     """The self-check behind stream_broke's trust in FFmpeg's silence: does
     the FFmpeg in this mpv still log what legato-watch.lua reads? A local
@@ -3427,30 +3541,8 @@ def cmd_watchcheck(args):
     # Stopped by a signal, it still ends its player and removes its folder.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))
     blob = make_check_wav()
-    served = {"first": True}
-
-    class Host(http_server.BaseHTTPRequestHandler):
-        def log_message(self, *a):
-            pass
-
-        def do_GET(self):
-            if not served["first"]:
-                # The reconnect gets an error page, as a seek's request does
-                # from a host that's gone (the watcher's third channel).
-                self.send_response(403)
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                self.close_connection = True
-                return
-            served["first"] = False
-            self.send_response(200)
-            self.send_header("Content-Type", "audio/wav")
-            self.send_header("Accept-Ranges", "bytes")
-            self.send_header("Content-Length", str(len(blob)))
-            self.end_headers()
-            self.wfile.write(blob[:len(blob) // 3])
-            self.close_connection = True
-
+    secret = secrets.token_hex(16)
+    Host = check_host(blob, secret)
     server = http_server.ThreadingHTTPServer(("127.0.0.1", 0), Host)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     seen, version = {}, ""
@@ -3484,7 +3576,7 @@ def cmd_watchcheck(args):
             if player:
                 with player:
                     version = player_versions(player)
-                    player.command("loadfile", "http://127.0.0.1:%d/check.wav" % server.server_address[1], "replace")
+                    player.command("loadfile", "http://127.0.0.1:%d/%s.wav" % (server.server_address[1], secret), "replace")
                     while time.monotonic() < deadline:
                         record = player.get("user-data/legato")
                         seen = (record or {}).get("seen") or {} if isinstance(record, dict) else {}
@@ -5370,19 +5462,29 @@ def cmd_notify(args):
     """A desktop notification (`notify-send`, which Omarchy's shell shows and
     keeps in its notification list): how the panel's errors reach you while
     it's closed. Omarchy's OSD takes no messages from a third-party plugin
-    (its shell answers such a summon with false). The text is one argument
-    after `--`, never parsed as an option, and capped."""
-    if not send_notification(args.text):
+    (its shell answers such a summon with false). The text comes on stdin
+    (the service sends it so: a process's arguments are readable by other
+    accounts), or as one argument after `--` (the 1.1 panel a shell keeps
+    running until it restarts), never parsed as an option, and capped."""
+    text = args.text
+    if text is None:
+        text = sys.stdin.buffer.read(NOTIFY_MAX * 4).decode("utf-8", "replace")
+    if not send_notification(text):
         raise ApiError("notify", "The notification couldn't be sent")
     out({"sent": True})
 
 
 def send_notification(text):
-    """notify-send with Legato's name; the text one argument after `--`."""
+    """notify-send with Legato's name; the text one argument after `--`.
+    notify-send takes its text only as an argument, so an episode's title (a
+    message names one in curly quotes) becomes "that episode" here: other
+    accounts can read a process's arguments (the reviewer prediction before
+    1.1.0's verification). The panel's own line still names it."""
     tool = trusted_tool("notify-send")
     if not tool:
         return False
-    text = " ".join(str(text or "").split())[:NOTIFY_MAX]
+    text = re.sub("\u201c[^\u201d]*\u201d", "that episode", str(text or ""))
+    text = " ".join(text.split())[:NOTIFY_MAX]
     # A notification's body is markup (links become clickable): an error
     # message from outside is shown as text, never as markup.
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -5868,7 +5970,7 @@ def build_parser():
     p = sub.add_parser("stats"); p.add_argument("value", nargs="?", choices=("on", "off", "clear"))
     p.set_defaults(fn=cmd_stats)
 
-    p = sub.add_parser("notify"); p.add_argument("text"); p.set_defaults(fn=cmd_notify)
+    p = sub.add_parser("notify"); p.add_argument("text", nargs="?"); p.set_defaults(fn=cmd_notify)
 
     p = sub.add_parser("watchcheck"); p.set_defaults(fn=cmd_watchcheck)
 

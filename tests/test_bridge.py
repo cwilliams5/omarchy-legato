@@ -682,6 +682,84 @@ class StateFiles(TempHome):
                 bridge.build_parser().parse_args(["login", "--password", "x"])
 
 
+class DrippingServer:
+    """127.0.0.1 server answering every request a byte at a time, each byte
+    well inside the socket's timeout (the reviewer prediction's fixture)."""
+
+    def __init__(self, seconds, gap=0.25):
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(8)
+        self.port = self.sock.getsockname()[1]
+        self.gap = gap
+        self.reply = b"HTTP/1.1 200 OK\r\nX-Pad: " + b"a" * int(seconds / gap) + b"\r\nContent-Length: 2\r\n\r\n{}"
+        threading.Thread(target=self.serve, daemon=True).start()
+
+    def serve(self):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self.one, args=(conn,), daemon=True).start()
+
+    def one(self, conn):
+        try:
+            conn.recv(65536)
+            for byte in self.reply:
+                conn.send(bytes([byte]))
+                time.sleep(self.gap)
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+    def close(self):
+        self.sock.close()
+
+
+class SlowServers(TempHome):
+    """A server answering a byte at a time can't hold a call open: every
+    request has a hard end-to-end limit that shuts its sockets down
+    (RequestLimit), the sign-in refresh included, which holds the call's own
+    deadline (reviewer prediction before 1.1.0's verification: a dripping
+    /user/token held a poll, and its locks, for as long as it dripped)."""
+
+    def setUp(self):
+        super().setUp()
+        self.drip = DrippingServer(seconds=20)
+        self.addCleanup(self.drip.close)
+        base = "http://127.0.0.1:%d" % self.drip.port
+        for name, value in (("API", base), ("_OPENER", bridge.build_opener(allow_plain_http=True)),
+                            ("url_host_is", lambda url, hosts: True),
+                            ("TOKEN_TIMEOUT", 1), ("HTTP_TIMEOUT", 1)):
+            patcher = mock.patch.object(bridge, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def timed(self, *argv):
+        start = time.monotonic()
+        result = run_bridge(*argv)
+        return time.monotonic() - start, result
+
+    def test_a_dripping_refresh_is_cut_at_its_own_limit(self):
+        bridge.save_auth({"access_token": "a", "refresh_token": "r", "expires_at": 0})  # due a refresh
+        took, result = self.timed("in-progress")
+        self.assertFalse(result["ok"])
+        self.assertLess(took, 6, "a refresh dripped at for %.1f s" % took)  # 2 x TOKEN_TIMEOUT, not 20
+        took, _ = self.timed("status")  # and the locks were let go
+        self.assertLess(took, 6)
+
+    def test_any_request_is_cut_at_its_own_limit(self):
+        # Not the call's deadline (raised high here): the request's own.
+        bridge.save_auth({"access_token": "a", "refresh_token": "r", "expires_at": time.time() + 3600})
+        with mock.patch.object(bridge, "BRIDGE_DEADLINE", 60):
+            took, result = self.timed("in-progress")
+        self.assertFalse(result["ok"])
+        self.assertIn("too long", result.get("error", ""))
+        self.assertLess(took, 6, "a request dripped at for %.1f s" % took)
+
+
 class TokenRefresh(TempHome):
     def test_401_refreshes_once_then_retries(self):
         bridge.save_auth({"access_token": "old", "refresh_token": "r1", "expires_at": time.time() + 3600})
@@ -8346,6 +8424,19 @@ class Round5Units(TempHome):
             bridge.mark_needs_reauth(bridge.load_auth())
         self.assertTrue(bridge.load_auth()["needs_reauth"])
 
+    def test_a_notifications_text_comes_on_stdin_and_names_no_episode(self):
+        # Other accounts can read a process's arguments: the service sends the
+        # text on stdin, and notify-send (which takes it only as an argument)
+        # gets "that episode" for a title (the reviewer prediction before
+        # 1.1.0's verification).
+        sent = []
+        with mock.patch.object(bridge, "trusted_tool", lambda name: "/usr/bin/" + name), \
+                mock.patch.object(bridge.subprocess, "run", lambda argv, **kw: sent.append(argv)):
+            result = run_bridge("notify", stdin="Pocket Casts sent no record of \u201cA private title\u201d: try again")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(sent[0][-1], "Pocket Casts sent no record of that episode: try again")
+        self.assertNotIn("private", " ".join(sent[0]))
+
     def test_a_notification_carries_the_text_as_text(self):
         # Omarchy's OSD refuses a third-party plugin: errors with the panel
         # closed go out as desktop notifications. The text is one argument
@@ -8503,6 +8594,29 @@ class FfmpegSelfCheck(TempHome):
         self.assertIn(verdict["ffmpeg"], notified[0])
         self.assertFalse(bridge.ffmpeg_lines_trusted(verdict["ffmpeg"]))
         self.assertTrue(bridge.ffmpeg_lines_trusted("another version"))
+
+
+class SelfCheckHost(unittest.TestCase):
+    """The self-check's test host answers only its secret path (any local
+    account can reach 127.0.0.1; one that took the one good reply made the
+    check fail: the reviewer prediction before 1.1.0's verification)."""
+
+    def status_of(self, port, path):
+        with socket.create_connection(("127.0.0.1", port), timeout=3) as sock:
+            sock.sendall(("GET %s HTTP/1.1\r\nHost: x\r\n\r\n" % path).encode())
+            return sock.recv(64).split(b" ")[1].decode()
+
+    def test_only_the_secret_path_gets_the_stream(self):
+        host = bridge.check_host(b"x" * 300, "abc123")
+        server = bridge.http_server.ThreadingHTTPServer(("127.0.0.1", 0), host)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        port = server.server_address[1]
+        self.assertEqual(self.status_of(port, "/"), "404")
+        self.assertEqual(self.status_of(port, "/check.wav"), "404")
+        self.assertTrue(host.served["first"])  # someone else's requests changed nothing
+        self.assertEqual(self.status_of(port, "/abc123.wav"), "200")
+        self.assertEqual(self.status_of(port, "/abc123.wav"), "403")  # the reconnect's error page
 
 
 class FfmpegSelfCheckUse(TempHome):

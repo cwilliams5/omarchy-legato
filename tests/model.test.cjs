@@ -422,8 +422,10 @@ test("audio that never loads is reported, as a notification when no panel shows 
   // Omarchy's shell refuses a third-party plugin's OSD summon (the panel
   // test checks the notification itself).
   assert.ok(!/omarchy\.osd/.test(service), "no OSD summon: Omarchy refuses it")
-  // The text after `--`, so one beginning with a dash is still text.
-  assert.match(service, /call\(\["notify", "--", String\(text\)\]/)
+  // The text on stdin, never on the command line (other accounts can read a
+  // process's arguments; a message can name an episode).
+  assert.match(service, /call\(\["notify"\], function\(result\) \{\}, String\(text\)\)/)
+  assert.ok(!/call\(\["notify", /.test(service), "the notification's text on a command line")
 })
 
 test("the password travels on stdin, never in argv, and is cleared after use", () => {

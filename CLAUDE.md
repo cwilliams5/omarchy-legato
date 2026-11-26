@@ -245,7 +245,9 @@ docs/PLAN.md         what's left to build, and the record of what was found and 
    - Covers reach Qt only as the bridge's checked, capped cache files
      (`file://`, never a web URL).
    - Every bridge call has an overall deadline (`BRIDGE_DEADLINE`, an
-     exception no handler swallows).
+     exception no handler swallows), and every request a hard end-to-end
+     limit that shuts its sockets down (`RequestLimit`, 2 x its timeout),
+     so no server answering a byte at a time can hold a call open.
    - mpv fetches only through the feed proxy (below), which never connects
      to this computer (loopback by class, its other addresses by
      `same_address`) and reaches the local network only with `localFeeds`
@@ -385,7 +387,10 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   `RESUME_CHECK_TIMEOUT` (5 s) per request, then plays anyway, unconfirmed.
   A sign-in refresh keeps its own `TOKEN_TIMEOUT` (15 s) and holds the call's
   deadline (`deadline_held`): one cut short after Pocket Casts answered could
-  lose a rotated refresh token. The sleep guard never refreshes
+  lose a rotated refresh token. Only `RequestLimit` bounds it then (a
+  per-read timeout let a dripping server hold the call, and its locks, for
+  good: the reviewer prediction before 1.1.0's verification). The sleep
+  guard never refreshes
   (`REFRESH_ALLOWED`).
 - **Listening stats** (`stats.json`, the Stats page): `count_listening` runs
   in each poll and before a seek, stop, next or switch, comparing wall time

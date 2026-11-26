@@ -19,7 +19,7 @@ Item {
   function notices() {
     return Processes.started.filter(function(p) {
       try { return p.alive && p.command.indexOf("notify") >= 0 } catch (e) { return false }
-    }).map(function(p) { return p.command[p.command.length - 1] })
+    }).map(function(p) { return p.written !== "" ? p.written : p.command[p.command.length - 1] })  // (stdin)
   }
 
   function check(name, ok, detail) {
