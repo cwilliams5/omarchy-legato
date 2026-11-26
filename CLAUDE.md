@@ -16,9 +16,11 @@ Released and listed. 1.0.2 is the latest published release (1.0.0, 1.0.1 and
 1.0.2 all on 2026-11-22); 1.1.0 is built and under strict review
 (docs/PLAN.md phases H and SR: rounds 1-22 fixed; round 19 was the first
 with no critical or high, but round 20 found one in round 19's own fix
-(withdrawn), round 21 two more through older doors, and round 22 two
-highs at boundaries the engine didn't model (another account's sign-in;
-the tests' own isolation); round 23 next).
+(withdrawn), round 21 two more through older doors, round 22 two highs
+at boundaries the engine didn't model (another account's sign-in; the
+tests' own isolation), and round 23 a critical and a high (an unsent
+place's episode restarted from the public list; autoplay past an entry
+gone from its feed stopping every push); round 24 next).
 Cody, 2026-11-25: commits carry his personal address as author, accepted
 (1.0.x's are public that way). Cody, 2026-11-24: SR86 (settings in Legato's own file)
 and SR63 (one live service on a replacement bar) were folded into 1.1.0
@@ -296,11 +298,14 @@ docs/PLAN.md         what's left to build
    (`auth_lock`, innermost of the three locks) and re-read auth.json before
    writing to a session, so nothing writes back a signed-out session; a
    sign-in to another account than the last session's (`same_account`: its
-   uuid, else its address; no earlier session counts as another) ends the
-   player and drops playback.json under the state lock, as a sign-out
-   does, since the sign-in page shows whenever a session expires and the
-   old account's places, unsent places and pending finishes were pushed
-   into the new one (round 22, H1); the same account keeps them; no QML
+   uuid, else its address, from the sign-in's answer; no earlier session
+   counts as another) ends the player and drops playback.json and the show
+   list under the state lock, as a sign-out does, and before the new
+   session's tokens are stored (round 23, F3: a call cut off between left
+   the old playback under the new session), since the sign-in page shows
+   whenever a session expires and the old account's places, unsent places
+   and pending finishes were pushed into the new one (round 22, H1); the
+   same account keeps them, its show list too (round 23, F6); no QML
    file has a native text input (`TextField`,
    `TextInput`, `TextEdit`, `TextArea`: Qt 6.12 reads the clipboard into
    them by itself), the sign-in fields paste only through `bridge paste`
@@ -460,11 +465,14 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   and `resolve_episode` refuses (`no_record`, "Pocket Casts didn't answer:
   try again") rather than start it from the show's public list at 0 and
   push that, on every path (Play from a list, a reload, following the
-  phone to another episode). `recordSeen` is the playing episode's
-  state, which `resolve_episode` doesn't see: the two ways to play it
-  again, Play with nothing loaded and Play from a list (`resume_last`,
-  `cmd_play`), each ask `record_lost` (a public-list item for it after a
-  record was seen is no answer; round 21, F1: Play from a list didn't).
+  phone to another episode). What this machine knows counts too, in the
+  one place every path resolves an episode (`record_held` in
+  `resolve_episode`): a record seen for the last episode or a push or mark
+  of it that landed (`recordSeen`), or any place Pocket Casts had in it,
+  played or in progress (the last episode's `lastSyncPos`/`lastSyncStatus`,
+  an unsent place's or a pending end's `left`/`leftStatus`): places live
+  in records (round 21, F1: Play from a list; round 23, F1: an episode left
+  with its place unsent restarted at 0, its place dropped).
   Next and autoplay start from Up Next's sync
   data, or from the record when the reply leaves an episode's out
   (`next_in_up_next`). Episodes of shows you never followed, played by
@@ -474,7 +482,13 @@ The omarchy-plugin skill's two questions, answered (Cody, 2026-11-24):
   it too (its record comes back empty). When the show's own list loads
   and lacks it (`left_its_feed`; an empty list or one that won't load
   proves nothing), it's `gone`: Play with nothing loaded moves on to Up
-  Next, Next and autoplay skip it, and nothing is pushed for it.
+  Next, Next and autoplay skip it, and nothing is pushed for it. Autoplay
+  queues what it plays at the top (as Pocket Casts does what plays), and
+  the resume check passes over a top it can't follow: it took a gone entry
+  left on Up Next for another device's move, said unverified at every
+  check, and nothing was pushed for the rest of the episode (round 23, F2).
+  An unverified check is said (`syncFailed`, once per run, as failed
+  pushes are), and Play's asks again at the next poll (round 23, F4).
 - **Idle unload:** paused for `unloadAfterMinutes` (15), the player closes
   (`stop --if-paused`). The next play goes through `resume_last`, which asks
   Pocket Casts what to play.
@@ -997,7 +1011,9 @@ Tested 2026-11-21 on Omarchy 4.5.0, Quickshell 0.3.2, Qt 6.12.0, Hyprland
   media players on the desktop). The whole of `tests/test_bridge.py` runs
   in a throwaway home set before the bridge loads (HOME and every XDG
   folder, the runtime one too; no display, compositor or session bus), and
-  `run_bridge` refuses one of the real account's, whatever a test sets
+  `run_bridge` refuses one of the real account's, as the bridge's own
+  resolvers would find it (a relative HOME falls back to the real one
+  there: round 23, M1), whatever a test sets
   (round 22, fit F1: `Validation`, a plain TestCase, ran the sleep guard
   with the real HOME, safe only while the guard stopped at "no sleep"). `tests/mutations.md` lists the planted
   regressions the suite must catch.

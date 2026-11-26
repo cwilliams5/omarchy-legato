@@ -359,6 +359,8 @@ Item {
   function startedWithNoScreen() {
     top.sleeper = serviceMaker.createObject(top)
     check("(a copy nobody claimed sleeps)", top.sleeper.active === false, top.sleeper.active)
+    check("(the replacement bar's own copy is still there, awake)", local !== null && local.active === true, local && local.active)
+    local.dormantAfterMs = 50
     Quickshell.screens = []
     check("every screen gone: a sleeping copy wakes (no bar is left to claim it)", top.sleeper.active === true, top.sleeper.active)
     top.sleeper.destroy()
@@ -372,6 +374,9 @@ Item {
   function screenBackCheck() {
     if (Date.now() - top.stepStarted < 300) return false
     check("with a screen back and no bar claiming it, it sleeps again", top.spare.active === false, top.spare.active)
+    // A panel's own copy is held by its panel (strict review 23, L1: it
+    // went to sleep here, for good, nothing ever waking it).
+    check("a replacement bar's own copy stays awake when a screen is back", local.active === true, local.active)
     running().forEach(function(p) { var a = argsOf(p); if (a !== null) answer(p, {}) })
   }
 
@@ -425,6 +430,9 @@ Item {
   // entry once ever, and a loop of imports is the worst way to find out.
   function importedOnce() {
     bridgeCalls("settings import").forEach(function(p) { top.refuse(p, "busy") })
+    // Said, though (strict review 23, L2: silent, the page showing "Off"
+    // as if chosen until the shell restarted).
+    check("a failed import is said", freshService.actionError.indexOf("weren't brought in") >= 0, freshService.actionError)
     freshService.readSettings()
     reads().forEach(function(p) { answer(p, view({}, { stored: false })) })
     check("a failed import isn't tried again", bridgeCalls("settings import").length === 0, bridgeCalls("settings import").length)

@@ -12,13 +12,13 @@ python3 -B tests/mutate.py .       # all of them, about 2 hours
 python3 -B tests/mutate.py . "broke: no time check"   # one, by name
 ```
 
-Each mutation runs its own tests, not the whole suite (546 x 5 minutes is
-too long); when a mutation survives, run `tests/run` on it before believing
+Each mutation runs its own tests, not the whole suite (592 x 5 minutes is
+too long; `--confirm` re-runs a kill's tests unmutated); when a mutation survives, run `tests/run` on it before believing
 it. A mutation whose pattern no longer matches the code is reported STALE
 and fails the run (fix its pattern), as does one whose tests fail
 unmutated (SKIP).
 
-## The set (546; strict review rounds 1 to 20, 2026-11-25)
+## The set (592; strict review rounds 1 to 23, 2026-11-26)
 
 The full list, with each mutation's pattern and tests, is in
 `tests/mutate.py`. The runner first checks each test set passes unmutated
@@ -168,6 +168,14 @@ caught each mutant. By area:
   Ctrl/Super plus a letter, acting; a stepper past its top; the choice not
   wrapping; the poll dropping `--no-autoplay`). Run with `--confirm` from
   this round on (a kill whose tests also fail unmutated is FLAKY).
+- **Round 23**: an unsent or pending place, or the last episode's own
+  place, ignored when a lookup comes back empty; autoplay taking the next
+  for the top; a gone top unverified for good; the new session stored
+  before the old playback goes; the same account's show list dropped;
+  unverified never said; the tests' sandbox check reading the
+  environment's strings; and the QML ones (a failed import silent; mpv
+  going away bringing no read; a panel's own copy unclaimed). Round 21's
+  two `record_lost` mutants re-planted on `record_held`.
 
 ## Results
 

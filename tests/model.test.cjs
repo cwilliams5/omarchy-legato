@@ -403,7 +403,13 @@ test("nothing runs on a timer while paused or idle; while playing, polls are syn
   }
   const poll = timers.find((body) => /id:\s*pollTimer/.test(body))
   assert.ok(poll, "pollTimer")
-  assert.ok(Number((poll.match(/interval:\s*(\d+)/) || [])[1]) >= 30000, "polls no faster than the bridge syncs")
+  // Just over the bridge's SYNC_INTERVAL (30 s), read from the bridge: at
+  // exactly 30 s every other poll would find its push not yet due (strict
+  // review 23: ">= 30000" let that through).
+  const syncInterval = Number((fs.readFileSync(path.join(ROOT, "bin", "legato-bridge"), "utf8").match(/^SYNC_INTERVAL = (\d+)$/m) || [])[1])
+  const pollMs = Number((poll.match(/interval:\s*(\d+)/) || [])[1])
+  assert.ok(syncInterval > 0 && pollMs > syncInterval * 1000 && pollMs <= syncInterval * 1000 + 5000,
+            "polls just over the bridge's sync interval: " + pollMs + " vs " + syncInterval)
   // Player state arrives as mpv events instead.
   assert.match(service, /Socket\s*\{/)
   assert.match(service, /observe_property/)

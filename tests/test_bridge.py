@@ -78,11 +78,20 @@ for _name in ("WAYLAND_DISPLAY", "DISPLAY", "HYPRLAND_INSTANCE_SIGNATURE", "DBUS
 
 
 def assert_sandboxed():
-    """No bridge call runs with a folder of the real account's."""
-    for name in ("HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"):
-        value = os.path.realpath(os.environ.get(name) or "/")
+    """No bridge call runs with a folder of the real account's: the folders
+    the bridge itself would use, from its own resolvers (a relative HOME or
+    runtime folder falls back to the real ones there, with
+    scrub_environment off as run_bridge has it: strict review 23, M1)."""
+    runtime = bridge.clean_env_value("XDG_RUNTIME_DIR", os.environ.get("XDG_RUNTIME_DIR")) or "/run/user/%d" % os.geteuid()
+    folders = {"HOME": bridge.home(), "XDG_RUNTIME_DIR": runtime,
+               "XDG_STATE_HOME": bridge.xdg_home("XDG_STATE_HOME", ".local", "state"),
+               "XDG_CACHE_HOME": bridge.xdg_home("XDG_CACHE_HOME", ".cache"),
+               "XDG_CONFIG_HOME": bridge.xdg_home("XDG_CONFIG_HOME", ".config"),
+               "XDG_DATA_HOME": bridge.xdg_home("XDG_DATA_HOME", ".local", "share")}
+    for name, folder in folders.items():
+        value = os.path.realpath(folder or "/")
         if value == REAL_HOME or value.startswith(REAL_HOME + "/") or value.startswith(REAL_RUNTIME) or value == "/":
-            raise AssertionError("refusing to run the bridge with %s=%s (the real account's)" % (name, value))
+            raise AssertionError("refusing to run the bridge with %s at %s (the real account's)" % (name, value))
 
 
 _loader = importlib.machinery.SourceFileLoader("legato_bridge", str(BRIDGE))
@@ -96,6 +105,7 @@ OMARCHY_HELPERS = "/usr/share/omarchy/default/hypr/helpers.lua"
 EP_1 = "aaaaaaaa-0000-0000-0000-000000000001"
 EP_2 = "aaaaaaaa-0000-0000-0000-000000000002"
 EP_3 = "bbbbbbbb-0000-0000-0000-000000000003"
+GONE = "aaaaaaaa-0000-0000-0000-0000000000ff"  # on Up Next, gone from its feed (strict review 23)
 PASSWORD = "correct horse battery staple"
 
 
@@ -360,8 +370,11 @@ class Validation(unittest.TestCase):
         # Strict review 22 (fit F1): the whole file runs in a throwaway home,
         # and run_bridge refuses the real one, whatever a test sets.
         self.assertNotEqual(os.path.realpath(os.environ["HOME"]), REAL_HOME)
+        # (A relative HOME or runtime folder too: the bridge falls back to the
+        # real ones then, strict review 23, M1.)
         for name, value in (("HOME", REAL_HOME), ("XDG_STATE_HOME", REAL_HOME + "/.local/state"),
-                            ("XDG_RUNTIME_DIR", REAL_RUNTIME)):
+                            ("XDG_RUNTIME_DIR", REAL_RUNTIME), ("HOME", "relative/home"),
+                            ("XDG_RUNTIME_DIR", "relative/run")):
             with mock.patch.dict(os.environ, {name: value}):
                 with self.assertRaises(AssertionError):
                     run_bridge("status")
@@ -815,6 +828,7 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
         token = (self.headers.get("Authorization") or "").replace("Bearer ", "")
         if path == "/user/login_pocket_casts":
             if body.get("password") == PASSWORD:
+                s["signedIn"] = (body["email"], s.get("accountUuids", {}).get(body["email"], "u"))
                 self.reply(200, {"email": body["email"], "uuid": s.get("accountUuids", {}).get(body["email"], "u"),
                                  "accessToken": "t1", "tokenType": "Bearer",
                                  "expiresIn": 3600, "refreshToken": "r1"})
@@ -822,7 +836,8 @@ class FakePocketCasts(http.server.BaseHTTPRequestHandler):
                 self.reply(401, {"errorMessage": "Wrong password", "errorMessageId": "login_password_incorrect"})
             return
         if path == "/user/token":
-            self.reply(200, {"email": "me@example.com", "uuid": "u", "accessToken": "t2", "expiresIn": 3600, "refreshToken": "r2"})
+            who = s.get("signedIn") or ("me@example.com", "u")  # (the account that signed in, not always the first)
+            self.reply(200, {"email": who[0], "uuid": who[1], "accessToken": "t2", "expiresIn": 3600, "refreshToken": "r2"})
             return
         if token not in ("t1", "t2"):
             self.reply(401, {})
@@ -2792,11 +2807,175 @@ class ResumeAsksPocketCastsFirst(PlayerTestCase):
 
     def test_the_same_account_signing_in_again_keeps_its_places(self):
         self.unsent_in_two_episodes()
+        self.assertTrue(run_bridge("podcasts")["ok"])
         self.sign_in_as("me@example.com")
+        self.assertTrue(bridge.load_state("podcasts-cache.json").get("items"))  # (its show list kept: round 23, F6)
         self.assertTrue(self.mpv_running())
         state = bridge.load_playback()
         self.assertIn("unsentPush", state)
         self.assertTrue(state.get("unsentPlaces"))
+
+    def test_a_sign_in_cut_off_never_leaves_the_other_accounts_playback(self):
+        # Strict review 23 (F3): the new session was stored before the old
+        # playback went; a call cut off between (a plugin reload) left the
+        # first account's playback under the second's session.
+        self.fake["accountUuids"] = {"other@example.com": "u2"}
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.position() > 3, timeout=20)
+
+        def killed(*args, **kwargs):
+            raise SystemExit("killed")  # the process ends here
+        with mock.patch.object(bridge, "quit_mpv", killed):
+            with self.assertRaises(SystemExit):
+                run_bridge("login", stdin=json.dumps({"email": "other@example.com", "password": PASSWORD}))
+        # Not signed in as the other account: what's there is still one
+        # account's session and its own playback.
+        self.assertEqual(bridge.load_auth().get("uuid"), "u")
+
+    # --- Strict review 23 (F1, F2, F4).
+    def test_an_episode_left_unsent_isnt_restarted_from_its_public_list(self):
+        # A show you don't follow, Pocket Casts at 20, played here to 26+
+        # with every push failing, its place stashed by Next; then its lookup
+        # comes back empty and In Progress leaves it out: Play from a list
+        # started it from the public list at 0, pushed over 20, and dropped
+        # the place.
+        self.fake["unfollowed"] = {PODCAST_B}
+        self.fake["recorded"] = {EP_3}
+        self.other_device(EP_3, 20)
+        self.fake["upnext"] = [EP_3, EP_1]
+        self.login()
+        self.assertTrue(run_bridge("play", EP_3, "--podcast", PODCAST_B)["ok"])
+        self.wait_for(lambda: self.position() > 26, timeout=20)
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        run_bridge("pause")
+        self.assertEqual(run_bridge("next")["data"]["item"]["uuid"], EP_1)
+        run_bridge("pause")
+        self.assertTrue(any(p["uuid"] == EP_3 for p in bridge.load_playback().get("unsentPlaces") or []))
+        self.fake["episodeReply"] = {EP_3: (404, b'{"errorMessage": "not found"}')}
+        self.fake["notListed"] = {EP_3}
+        self.fake["fail"] = {}
+        before = len(self.pushes_of(EP_3))
+        self.assertEqual(run_bridge("play", EP_3, "--podcast", PODCAST_B).get("code"), "no_record")
+        self.assertEqual(self.pushes_of(EP_3)[before:], [])
+        self.assertEqual(self.fake["progress"][EP_3], 20)
+        self.assertTrue(any(p["uuid"] == EP_3 for p in bridge.load_playback().get("unsentPlaces") or []))
+
+    def test_a_last_episode_with_a_place_isnt_restarted_from_its_public_list(self):
+        # The last episode came from Up Next's sync data at 20 (no record
+        # seen: its lookup was empty all along, every push failing); with
+        # its place listed nowhere else, Play with nothing loaded took the
+        # public list's 0.
+        self.fake["unfollowed"] = {PODCAST_B}
+        self.fake["syncStatus"] = True
+        self.other_device(EP_3, 20)
+        self.fake["upnext"] = [EP_1, EP_3]
+        self.fake["episodeReply"] = {EP_3: (404, b'{"errorMessage": "not found"}')}
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        self.assertEqual(run_bridge("next")["data"]["item"]["uuid"], EP_3)
+        self.wait_for(lambda: self.position() > 22, timeout=20)
+        run_bridge("stop")
+        state = bridge.load_playback()
+        self.assertFalse(state.get("recordSeen"))
+        self.fake["fail"] = {}
+        self.fake["notListed"] = self.fake["noSync"] = {EP_3}
+        before = len(self.pushes_of(EP_3))
+        self.assertFalse(run_bridge("toggle")["ok"])
+        self.assertEqual(self.pushes_of(EP_3)[before:], [])
+        self.assertEqual(self.fake["progress"][EP_3], 20)
+
+    def gone_on_up_next(self):
+        g = dict(self.fake["episodes"][EP_2], uuid=GONE, title="Gone")
+        g["url"] = self.base + "/audio/%s.mp3" % GONE
+        self.fake["episodes"][GONE] = g  # on Up Next, not in its show's list
+        self.fake["episodeReply"] = {GONE: (404, b'{"errorMessage": "not found"}')}  # forgotten
+
+    def mpv_get(self, name):
+        with bridge.Mpv.connect() as player:
+            return player.get(name)
+
+    def test_autoplay_past_an_entry_gone_from_its_feed_keeps_syncing(self):
+        # Up Next [EP_1, GONE, EP_2]: EP_1 ends, autoplay skips GONE and
+        # played EP_2 taking it for the top; every later resume check read
+        # GONE as another device's move, couldn't follow it, said unverified,
+        # and nothing of EP_2 was pushed again; after Stop, "Up Next is empty".
+        self.fake["media"] = {EP_1: make_audio(4)}
+        self.fake["episodes"][EP_1]["duration"] = 4
+        self.gone_on_up_next()
+        self.fake["upnext"] = [EP_1, GONE, EP_2]
+        self.login()
+        self.assertTrue(run_bridge("play", EP_1, "--podcast", PODCAST_A)["ok"])
+        self.wait_for(lambda: self.mpv_get("eof-reached") is True, timeout=20)
+        self.assertEqual((run_bridge("player")["data"].get("item") or {}).get("uuid"), EP_2)
+        self.wait_for(lambda: self.position() > 4, timeout=20)
+        run_bridge("pause")
+        paused_at = self.fake["progress"][EP_2]
+        before = len(self.pushes_of(EP_2))
+        run_bridge("toggle")
+        self.wait_for(lambda: self.position() > paused_at + 12, timeout=30)
+        self.age_last_push(40)
+        run_bridge("player")
+        self.assertTrue(self.pushes_of(EP_2)[before:], "nothing of EP_2 pushed after Play")
+        self.assertGreater(self.fake["progress"][EP_2], paused_at + 8)
+        run_bridge("stop")
+        self.assertEqual((run_bridge("toggle")["data"].get("item") or {}).get("uuid"), EP_2)
+
+    def test_a_top_gone_from_its_feed_isnt_another_devices_move(self):
+        # The resume check alone: a top that can't be followed (gone from
+        # its feed) isn't "another device moved on" (said unverified at
+        # every check, for good).
+        self.gone_on_up_next()
+        self.play_then_pause()
+        self.assertTrue(bridge.load_playback().get("atTop"))
+        self.fake["upnext"] = [GONE] + [u for u in self.fake["upnext"] if u != GONE]
+        run_bridge("toggle")
+        state = bridge.load_playback()
+        self.assertEqual(state["episode"]["uuid"], EP_1)
+        self.assertFalse(state.get("unconfirmed"))
+
+    def test_a_resume_pocket_casts_cant_confirm_is_said(self):
+        # "Unverified" was silent however long it lasted: no push was tried,
+        # so "not synced" never showed.
+        self.play_then_pause()
+        self.fake["fail"] = {"/user/episode": 10 ** 6}
+        views = [run_bridge("toggle")["data"]]
+        self.wait_for(lambda: (self.mpv_get("time-pos") or 0) > 6, timeout=30)  # (not by polls: each counts)
+        for _ in range(3):
+            self.age_last_push(40)
+            views.append(run_bridge("player")["data"])
+        self.assertEqual(len([v for v in views if v.get("syncFailed")]), 1, views)
+
+    def test_a_stop_after_a_failed_pause_never_unmarks_a_played_mark(self):
+        # The reviewer's surviving mutant M14: Pocket Casts at 20, paused
+        # here at 26+ with the pause's push failed; the phone marks it played
+        # without moving its place; Stop must not push 26 in progress over
+        # "played" (paused_push_stands reads the mark).
+        self.unsent_paused()
+        self.other_device(EP_1, 20, bridge.STATUS_PLAYED)
+        self.fake["fail"] = {}
+        run_bridge("stop")
+        self.assertEqual(self.fake["status"][EP_1], bridge.STATUS_PLAYED)
+
+    def test_a_place_played_after_the_phones_unplayed_mark_is_kept(self):
+        # The reviewer's surviving mutant M4: the phone marked it unplayed
+        # (0) while paused here; Play adopts 0 and plays on here, every push
+        # failing; Stop; Play with nothing loaded starts there (nobody else
+        # wrote since), not at 0.
+        self.play_then_pause()
+        self.assertTrue(run_bridge("toggle")["ok"])
+        self.wait_for(lambda: self.position() > 21, timeout=30)
+        run_bridge("pause")
+        self.other_device(EP_1, 0, bridge.STATUS_UNPLAYED)
+        run_bridge("toggle")
+        self.wait_for(lambda: 10 < self.position() < 40, timeout=30)
+        self.fake["fail"] = {"/sync/update_episode": 1000}
+        run_bridge("pause")
+        place = bridge.load_playback()["unsentPush"]["position"]
+        run_bridge("stop")
+        self.fake["fail"] = {}
+        self.assertGreater(run_bridge("toggle")["data"]["position"], place - 2)
 
     def test_a_failed_pause_place_without_an_answer_waits_for_the_next_play(self):
         # Pocket Casts can't be asked: nothing is sent, and the place is

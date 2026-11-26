@@ -1340,6 +1340,31 @@ def user_episode(uuid):
     return payload if str(payload.get("uuid") or "").lower() == safe_uuid(uuid) else {}
 
 
+def record_held(uuid):
+    """Whether this machine knows Pocket Casts keeps a record of `uuid`: one
+    came back for it or a push or mark of it landed (`recordSeen`, the last
+    episode's), or Pocket Casts had a place in it, played or in progress
+    (the last episode's `lastSyncPos`/`lastSyncStatus`, an unsent place's or
+    a pending end's `left`/`leftStatus`): places live in records. An empty
+    lookup for one is no answer, on every path that resolves an episode
+    (strict review 21, F1: Play from a list; round 23, F1: an episode left
+    with its place unsent, restarted from the public list at 0 and its
+    place dropped). A playback.json that can't be read: can't tell, so yes."""
+    try:
+        state = load_playback()
+    except ApiError:
+        return True
+
+    def had_place(place, status):
+        return (number(place) and place > DRIFT_SLACK) or as_int(status) in (STATUS_IN_PROGRESS, STATUS_PLAYED)
+    episode = state.get("episode") or {}
+    if episode.get("uuid") == uuid and (state.get("recordSeen") or had_place(state.get("lastSyncPos"),
+                                                                             state.get("lastSyncStatus"))):
+        return True
+    return any(isinstance(p, dict) and p.get("uuid") == uuid and had_place(p.get("left"), p.get("leftStatus"))
+               for p in (state.get("unsentPlaces") or []) + (state.get("pendingFinish") or []))
+
+
 def record_expected(podcast_uuid):
     """Whether Pocket Casts keeps a record of this show's episodes for you: a
     show you follow (every episode of one has a record, played or not: checked
@@ -1409,7 +1434,7 @@ def resolve_episode(uuid, podcast_uuid=""):
     raw = user_episode(uuid)
     if raw and not a_place(raw.get("playedUpTo")):
         raw = {}  # a record with no position says nothing about where you are
-    if not raw and (record_expected(podcast_uuid) or position_known_elsewhere(uuid)):
+    if not raw and (record_held(uuid) or record_expected(podcast_uuid) or position_known_elsewhere(uuid)):
         # A show you follow: Pocket Casts has a record of every episode; of
         # one you don't, an episode anyone played has one (a push creates it)
         # and shows in Up Next's sync data or In Progress. None came back (a
@@ -2483,7 +2508,8 @@ def retry_unsent(state, force=False):
         if not where_left(entry.get("left"), record["playedUpTo"], record.get("playingStatus"), entry.get("leftStatus")):
             continue  # moved, finished or marked on another device since: its say stands
         try:
-            push_position(entry, entry["position"])
+            if not push_position(entry, entry["position"]):
+                keep.append(entry)  # (nothing sent, no show id: kept for its reload; strict review 23, F5)
         except ApiError:
             keep.append(entry)
     state["unsentPlaces"] = keep
@@ -2497,18 +2523,6 @@ def empty_lookup_answers(state, entry):
     place listed elsewhere. Otherwise no answer."""
     return (entry["uuid"] == (state.get("episode") or {}).get("uuid") and not state.get("recordSeen")
             and not record_expected(entry.get("podcast", "")) and not position_known_elsewhere(entry["uuid"]))
-
-
-def record_lost(state, item):
-    """An item from the show's public list (not `fromRecord`) for the episode
-    playback.json names, after Pocket Casts showed or took a record of it
-    here (`recordSeen`): an empty lookup then is no answer, and the list
-    would start it at 0 and push that over the phone's place. Every way to
-    play it again asks this: Play with nothing loaded (resume_last) and
-    Play from a list (cmd_play; strict review 21, F1: it didn't)."""
-    episode = state.get("episode") or {}
-    return bool(item and episode.get("uuid") and item.get("uuid") == episode["uuid"]
-                and state.get("recordSeen") and not item.get("fromRecord"))
 
 
 def unanswered_end(state, uuid):
@@ -2983,9 +2997,13 @@ def finish_current(state, prefs, autoplay):
         return state  # finished; Play asks again for what's next (endedAutoplay)
     if not item:
         return state
-    # Taken off Up Next, the next one is its top already; if that failed,
-    # play_now puts the next one on top (and atTop says what really is).
-    return play_item(item, prefs, queue=not entry["removed"], at_top=entry["removed"])
+    # Queued at the top, as Pocket Casts does what plays (and atTop says
+    # what really is): "taken off Up Next, the next one is its top already"
+    # wasn't so past an entry next_in_up_next skips that stays queued (one
+    # gone from its feed), and every later resume check took that entry for
+    # another device's move, said unverified, and nothing was pushed again
+    # (strict review 23, F2).
+    return play_item(item, prefs, queue=True)
 
 
 def told_played(state, entry):
@@ -2996,7 +3014,7 @@ def told_played(state, entry):
         state["lastSyncPos"] = float(entry.get("position") or 0)
         state["lastSyncStatus"] = STATUS_PLAYED
         # A mark makes a record, as a push does: an empty lookup of it is no
-        # answer from now on (record_lost; strict review 21, F3: Play
+        # answer from now on (record_held; strict review 21, F3: Play
         # replayed it from 0, in progress, over "played").
         state["recordSeen"] = True
 
@@ -3638,13 +3656,18 @@ def check_server(state, prefs, player=None, quick=False):
     if moved_on:
         try:
             item = resolve_episode(top["uuid"], top.get("podcast", ""))
-        except ApiError:
-            return "unverified", state
+        except ApiError as err:
+            if err.code != "gone":
+                return "unverified", state
+            # Gone from its feed: nothing can follow it there, as
+            # next_in_up_next skips it; no move on (strict review 23, F2: it
+            # said unverified at every check, and nothing was pushed again).
+            item = None
         # Its record says played (finished on another device, its removal
         # from Up Next not in yet; Up Next's reply had no sync entry to say
         # so): no moving on, as next_in_up_next has it (strict review 17,
         # F1: followed, it started at 0, pushed in progress).
-        if item.get("status") != STATUS_PLAYED:
+        if item is not None and item.get("status") != STATUS_PLAYED:
             return "switched", play_item(item, prefs, queue=False, save_previous=False, at_top=True)
     if finished:
         own = player is None
@@ -3793,8 +3816,12 @@ def resume_loaded(player, state, prefs):
         raise ApiError("finished_elsewhere", "Finished on another device, and Up Next is empty")
     if outcome == "unverified":
         # It plays (you pressed play), but where it is wasn't confirmed:
-        # nothing is pushed until a poll gets Pocket Casts' answer (rule 2).
+        # nothing is pushed until a poll gets Pocket Casts' answer (rule 2),
+        # and the next poll asks (`checkServer`), as its own unverified
+        # check does: it waited for a 90 s gap, pushing nothing and saying
+        # nothing meanwhile (strict review 23, F4).
         state["unconfirmed"] = True
+        state["checkServer"] = True
         save_playback(state)
     if slept_since_start() or sleeping_soon():
         return  # pressed as the lid closed: nothing plays on behind the lock screen; press Play again
@@ -3932,8 +3959,14 @@ def poll(autoplay=True, seeked=False):
         if outcome == "unverified":
             state["checkServer"] = True  # ask again next time
             state["unconfirmed"] = True  # and push nothing until Pocket Casts answers
+            # Not reached, as a failed push is: said once per run of them
+            # (strict review 23, F4: silent however long it lasted).
+            state["pushFailures"] = int(state.get("pushFailures") or 0) + 1
             save_playback(state)
-            return player_view(snap, state, prefs)
+            view = player_view(snap, state, prefs)
+            if state["pushFailures"] == PUSH_FAILURES_SAID:
+                view["syncFailed"] = True
+            return view
         return poll_after_change(state, prefs)
     due = paused = False
     if (snap.get("pause") is False and sync_age(state) >= SYNC_INTERVAL
@@ -4186,23 +4219,28 @@ def cmd_login(args):
                     message = message + ". Signed in with Apple or Google? Set a password on your Pocket Casts account first."
                 raise ApiError("login_failed", message, status)
             raise ApiError("network", message, status)
-        auth = {}
         with auth_lock():
             previous = load_auth()
-            store_tokens(auth, payload)  # a new session: replaces whatever was there
-        if not same_account(previous, auth):
+        signing_in = {"uuid": str(payload.get("uuid") or "")[:64], "email": str(payload.get("email") or email)[:256]}
+        if not same_account(previous, signing_in):
             # Another account (the sign-in page shows when a session expires,
             # so nobody signs out first), or one this machine can't tell is
             # the same: the player and everything playback.json holds (its
-            # place, unsent places, pending finishes) are the other's, and the
-            # next poll and retries pushed them into this one (strict review
-            # 22, H1). As a sign-out does. The same account keeps them: its
-            # unsent places go out with the new session.
+            # place, unsent places, pending finishes) and the show list are
+            # the other's, and the next poll and retries pushed them into this
+            # one (strict review 22, H1). As a sign-out does, and before the
+            # new session exists: a call cut off between left the other
+            # account's playback under it (strict review 23, F3). The same
+            # account keeps them, its show list too (an empty list right
+            # after a sign-in fell back on nothing: round 23, F6).
             player = Mpv.connect()
             if player:
                 quit_mpv(player)
             drop_state("playback.json")
-        drop_state("podcasts-cache.json")
+            drop_state("podcasts-cache.json")
+        auth = {}
+        with auth_lock():
+            store_tokens(auth, payload)  # a new session: replaces whatever was there
     out({"email": auth.get("email", email)})
 
 
@@ -4611,9 +4649,7 @@ def cmd_play(args):
     uuid = safe_uuid(args.uuid)
     podcast = safe_uuid(args.podcast) if args.podcast else ""
     with StateLock():
-        item = resolve_episode(uuid, podcast)
-        if record_lost(load_playback(), item):
-            raise ApiError("no_record", "Pocket Casts didn't answer: try again")
+        item = resolve_episode(uuid, podcast)  # (an empty lookup for one known here refuses: record_held)
         prefs = load_prefs()
         play_item(item, prefs, from_start=args.from_start)
         view = poll_after_change(load_playback(), prefs)
@@ -4652,10 +4688,6 @@ def resume_last(prefs):
                 # this machine couldn't send. Try again.
                 raise
             item = None  # gone from its feed, or no audio: Up Next's next
-        if record_lost(state, item):
-            # Pocket Casts knew where you were in it and now says nothing: the
-            # show's public list would start it from 0 and push that.
-            raise ApiError("network", "Pocket Casts didn't answer: try again")
         if (item and item.get("status") == STATUS_PLAYED
                 and kept_place(state, as_int(item.get("playedUpTo")), item.get("status")) is None):
             item = None  # (one replayed here whose place couldn't be sent starts there: round 19)

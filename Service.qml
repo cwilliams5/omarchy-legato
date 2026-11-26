@@ -1182,6 +1182,7 @@ Item {
   }
   onEntrySettingsChanged: importEntrySettings()
   property bool _settingsImportTried: false
+  property bool _settingsImportSaid: false
   function importEntrySettings() {
     // Tried once per service: the bridge copies the entry only once ever
     // (prefs.json `settingsImported`), and answers `stored` from then on.
@@ -1191,7 +1192,19 @@ Item {
     for (var key in entrySettings) if (key !== "id") entry[key] = entrySettings[key]
     var change = ++_settingsChanges
     call(["settings", "import", "--", JSON.stringify(entry)], function(result) {
-      if (result.ok && change === root._settingsChanges) root.applySettings(result.data)
+      if (!result.ok) {
+        // Not copied (the settings lock held, a start refused): not tried
+        // again in this shell (a loop of imports is the worst way to find
+        // out), but said, once: until it lands the bridge answers "waiting",
+        // autoplay and the idle unload off, and the page showed "Off" as if
+        // chosen, with no word (strict review 23, L2).
+        if (!root._settingsImportSaid) {
+          root._settingsImportSaid = true
+          root.reportError("Legato 1.0's settings weren't brought in yet: " + (result.error || "try again"))
+        }
+        return
+      }
+      if (change === root._settingsChanges) root.applySettings(result.data)
     })
   }
   // A read asked before a change answers into nothing (it may have read the

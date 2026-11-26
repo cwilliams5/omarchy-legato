@@ -100,7 +100,7 @@ Item {
     running: true
     onTriggered: {
       var steps = [top.handOver, top.awake, top.label, top.clicks, top.wheel, top.afterWheel,
-                   top.sleepGuardSwitch, top.guardBackOff, top.socketRetries, top.socketRetry2, top.socketRetry3, top.socketRetry4, top.staleStatus,
+                   top.sleepGuardSwitch, top.guardBackOff, top.socketRetries, top.socketRetry2, top.socketRetry3, top.socketRetry4, top.socketGone, top.socketGoneCheck, top.staleStatus,
                    top.noticesOnce, top.quietReloads, top.chipShapes, top.idleWheel, top.idleWheelCheck, top.marquee,
                    top.touchpad, top.touchpadCheck, top.wheelDown, top.wheelDownCheck, top.volumeClamp, top.volumeClampCheck, top.noAutoplayPoll,
                    top.seekStale, top.seekStaleCheck, top.liveStatus, top.liveStatusCheck, top.guardBack,
@@ -231,6 +231,22 @@ Item {
   function socketRetry3() {
     if (Date.now() - top.stepStarted < 1200) return false
     check("and once more", shared._eventAttempts === 3, shared._eventAttempts)
+  }
+  // mpv going away (the connection drops) brings a read of where things
+  // stand: a dead player otherwise left a stale chip and a sleep guard
+  // holding logind's delay (strict review 23, L5: untested).
+  function socketGone() {
+    var socket = find(shared, function(i) { return i.objectName === "playerEvents" })
+    answerAll(top.answers)
+    socket.refuse = false
+    socket.connected = true
+    answerAll(top.answers)
+    socket.connected = false
+  }
+  function socketGoneCheck() {
+    if (Date.now() - top.stepStarted < 800) return false  // (settle: 600 ms)
+    check("mpv going away brings a read", calls("player").length === 1, calls("player").length)
+    answerAll(top.answers)
   }
   function socketRetry4() {
     if (Date.now() - top.stepStarted < 1200) return false

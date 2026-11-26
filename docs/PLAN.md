@@ -1812,7 +1812,7 @@ Fit: one medium (a round 20 claim false on the real shell), lows.
 
 Safety: one high, one medium; round 21's changes opened no new door the
 reviewer found. Fit: one high (test safety), lows.
-Reports: kept outside the repo.
+The reviewers' reports are kept outside the repo.
 
 - [x] SR235 (high, safety H1) Signing in to another account (the sign-in
   page shows whenever a session expires, so nobody signs out first) kept
@@ -1869,6 +1869,64 @@ Reports: kept outside the repo.
   dormant pairs (`pollTimer`'s `active` and `refreshPlayer`'s, the unload
   timer's and `call()`'s dormant answer) and the menu's loaded filter
   over `isLoaded` stay as they are.
+
+### SR, round 23 (2026-11-26)
+
+Safety: one critical, one high, two mediums; fit: one medium (latent test
+safety), lows. The reviewers' reports are kept outside the repo.
+
+- [x] SR242 (critical, safety F1) An episode left with an unsent place
+  (`unsentPlaces`), of a show you don't follow, whose lookup comes back
+  empty and that In Progress omits: Play from a list starts it from the
+  public list at 0 (pushed over Pocket Casts' 20) and drops the place
+  (verified). An unsent or pending entry is a record seen, as `recordSeen`
+  is for the last episode; also Next/autoplay and the resume check's
+  switch (read).
+- [x] SR243 (high, safety F2) Autoplay past an Up Next entry that left its
+  feed records the wrong top (`at_top=removed`): every later resume check
+  reads the gone entry as "another device moved on", can't follow it, and
+  says unverified for good; nothing is pushed for the rest of the episode,
+  and after Stop, Play says Up Next is empty (verified).
+- [x] SR244 (medium, safety F3) `cmd_login` stores the new tokens before
+  ending the player and dropping playback.json: a call cut off between
+  leaves the other account's playback under the new session (simulated).
+- [x] SR245 (medium, safety F4) "Unverified" is silent however long it
+  lasts: no push is tried, so `syncFailed` never says so.
+- [x] SR246 (lows, safety F5-F6) `retry_unsent` drops a place it can't send
+  (no show id) silently; right after a sign-in (cache dropped) an empty show
+  list reopens round 22's M1.
+- [x] SR247 (tests, safety) The reviewer's surviving mutants M4 (the
+  adoption forcing "in progress") and M14 (`paused_push_stands` ignoring a
+  mark made since the failure); the fake's `/user/token` answers the first
+  account whatever signed in; Up Next sync data without `playingStatus`
+  unless `syncStatus`.
+  Fixed: one rule in `resolve_episode` (`record_held`: a record seen, or
+  any place Pocket Casts had, the last episode's, an unsent place's or a
+  pending end's), replacing round 21's two call-site checks; autoplay
+  queues what it plays at the top, and the resume check passes over a top
+  gone from its feed; the sign-in compares and drops before storing the
+  new tokens, and the same account keeps its show list; an unverified
+  check counts toward "not synced", and Play's asks again at the next
+  poll; a place that can't be sent stays stashed; the fake's token
+  refresh answers the account that signed in; tests kill M4 and M14.
+  Left: the fake's Up Next sync data omits `playingStatus` unless
+  `syncStatus` (five tests cover the real shape).
+- [x] SR248 (medium, fit M1) `assert_sandboxed` checked the environment's
+  strings, but a relative HOME or runtime folder falls back to the real
+  ones in the bridge (`scrub_environment` off in `run_bridge`): it now asks
+  the bridge's own resolvers (tested with relative values).
+- [x] SR249 (lows, fit L1, L2, L5) A replacement bar's own copy went to
+  sleep for good when a screen came back after none (held by its panel
+  now: `claims: 1`); a failed one-time import was silent (said once now;
+  still not retried in the shell, by design); mpv going away bringing a
+  read, tested. The node check for the poll interval now needs it just
+  over the bridge's SYNC_INTERVAL. The private path in round 22's notes
+  removed; tests/mutations.md's count.
+- [ ] SR250 (left, fit L3-L4 and test gaps) Lazy panel content (SR181);
+  SR234; the panel opening without `refreshIfStale`, Up Next on another
+  tab, Settings clearing an old save error, Enter on a show row, a broken
+  cover; the stand-ins' PanelSlider `liveValue`, Button `enabled`,
+  `Quickshell.env` "".
 
 ## Testing
 
@@ -2090,6 +2148,16 @@ Reports: kept outside the repo.
   --confirm`. 450 Python + 47 node tests; 581 mutations, round 22's 22
   new or changed all killed (with --confirm; one re-anchored after it
   survived in a harmless form). Round 23 next (round 22 had highs).
+- 2026-11-26: round 23 (SR242-SR250): safety: an episode left with its
+  place unsent restarted from the public list at 0 (one rule now,
+  `record_held` in `resolve_episode`); autoplay past an entry gone from its
+  feed stopped every later push (queued at the top; the check passes over
+  a gone top); the sign-in's order; unverified said. Fit: the tests'
+  sandbox check asks the bridge's resolvers; a replacement bar's own copy
+  held by its panel; a failed import said. 458 Python + 47 node tests;
+  592 mutations, round 23's 19 new or changed all killed (--confirm; one
+  needed its test list completed). Round 24 next (round 23 had a
+  critical).
 
 - 2026-11-21: Reviewed the two Pocket Casts plugins; Nine Point Labs' synced
   but rewound other devices on resume and polled constantly. Fixed both plus

@@ -434,7 +434,10 @@ Panel {
     id: localService
     objectName: "localService"
     active: root.settled && root.sharedService === null && !root.hadShared
-    sourceComponent: Service { active: true }
+    // (Held by this panel, `claims`: a screen coming back after none
+    // mustn't put it to sleep for good, as it does an unclaimed shell copy:
+    // strict review 23, L1.)
+    sourceComponent: Service { active: true; claims: 1 }
   }
 
   // ------------------------------------------------------------- pieces --
